@@ -8,7 +8,7 @@ O Nexus substitui todos esses processos por dois binários Rust que compartilham
 
 | Fase | Escopo | Situação |
 |---|---|---|
-| 0 | Fundação (config, erros, logs, health, métricas, auth, Docker, CI) | planejada |
+| 0 | Fundação (config, erros, logs, health, métricas, auth, Docker, CI) | concluída, aguardando o primeiro deploy |
 | 1 | Bolsa | — |
 | 2 | Motor de combate e otimizador de equipe | — |
 | 3 | Ingestão, fila de comandos e WebSocket | — |
@@ -50,6 +50,7 @@ O resto (rotas, ETL, scoring) não é gargalo, mas migrar tudo resolve outro pro
 | [Segurança](docs/seguranca.md) | Autenticação, borda, segredos |
 | [Infraestrutura](docs/infraestrutura.md) | Docker, Nginx, CI/CD, limites de recurso, observabilidade |
 | [Migração](docs/migracao.md) | Fases, shadow traffic, cutover e rollback |
+| [Operação](docs/operacao.md) | Deploy, rollback, tokens, logs: os comandos do dia a dia |
 | [Testes](docs/testes.md) | Estratégia de testes e paridade |
 | [Glossário](docs/glossario.md) | Termos do jogo e do domínio |
 | [Decisões (ADRs)](docs/adr/README.md) | Registro das decisões de arquitetura |
@@ -64,7 +65,7 @@ nexus-rs/
 │   ├── nexus-api/       # binário HTTP + WebSocket
 │   └── nexus-worker/    # binário de ETL, scoring e rotinas agendadas
 ├── migrations/          # sqlx migrations (somente aditivas)
-├── deploy/              # compose, nginx, scripts
+├── deploy/              # compose, nginx, deploy.sh, instalar.sh, monitoring
 ├── tests/               # integração e paridade
 └── docs/
 ```

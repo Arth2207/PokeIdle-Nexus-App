@@ -15,9 +15,11 @@ Authorization: Bearer <token>
 ```
 
 - No legado também se aceitava `?token=` na URL. No Nexus esse formato só é aceito no upgrade do WebSocket, onde alguns clientes não conseguem enviar cabeçalhos, e o Nginx tira o parâmetro dos logs.
-- Os tokens são guardados como hash SHA-256 no banco (`nexus.api_token`), cada um com nome, escopo e data de expiração. A comparação é feita em tempo constante.
+- O formato do token é `nxs_` seguido de 64 caracteres hexadecimais (32 bytes aleatórios). O prefixo fixo facilita achar um token vazado num log ou commit.
+- Os tokens são guardados como hash SHA-256 no banco (`nexus.api_token`), cada um com nome, escopos, expiração opcional e revogação. A busca é feita pelo hash, então nem um vazamento da tabela entrega um token utilizável.
+- O token aparece uma única vez, na criação (`nexus-api token criar`).
 - Escopos: `leitura`, `escrita`, `relay`, `admin`. O relay do PC usa `relay`, que permite ingestão e fila de comandos, mas não administração.
-- As exceções são `/health/live` e `/health/ready`, que não exigem token mas só respondem pela rede interna, e `/metrics`, liberada apenas para o Prometheus.
+- As exceções são `/health/live` e `/health/ready`, que não exigem token e respondem só `ok` ou o motivo da indisponibilidade, sem nenhum dado, e `/metrics`, que fica numa porta separada (9190) que o Nginx não expõe. Só o Prometheus, na rede Docker de monitoramento, chega nela.
 
 O legado liberava qualquer requisição vinda da faixa de IPs da VPN. Isso acaba no Nexus.
 
@@ -26,11 +28,11 @@ O legado liberava qualquer requisição vinda da faixa de IPs da VPN. Isso acaba
 O tráfego externo chega por dois caminhos, e os dois terminam no Nginx:
 
 - **Público:** passa pelo Cloudflare Tunnel (`cloudflared`), que já entrega TLS e proteção contra DDoS. Nenhuma porta da VPS fica aberta para a internet.
-- **Privado:** passa pela rede Tailscale. O Nginx serve HTTPS com o certificado emitido por `tailscale cert`.
+- **Privado:** passa pela rede Tailscale. O Nginx escuta só no IP do Tailscale e em localhost; o Docker ignora o UFW, por isso o IP fica explícito no `compose.yml`. O HTTPS com certificado do `tailscale cert` depende de habilitar HTTPS no painel do tailnet. Até lá, o tráfego interno é HTTP, mas cifrado pelo próprio WireGuard do Tailscale.
 
 O que o Nginx aplica:
 
-- Headers: `Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Content-Security-Policy` nas páginas estáticas.
+- Headers: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`. `Strict-Transport-Security` entra junto com o TLS, e `Content-Security-Policy` junto com as páginas estáticas.
 - Limite de tamanho do corpo: 2 MB no geral e 10 MB na ingestão.
 - Rate limit por IP (proteção grossa) e timeouts de leitura e escrita.
 - Log de acesso em JSON, sem o token.
@@ -49,16 +51,18 @@ O legado respondia `Access-Control-Allow-Origin: *` para tudo.
 
 ## Segredos
 
-- Em produção: Docker secrets montados em `/run/secrets/`. A aplicação lê o arquivo indicado por variáveis `*_FILE` (por exemplo `DATABASE_URL_FILE`).
+- Em produção: Docker secrets montados em `/run/secrets/`. A aplicação lê o arquivo indicado por variáveis `*_FILE` (por exemplo `NEXUS_DATABASE_URL_FILE`).
 - Em desenvolvimento: `.env`, que fica no `.gitignore`. O repositório traz um `.env.example` sem valores reais.
 - No CI: GitHub Secrets.
-- O usuário do banco usado pela aplicação não é superusuário e só tem permissão nas tabelas de que precisa.
+- O papel do banco usado pela aplicação (`nexus_app`) não é superusuário. Ele é dono só do schema `nexus` e não tem nenhum privilégio no `public`. O acesso às tabelas do legado vai ser concedido tabela por tabela, só para leitura, conforme cada fase precisar.
+- A URL do banco chega ao container como Docker secret (`NEXUS_DATABASE_URL_FILE`), legível só pelo usuário do container.
 
 ## Imagem
 
-- Imagem final distroless (`gcr.io/distroless/cc-debian12:nonroot`): sem shell e sem gerenciador de pacotes, rodando como usuário não-root.
+- Imagem final distroless (`gcr.io/distroless/static-debian12:nonroot`) com binário estático: sem shell, sem libc e sem gerenciador de pacotes, rodando como usuário não-root.
+- No Compose: `cap_drop: [ALL]`, `no-new-privileges` e limites de CPU e memória.
 - Sistema de arquivos somente leitura (`read_only: true` no Compose).
-- `cargo audit` e `cargo deny` no CI contra dependências com vulnerabilidade conhecida ou licença incompatível.
+- `cargo deny` no CI barra dependências com vulnerabilidade conhecida (base RustSec), licença fora da lista permitida ou origem desconhecida. A política está em `deny.toml`.
 
 ## Pendências herdadas do legado
 

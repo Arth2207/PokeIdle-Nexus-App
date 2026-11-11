@@ -11,7 +11,7 @@ Dockerizar exigiria uma imagem com as três extensões nas mesmas versões, um d
 
 ## Decisão
 
-O Postgres continua nativo no host. Os containers acessam pelo gateway da rede Docker, com um usuário próprio e permissões mínimas.
+O Postgres continua nativo no host. Os containers acessam pelo socket Unix (`/var/run/postgresql` montado como volume), com um papel próprio (`nexus_app`) e permissões mínimas. O banco continua escutando só em localhost.
 
 ## Consequências
 
