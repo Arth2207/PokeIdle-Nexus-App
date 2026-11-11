@@ -89,7 +89,7 @@ Ficam desligadas de propósito no que afeta a comparação, ou só aparecem nas 
 
 ### Fase 2: Combate e otimizador (3 a 4 semanas)
 
-Motor de combate, otimizador de equipe com `rayon`, `/api/bolsa/equipe`, `/api/bolsa/equipe-propria` e `/api/equipes/plano`.
+Motor de combate, otimizador de equipe com `rayon`, `/api/bolsa/equipe`, `/api/bolsa/equipe-propria`, `/api/bolsa/alvos-coleta` e `/api/equipes/*`. O plano completo, com o que a investigação do código público do jogo mostrou, está em [fase 2: combate](fase-2-combate.md).
 
 **Pronto quando:** o score das equipes encontradas fica dentro da tolerância do Node em todas as fixtures (o otimizador é heurístico, então a equipe pode ser diferente); o p95 no teste de carga é menor que o do Node; a API continua respondendo em menos de 50 ms enquanto o otimizador está rodando.
 
