@@ -10,7 +10,7 @@ use sqlx::PgPool;
 use crate::bolsa::ServicoBolsa;
 use crate::configuracao::Configuracao;
 use crate::equipes::bolsa::ServicoEquipeBolsa;
-use crate::equipes::ServicoEquipes;
+use crate::equipes::{ModeloAtivo, ServicoEquipes};
 use crate::limite::Limitador;
 
 /// Clonar é barato: tudo aqui é `Arc` (ou tem um por dentro, como o `PgPool`). Cada rota
@@ -41,6 +41,10 @@ impl Estado {
         Ok(Self {
             escrita_bolsa: cfg.escrita_bolsa,
             escrita_equipes: cfg.escrita_equipes,
+            equipes: Arc::new(ServicoEquipes::novo(
+                db.clone(),
+                ModeloAtivo::de_texto(&cfg.modelo),
+            )),
             equipe_bolsa: Arc::new(ServicoEquipeBolsa::novo(cfg.cpu_threads)),
             limitador: Arc::new(Limitador::novo(cfg.limite_rps, cfg.limite_rajada)),
             origens_cors: Arc::new(cfg.origens_cors()),
@@ -52,7 +56,7 @@ impl Estado {
     pub fn com_pool(db: PgPool) -> Self {
         let bolsa = Arc::new(ServicoBolsa::novo(PgRepoMercado::novo(db.clone())));
         Self {
-            equipes: Arc::new(ServicoEquipes::novo(db.clone())),
+            equipes: Arc::new(ServicoEquipes::novo(db.clone(), ModeloAtivo::Legado)),
             equipe_bolsa: Arc::new(ServicoEquipeBolsa::novo(1)),
             escrita_equipes: false,
             db,

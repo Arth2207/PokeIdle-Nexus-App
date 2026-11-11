@@ -6,12 +6,13 @@
 //! valores das fichas repassados sem tratamento.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::combate::combatente::{self, Combatente, Perfil};
-use crate::combate::duelo::{penalidade, penalidade_individual, Avaliacao, TAMANHO_EQUIPE};
+use crate::combate::duelo::{Avaliacao, TAMANHO_EQUIPE};
 use crate::combate::especie::{EspecieCombate, Pokedex};
 use crate::combate::modelo::{Boss, Legado, ModeloCombate};
 use crate::combate::tipos::{efetividade_bruta, Tipo};
@@ -140,7 +141,9 @@ fn nomes_tipos(tipos: &[Tipo]) -> Vec<String> {
 #[derive(Debug, Clone)]
 pub struct MotorEquipes {
     pub dex: Pokedex,
-    pub modelo: Legado,
+    /// O modelo de combate. `dyn` porque a escolha é feita em tempo de execução (o legado
+    /// responde; o modelo do jogo roda ao lado, só nas métricas).
+    pub modelo: Arc<dyn ModeloCombate>,
     /// Nome (minúsculo) → id da primeira espécie com id de 1 a 1025, para achar o sprite de
     /// formas (megas, regionais).
     nome_base: HashMap<String, i64>,
@@ -148,7 +151,12 @@ pub struct MotorEquipes {
 }
 
 impl MotorEquipes {
+    /// Motor com o modelo legado.
     pub fn novo(dex: Pokedex) -> Self {
+        Self::com_modelo(dex, Arc::new(Legado::novo()))
+    }
+
+    pub fn com_modelo(dex: Pokedex, modelo: Arc<dyn ModeloCombate>) -> Self {
         let mut nome_base = HashMap::new();
         for sp in dex.especies() {
             if sp.id > 0 && sp.id <= 1025 {
@@ -178,7 +186,7 @@ impl MotorEquipes {
             .collect();
         MotorEquipes {
             dex,
-            modelo: Legado::novo(),
+            modelo,
             nome_base,
             wiki,
         }
@@ -396,7 +404,8 @@ impl MotorEquipes {
                 let r = self.modelo.avaliar(
                     &mon,
                     &foe,
-                    penalidade_individual(js::mais(f.get("level")), boss.team_level),
+                    self.modelo
+                        .penalidade_individual(js::mais(f.get("level")), boss.team_level),
                 );
                 Some((f, mon, sp, r))
             })
@@ -413,7 +422,7 @@ impl MotorEquipes {
             .iter()
             .map(|(f, ..)| js::mais(f.get("level")))
             .collect();
-        let (forca, mult) = penalidade(&niveis, boss.team_level);
+        let (forca, mult) = self.modelo.penalidade(&niveis, boss.team_level);
         let escolhidos: Vec<_> = escolhidos
             .into_iter()
             .map(|(f, mon, sp, _)| {
@@ -855,4 +864,51 @@ pub fn resposta_plano(
         "boss": b, "perfil": nome_perfil(perfil), "ideal": ideal, "minha": minha,
         "conta": conta, "fonte": boss.fonte, "nota": NOTA_PLANO,
     }))
+}
+
+/// Divergência entre dois modelos para um boss: cobertura (soma ÷ HP) da equipe teórica
+/// realista em cada um e quantas espécies as duas equipes têm em comum.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Divergencia {
+    pub boss: String,
+    pub cobertura_a: f64,
+    pub cobertura_b: f64,
+    pub coincidentes: usize,
+}
+
+/// Compara a equipe teórica de cada boss em dois motores (ex.: legado × jogo).
+pub fn comparar_modelos(
+    a: &MotorEquipes,
+    b: &MotorEquipes,
+    lista: &[BossLista],
+) -> Vec<Divergencia> {
+    let especies = |v: &Value| -> HashSet<i64> {
+        v.get("equipe")
+            .and_then(Value::as_array)
+            .map(|e| {
+                e.iter()
+                    .take(TAMANHO_EQUIPE)
+                    .filter_map(|m| m.get("speciesId")?.as_i64())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let cobertura = |v: &Value| {
+        v.get("cobertura")
+            .and_then(Value::as_f64)
+            .unwrap_or(f64::NAN)
+    };
+    lista
+        .iter()
+        .filter_map(|boss| {
+            let ea = a.equipe_ideal(boss, Perfil::Realista, 5, None)?;
+            let eb = b.equipe_ideal(boss, Perfil::Realista, 5, None)?;
+            Some(Divergencia {
+                boss: boss.key.clone(),
+                cobertura_a: cobertura(&ea),
+                cobertura_b: cobertura(&eb),
+                coincidentes: especies(&ea).intersection(&especies(&eb)).count(),
+            })
+        })
+        .collect()
 }

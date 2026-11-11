@@ -69,6 +69,7 @@ Catálogo de itens do jogo (id, nome, categoria, raro, preço no NPC, ícone). C
 | `nexus.boss_wiki` | Bosses da wiki do jogo: nível fixo, drops e entrada | `data/POKEIDLE-wiki.txt` |
 | `nexus.falta_coleta` | Faltas de coleta por (boss, perfil): pedem mais espécies aos alvos | `.bolsa-faltas.json` |
 | `nexus.equipe_sugestao` | Uma linha por plano de equipe calculado, base da calibração | `equipe-sugestoes.jsonl` |
+| `nexus.boss_tentativa` | Tentativas de boss (equipe completa, resultado, duração, dano e eventos), para calibrar o modelo do jogo. Recebe dados a partir da fase 3 | (novo) |
 
 Carga e atualização em [operação](operacao.md#dados-da-bolsa).
 

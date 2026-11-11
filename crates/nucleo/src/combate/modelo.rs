@@ -4,7 +4,7 @@
 //! responde até o cutover; o modelo `Jogo` (etapa 5) roda ao lado só nas métricas.
 
 use super::combatente::{Combatente, Golpe, Opcoes};
-use super::duelo::{avaliar, Avaliacao};
+use super::duelo::{avaliar, penalidade, penalidade_individual, Avaliacao};
 use super::especie::{Categoria, EspecieCombate, Pokedex};
 use super::tipos::{Constantes, Tipo};
 
@@ -23,7 +23,7 @@ pub struct Boss {
 ///
 /// `Send + Sync` deixa o mesmo modelo ser usado por várias threads ao mesmo tempo (o
 /// otimizador roda em paralelo).
-pub trait ModeloCombate: Send + Sync {
+pub trait ModeloCombate: Send + Sync + std::fmt::Debug {
     /// Nome curto para logs e métricas.
     fn nome(&self) -> &'static str;
 
@@ -35,6 +35,16 @@ pub trait ModeloCombate: Send + Sync {
     /// Pontuação de uma carta contra o boss, com a penalidade de equipe `mult`.
     fn avaliar(&self, carta: &Combatente, boss: &Combatente, mult: f64) -> Avaliacao {
         avaliar(carta, boss, mult, self.constantes())
+    }
+
+    /// Força da equipe e multiplicador do dano recebido (`3^(5 − força)` no legado).
+    fn penalidade(&self, niveis: &[f64], nivel_boss: f64) -> (f64, f64) {
+        penalidade(niveis, nivel_boss)
+    }
+
+    /// Penalidade para ranquear uma carta sozinha.
+    fn penalidade_individual(&self, nivel: f64, nivel_boss: f64) -> f64 {
+        penalidade_individual(nivel, nivel_boss)
     }
 }
 

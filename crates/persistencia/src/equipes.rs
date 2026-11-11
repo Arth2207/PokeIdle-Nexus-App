@@ -119,3 +119,92 @@ pub async fn carregar_estado(db: &PgPool) -> Result<EstadoEquipes, sqlx::Error> 
         contas,
     })
 }
+
+/// Uma tentativa de boss como fica no banco.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinhaTentativa {
+    pub em: i64,
+    pub conta: Option<String>,
+    pub boss: String,
+    pub nivel_boss: f64,
+    pub tipos_boss: Vec<String>,
+    pub venceu: bool,
+    pub duracao_s: f64,
+    pub equipe: Value,
+    pub dano_causado: Option<f64>,
+    pub dano_recebido: Option<f64>,
+    pub eventos: Option<Value>,
+}
+
+pub async fn registrar_tentativa(db: &PgPool, t: &LinhaTentativa) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO nexus.boss_tentativa
+           (em, conta, boss, nivel_boss, tipos_boss, venceu, duracao_s, equipe, dano_causado, dano_recebido, eventos)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+    )
+    .bind(t.em)
+    .bind(&t.conta)
+    .bind(&t.boss)
+    .bind(t.nivel_boss)
+    .bind(&t.tipos_boss)
+    .bind(t.venceu)
+    .bind(t.duracao_s)
+    .bind(&t.equipe)
+    .bind(t.dano_causado)
+    .bind(t.dano_recebido)
+    .bind(&t.eventos)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// As tentativas mais recentes (no máximo `limite`).
+pub async fn carregar_tentativas(
+    db: &PgPool,
+    limite: i64,
+) -> Result<Vec<LinhaTentativa>, sqlx::Error> {
+    sqlx::query(
+        "SELECT em, conta, boss, nivel_boss, tipos_boss, venceu, duracao_s, equipe, dano_causado, dano_recebido, eventos
+         FROM nexus.boss_tentativa ORDER BY em DESC LIMIT $1",
+    )
+    .bind(limite)
+    .fetch_all(db)
+    .await?
+    .into_iter()
+    .map(|l| {
+        Ok(LinhaTentativa {
+            em: l.try_get("em")?,
+            conta: l.try_get("conta")?,
+            boss: l.try_get("boss")?,
+            nivel_boss: l.try_get("nivel_boss")?,
+            tipos_boss: l.try_get("tipos_boss")?,
+            venceu: l.try_get("venceu")?,
+            duracao_s: l.try_get("duracao_s")?,
+            equipe: l.try_get("equipe")?,
+            dano_causado: l.try_get("dano_causado")?,
+            dano_recebido: l.try_get("dano_recebido")?,
+            eventos: l.try_get("eventos")?,
+        })
+    })
+    .collect()
+}
+
+/// Um valor de `nexus.parametro`.
+pub async fn ler_parametro(db: &PgPool, chave: &str) -> Result<Option<Value>, sqlx::Error> {
+    sqlx::query_scalar("SELECT valor FROM nexus.parametro WHERE chave = $1")
+        .bind(chave)
+        .fetch_optional(db)
+        .await
+}
+
+pub async fn gravar_parametro(db: &PgPool, chave: &str, valor: &Value) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO nexus.parametro (chave, valor) VALUES ($1, $2)
+         ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor, atualizado_em = now()",
+    )
+    .bind(chave)
+    .bind(valor)
+    .execute(db)
+    .await?;
+    Ok(())
+}

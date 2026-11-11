@@ -152,6 +152,10 @@ As rotas `POST /api/bolsa/ofertas`, `resumo-itens` e `meus-itens` e a limpeza pe
 
 `POST /api/equipes/ingest`, a gravação das faltas de coleta e o registro das sugestões de equipe (`nexus.equipe_sugestao`) só acontecem com `NEXUS_ESCRITA_EQUIPES=true`. Até o cutover da fase 2, quem recebe o relay é o legado, e o estado chega pela importação; o Nexus calcula as faltas, mas não as grava.
 
+### Modelos de combate
+
+O modelo `legado` responde nas rotas; o `jogo` roda ao lado a cada 10 minutos e só aparece nas métricas: `nexus_modelo_cobertura{boss,modelo}` e `nexus_modelo_especies_em_comum{boss}` mostram quanto as equipes teóricas dos dois divergem. Com 5 ou mais tentativas em `nexus.boss_tentativa`, a mesma tarefa calibra HP, dano e base da penalidade do boss (`nexus_modelo_jogo_parametro`, `nexus_modelo_jogo_erro_rms_log`) e, com `NEXUS_ESCRITA_EQUIPES=true`, grava os parâmetros em `nexus.parametro`. `NEXUS_MODELO=jogo` troca o modelo das respostas; só faz sentido depois da calibração.
+
 ### Comparador de paridade
 
 O serviço `nexus-paridade` do Compose roda `nexus-api paridade-continua`. A cada 10 minutos ele compara as rotas de leitura da bolsa com o legado e grava o resultado em `nexus.paridade`. A API publica a última rodada de cada rota em `/metrics` (`nexus_paridade_razao`, `nexus_paridade_comparados`, `nexus_paridade_idade_segundos`).

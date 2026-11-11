@@ -8,9 +8,8 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{json, Map, Value};
 
 use crate::combate::combatente::{self, Opcoes as OpcoesMon, Perfil as PerfilTeorico};
-use crate::combate::duelo::{penalidade_individual, Avaliacao, TEMPO_MAXIMO};
+use crate::combate::duelo::{Avaliacao, TEMPO_MAXIMO};
 use crate::combate::especie::EspecieCombate;
-use crate::combate::modelo::ModeloCombate;
 use crate::combate::tipos::Tipo;
 use crate::equipes::{norm, proximo_boss, BossLista, EstadoEquipes, MotorEquipes};
 use crate::js;
@@ -986,8 +985,11 @@ pub fn equipe_bolsa(e: &EntradaBolsa<'_>, faltas: &mut Faltas) -> Result<Value, 
         }
         let ind = r.dps_causado
             * if r.dps_recebido > 0.0 {
-                TEMPO_MAXIMO
-                    .min(mon.hp / (r.dps_recebido * penalidade_individual(lvl, boss.team_level)))
+                TEMPO_MAXIMO.min(
+                    mon.hp
+                        / (r.dps_recebido
+                            * motor.modelo.penalidade_individual(lvl, boss.team_level)),
+                )
             } else {
                 TEMPO_MAXIMO
             };

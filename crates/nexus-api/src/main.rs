@@ -82,6 +82,12 @@ async fn servir(cfg: Configuracao) -> anyhow::Result<()> {
         Duration::from_secs(cfg.bolsa_ciclo_s.max(10)),
         parar_tarefas.clone(),
     );
+    // Modelo do jogo: calibração e divergência com o legado, só nas métricas.
+    equipes::iniciar_modelos(
+        estado.clone(),
+        Duration::from_secs(600),
+        parar_tarefas.clone(),
+    );
     if let Some(url) = &cfg.paridade_url {
         let comparador = bolsa::paridade::Comparador::novo(Arc::clone(&estado.bolsa), url)
             .context("não consegui criar o cliente HTTP do comparador")?

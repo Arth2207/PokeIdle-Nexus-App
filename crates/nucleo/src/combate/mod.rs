@@ -4,8 +4,10 @@
 //! constantes do servidor ficam num [`tipos::Constantes`] em vez de variáveis globais, para
 //! dois modelos (legado e jogo) poderem rodar lado a lado.
 
+pub mod calibracao;
 pub mod combatente;
 pub mod duelo;
 pub mod especie;
+pub mod jogo;
 pub mod modelo;
 pub mod tipos;
