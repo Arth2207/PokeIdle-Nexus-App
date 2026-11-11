@@ -90,6 +90,10 @@ Durante a migração, Node e Rust escrevem no mesmo banco. Este mapa define quem
 
 A `comando_fila` tem quatro produtores e um consumidor. Para o consumo continuar seguro enquanto Node e Rust convivem, a reserva de um comando usa `SELECT ... FOR UPDATE SKIP LOCKED`: dois consumidores nunca pegam o mesmo comando. Um trigger aditivo publica `NOTIFY comando_fila` a cada inserção, e é isso que alimenta o WebSocket.
 
+## Catálogo de hunts
+
+A tabela `dim_hunt` tem hoje só 94 hunts, com os campos de nível e espécies vazios. O jogo envia o catálogo completo na mensagem inicial (`hunts`, com 1.042 entradas: área, região, nível, espécies com peso, coordenada no mapa). O Nexus passa a gravar esse catálogo numa tabela própria (`nexus.hunt`), com o bioma derivado, a partir da fase 3 (ingestão).
+
 ## Migrations
 
 - Gerenciadas com `sqlx-cli` em `migrations/`.

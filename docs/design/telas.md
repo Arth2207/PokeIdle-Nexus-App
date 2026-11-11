@@ -331,6 +331,30 @@ O "Escaneamento de campo" em tela cheia: a criatura em 2.5D, tipos, stats no ní
 
 ---
 
+## Biomas (fundo de cada tela)
+
+O jogo envia, na mensagem inicial, a lista completa de hunts (1.042 em novembro de 2026) com área (`kanto`, `orre`, `outland`), região de origem, nível, espécies que aparecem com o peso de cada uma, e a coordenada (`pixel`) no mapa do jogo. Ele **não** envia o ambiente. O bioma é derivado pelo tipo predominante das espécies da hunt, ponderado pelo peso de spawn:
+
+| Tipo predominante | Bioma | Hunts (simulação nov/2026) |
+|---|---|---|
+| Água | Riacho e lago | 116 |
+| Normal, Voador | Campos e penhascos | 108 |
+| Planta, Inseto | Floresta e bosque | 165 |
+| Fantasma, Sombrio | Floresta sombria | 74 |
+| Psíquico, Fada | Clareira mística | 69 |
+| Fogo | Vulcão | 63 |
+| Elétrico | Planície tempestuosa | 58 |
+| Pedra, Terra | Montanha e cânion | 95 |
+| Venenoso | Pântano | 41 |
+| Lutador | Templo na montanha | 40 |
+| Gelo | Montanha nevada | 36 |
+| Dragão, Aço | Pico e ruínas antigas | 56 |
+| — | Outland (área própria do jogo, 8 níveis) | 58 |
+
+São 13 paisagens, cada uma em versão diurna e noturna: 26 ilustrações. 121 hunts usam espécies que o pokedex local não tem (formas especiais); para elas, os tipos vêm do PokeAPI.
+
+A coordenada `pixel` também permite desenhar o **mapa de expedição** da Caçada sobre o mapa real do jogo.
+
 ## Imagens das criaturas
 
 Todas vêm do repositório público do PokeAPI (`PokeAPI/sprites`), baixadas pelo app em tempo de uso e guardadas em cache local. **Nenhuma imagem oficial é versionada neste repositório.**
