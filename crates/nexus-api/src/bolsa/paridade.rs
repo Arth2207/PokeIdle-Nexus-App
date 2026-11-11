@@ -37,6 +37,7 @@ const AO_VIVO: &[&str] = &[
     "max",
     "comparaveis",
     "askMin",
+    "chance",
 ];
 const AMOSTRA: usize = 15;
 /// Validade do cache do mercado no legado (`TTL` do `bolsa.js`).
@@ -842,6 +843,15 @@ mod testes {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn dado_ao_vivo_tem_tolerancia_so_onde_deve() {
+        let a = json!({"confianca": {"chance": 0.4989494951215404}, "ofStat": {"n": 100}, "poder": 1.0});
+        let b = json!({"confianca": {"chance": 0.49961427578013706}, "ofStat": {"n": 103}, "poder": 1.0});
+        assert_eq!(diferenca(&a, &b, ""), None);
+        let c = json!({"confianca": {"chance": 0.4989494951215404}, "ofStat": {"n": 100}, "poder": 1.03});
+        assert!(diferenca(&a, &c, "").is_some());
+    }
 
     #[test]
     fn diferenca_ignora_volateis_e_tolera_floats() {
