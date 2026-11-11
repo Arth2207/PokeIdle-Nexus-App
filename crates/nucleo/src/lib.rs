@@ -6,7 +6,9 @@
 //! banco e com resultados reproduzíveis.
 
 pub mod bolsa;
+pub mod bolsa_equipe;
 pub mod combate;
 pub mod equipes;
 pub mod js;
+pub mod otimizador;
 pub mod precificador;
