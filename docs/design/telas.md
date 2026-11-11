@@ -331,6 +331,19 @@ O "Escaneamento de campo" em tela cheia: a criatura em 2.5D, tipos, stats no ní
 
 ---
 
+## Imagens das criaturas
+
+Todas vêm do repositório público do PokeAPI (`PokeAPI/sprites`), baixadas pelo app em tempo de uso e guardadas em cache local. **Nenhuma imagem oficial é versionada neste repositório.**
+
+| Uso | Variante | Observação |
+|---|---|---|
+| Destaques (Visão geral, Bestiário, Combate) | `other/official-artwork/` (arte oficial, ~475 px) | padrão; a mesma usada no dossiê, que converte o id das formas especiais pela função `arteD()`, a ser portada |
+| Destaques, opção em Aparência | `other/home/` (render 3D, ~512 px, com shiny) | para quem prefere volume |
+| Listas e tela do Jogo | `other/showdown/` (GIF animado) | movimento onde ajuda a identificar |
+| Ícones pequenos | sprite padrão (96 px) | só em tamanhos ≤ 48 px |
+
+O efeito 2.5D é aplicado pelo app sobre a imagem de fundo transparente: sombra projetada no card, luz de contorno na cor do bioma (e do tema noturno), parallax com o mouse e uma respiração lenta. Tudo isso é desligado no modo desempenho.
+
 ## Componentes padronizados
 
 Todas as telas são montadas a partir deste conjunto, que vai para o design system:
