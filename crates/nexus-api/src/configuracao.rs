@@ -11,6 +11,7 @@
 //! | `NEXUS_ESCRITA_EQUIPES` | não       | `false`     |
 //! | `NEXUS_CPU_THREADS`   | não         | `2`         |
 //! | `NEXUS_MODELO`        | não         | `legado`    |
+//! | `NEXUS_MELHORIAS`     | não         | `false`     |
 //! | `NEXUS_CORS_ORIGENS`  | não         | (nenhuma)   |
 //! | `NEXUS_LIMITE_RPS`    | não         | `10`        |
 //! | `NEXUS_LIMITE_RAJADA` | não         | `40`        |
@@ -23,6 +24,9 @@
 //!   gravam em tabelas do legado; só ligar no cutover da fase 1.
 //! - `NEXUS_ESCRITA_EQUIPES`: liga o `POST /api/equipes/ingest`. Até o cutover da fase 2 o
 //!   relay manda para o legado, e o estado chega pela importação.
+//! - `NEXUS_MELHORIAS`: liga o que diverge do legado de propósito: busca exata nos perfis de
+//!   equipe, chance de vitória, ordem de compra e preços típicos corrigidos. Quebra a paridade
+//!   (o comparador vai acusar), então só depois do cutover da fase 2.
 //! - `NEXUS_MODELO`: modelo de combate das respostas (`legado` ou `jogo`). O outro roda ao
 //!   lado só nas métricas. Trocar para `jogo` só com lutas reais suficientes para calibrar.
 //! - `NEXUS_CPU_THREADS`: tamanho do pool de CPU do cálculo de equipes (fora do tokio).
@@ -57,6 +61,8 @@ pub struct Configuracao {
     pub escrita_equipes: bool,
     #[serde(default)]
     pub paridade_equipe: bool,
+    #[serde(default)]
+    pub melhorias: bool,
     #[serde(default = "modelo_padrao")]
     pub modelo: String,
     #[serde(default = "cpu_threads_padrao")]

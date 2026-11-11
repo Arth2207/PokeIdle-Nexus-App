@@ -548,6 +548,76 @@ fn dano(x: &Candidato, mult: f64) -> f64 {
         }
 }
 
+/// `pack` do legado: o resultado de um perfil a partir da equipe escolhida.
+fn empacotar(
+    c: &[Candidato],
+    l: f64,
+    referencia: f64,
+    r: Option<&Equipe>,
+    alvo: Option<f64>,
+    teto: Option<f64>,
+    rel: Vec<&'static str>,
+) -> ResultadoPerfil {
+    let Some(r) = r else {
+        return ResultadoPerfil {
+            alvo,
+            indisponivel: true,
+            inviavel: true,
+            equipe: None,
+            poder: 0.0,
+            margem_estresse: 0.0,
+            abaixo: 0,
+            pior_faltam: 0.0,
+            t_sobrevive: None,
+            restr: None,
+            teto_mult: teto,
+            teto_usado: None,
+            alternativas: Vec::new(),
+            reservas: Vec::new(),
+        };
+    };
+    let ab: Vec<usize> = r.pick.iter().copied().filter(|&i| c[i].lvl < l).collect();
+    let t_sob = r.pick.iter().fold(f64::INFINITY, |m, &i| {
+        let x = &c[i];
+        js_min(
+            m,
+            if x.dps_in > 0.0 {
+                js_min(TEMPO_MAXIMO, x.hp / (x.dps_in * r.mult))
+            } else {
+                TEMPO_MAXIMO
+            },
+        )
+    });
+    ResultadoPerfil {
+        alvo,
+        indisponivel: false,
+        inviavel: false,
+        poder: r.d / referencia,
+        margem_estresse: r.ds / referencia,
+        abaixo: ab.len(),
+        pior_faltam: if ab.is_empty() {
+            0.0
+        } else {
+            ab.iter()
+                .fold(f64::NEG_INFINITY, |m, &i| js_max(m, l - c[i].lvl))
+        },
+        t_sobrevive: Some(js::round(t_sob)),
+        restr: Some(Restricoes {
+            piso: r.pick.iter().all(|&i| c[i].lvl >= PISO_NIVEL * l),
+            teto_nivel: r.pick.iter().all(|&i| c[i].lvl <= TETO_NIVEL * l),
+            mult: teto.is_none_or(|t| r.mult <= t + EPS),
+            heroi: r.hero <= SEM_HEROI + EPS,
+            estresse: r.ds >= referencia - EPS,
+            relaxadas: rel,
+        }),
+        teto_mult: teto,
+        teto_usado: None,
+        equipe: Some(r.clone()),
+        alternativas: Vec::new(),
+        reservas: Vec::new(),
+    }
+}
+
 /// Resultado do `resolver` de um perfil.
 struct Resolvido<'a> {
     sel: Equipe,
@@ -748,70 +818,10 @@ pub fn selecionar(c: &[Candidato], op: &Opcoes) -> Selecao {
         .then(|| Busca::montar(c, n, l, referencia, pool_justo.clone(), Regra::default()));
     let max_eq = mm.as_ref().and_then(|m| m.maximum.clone());
 
-    let pack = |r: Option<&Equipe>,
-                alvo: Option<f64>,
-                teto: Option<f64>,
-                rel: Vec<&'static str>|
-     -> ResultadoPerfil {
-        let Some(r) = r else {
-            return ResultadoPerfil {
-                alvo,
-                indisponivel: true,
-                inviavel: true,
-                equipe: None,
-                poder: 0.0,
-                margem_estresse: 0.0,
-                abaixo: 0,
-                pior_faltam: 0.0,
-                t_sobrevive: None,
-                restr: None,
-                teto_mult: teto,
-                teto_usado: None,
-                alternativas: Vec::new(),
-                reservas: Vec::new(),
-            };
+    let pack =
+        |r: Option<&Equipe>, alvo: Option<f64>, teto: Option<f64>, rel: Vec<&'static str>| {
+            empacotar(c, l, referencia, r, alvo, teto, rel)
         };
-        let ab: Vec<usize> = r.pick.iter().copied().filter(|&i| c[i].lvl < l).collect();
-        let t_sob = r.pick.iter().fold(f64::INFINITY, |m, &i| {
-            let x = &c[i];
-            js_min(
-                m,
-                if x.dps_in > 0.0 {
-                    js_min(TEMPO_MAXIMO, x.hp / (x.dps_in * r.mult))
-                } else {
-                    TEMPO_MAXIMO
-                },
-            )
-        });
-        ResultadoPerfil {
-            alvo,
-            indisponivel: false,
-            inviavel: false,
-            poder: r.d / referencia,
-            margem_estresse: r.ds / referencia,
-            abaixo: ab.len(),
-            pior_faltam: if ab.is_empty() {
-                0.0
-            } else {
-                ab.iter()
-                    .fold(f64::NEG_INFINITY, |m, &i| js_max(m, l - c[i].lvl))
-            },
-            t_sobrevive: Some(js::round(t_sob)),
-            restr: Some(Restricoes {
-                piso: r.pick.iter().all(|&i| c[i].lvl >= PISO_NIVEL * l),
-                teto_nivel: r.pick.iter().all(|&i| c[i].lvl <= TETO_NIVEL * l),
-                mult: teto.is_none_or(|t| r.mult <= t + EPS),
-                heroi: r.hero <= SEM_HEROI + EPS,
-                estresse: r.ds >= referencia - EPS,
-                relaxadas: rel,
-            }),
-            teto_mult: teto,
-            teto_usado: None,
-            equipe: Some(r.clone()),
-            alternativas: Vec::new(),
-            reservas: Vec::new(),
-        }
-    };
 
     let mut res_eco = pack(
         eco_sel,
@@ -920,4 +930,381 @@ pub fn selecionar(c: &[Candidato], op: &Opcoes) -> Selecao {
         sem_avaliacao: c.iter().filter(|x| !x.justo.is_finite()).count(),
         impossivel,
     }
+}
+
+// ---------- seleção exata ----------
+
+/// Equipe de menor custo com dano ≥ `alvo_d` que cumpre as regras de `b.reg` (busca
+/// exata por branch-and-bound). As cartas vão em ordem crescente de preço: um ramo é podado
+/// quando nem as próximas cartas mais baratas cabem abaixo do melhor custo, ou quando nem o
+/// teto de dano alcança a meta.
+fn minimo_custo(b: &Busca<'_>, alvo_d: f64, limite_nos: u64) -> Option<Equipe> {
+    let c = b.c;
+    let mut ordem = b.pool.clone();
+    ordem.sort_by(|&x, &y| c[x].unit.total_cmp(&c[y].unit).then(c[x].id.cmp(&c[y].id)));
+    let custos: Vec<f64> = ordem.iter().map(|&i| c[i].unit).collect();
+    let mut ub: Vec<f64> = ordem.iter().map(|&i| dano(&c[i], 1.0)).collect();
+    ub.sort_by(|x, y| y.total_cmp(x));
+    let topo: Vec<f64> = (0..=b.n).map(|r| ub.iter().take(r).sum()).collect();
+
+    struct Ctx<'a, 'b> {
+        b: &'a Busca<'b>,
+        ordem: Vec<usize>,
+        custos: Vec<f64>,
+        topo: Vec<f64>,
+        alvo: f64,
+        nos: u64,
+        limite: u64,
+        melhor: Option<Equipe>,
+    }
+    fn dfs(x: &mut Ctx<'_, '_>, k0: usize, pick: &mut Vec<usize>, gasto: f64, forca: f64) {
+        let b = x.b;
+        let r = b.n - pick.len();
+        if r == 0 {
+            let m = b.metrics(pick);
+            if b.valid(pick)
+                && m.d + EPS >= x.alvo
+                && b.viavel(&m)
+                && x.melhor.as_ref().is_none_or(|e| m.total < e.total - EPS)
+            {
+                x.melhor = Some(m);
+            }
+            return;
+        }
+        let m_min = js::pow(3.0, (b.n as f64 - forca - r as f64).max(0.0));
+        let parcial: f64 = pick.iter().map(|&i| dano(&b.c[i], m_min)).sum();
+        if parcial + x.topo[r] + EPS < x.alvo {
+            return;
+        }
+        for k in k0..x.ordem.len() {
+            let piso: f64 = x.custos.iter().skip(k).take(r).sum();
+            if x.custos.len() - k < r
+                || x.melhor
+                    .as_ref()
+                    .is_some_and(|e| gasto + piso >= e.total - EPS)
+                || x.nos >= x.limite
+            {
+                break;
+            }
+            let i = x.ordem[k];
+            let ci = &b.c[i];
+            if pick.iter().any(|&y| b.c[y].id == ci.id) || conta_sp(b.c, pick, ci.sp) >= 2 {
+                continue;
+            }
+            x.nos += 1;
+            pick.push(i);
+            dfs(
+                x,
+                k + 1,
+                pick,
+                gasto + ci.unit,
+                forca + js_min(1.0, ci.lvl / b.l),
+            );
+            pick.pop();
+        }
+    }
+    let mut x = Ctx {
+        b,
+        ordem,
+        custos,
+        topo,
+        alvo: alvo_d,
+        nos: 0,
+        limite: limite_nos,
+        melhor: None,
+    };
+    let mut pick = Vec::with_capacity(b.n);
+    dfs(&mut x, 0, &mut pick, 0.0, 0.0);
+    x.melhor
+}
+
+/// `selecionar` com busca exata nos três perfis (modo `NEXUS_MELHORIAS`): a Econômica e a
+/// Equilibrada são a equipe mais barata que cumpre a meta e as regras; a Máxima é a de maior
+/// dano. Mesmas regras, mesma ordem de relaxamento e mesmo formato de saída do legado, mas
+/// com resultado ótimo e sem depender do relógio.
+#[allow(clippy::too_many_lines, clippy::type_complexity)]
+pub fn selecionar_exato(c: &[Candidato], op: &Opcoes, limite_nos: u64) -> Selecao {
+    let (n, l, referencia) = (op.n, op.nivel_boss, op.referencia);
+    let pool_todos: Vec<usize> = (0..c.len())
+        .filter(|&i| c[i].unit.is_finite() && c[i].unit > 0.0)
+        .collect();
+    let pool_justo: Vec<usize> = pool_todos
+        .iter()
+        .copied()
+        .filter(|&i| {
+            !op.teto_justo
+                || !op.moeda_orb
+                || (c[i].justo.is_finite() && c[i].justo > 0.0 && c[i].unit <= c[i].justo)
+        })
+        .collect();
+    let busca = |pool: Vec<usize>, reg: Regra| Busca {
+        c,
+        n,
+        l,
+        referencia,
+        pool,
+        reg,
+        seeds: Vec::new(),
+        maximum: None,
+    };
+    let melhor_d = |pool: &[usize]| -> Option<Equipe> {
+        let sub: Vec<Candidato> = pool.iter().map(|&i| c[i].clone()).collect();
+        let r = crate::busca_exata::melhor_equipe(&sub, n, l, None, None, limite_nos)?;
+        let pick: Vec<usize> = r.pick.iter().map(|&j| pool[j]).collect();
+        Some(busca(pool.to_vec(), Regra::default()).metrics(&pick))
+    };
+    let impossivel = melhor_d(&pool_todos).is_none_or(|m| m.d < 1.05 * referencia);
+    let mut avisos: Vec<String> = Vec::new();
+
+    // Escada de relaxamento: teto de nível 2,5×, sem teto, sem estresse, sem herói.
+    let resolver = |pool_base: &[usize],
+                    alvo: f64,
+                    perfil: Perfil|
+     -> Option<(Equipe, Busca<'_>, Vec<&'static str>, Option<f64>)> {
+        if impossivel {
+            return None;
+        }
+        let teto = perfil.teto_mult();
+        let base: Vec<usize> = pool_base
+            .iter()
+            .copied()
+            .filter(|&i| c[i].lvl >= PISO_NIVEL * l)
+            .collect();
+        let no_teto: Vec<usize> = base
+            .iter()
+            .copied()
+            .filter(|&i| c[i].lvl <= TETO_NIVEL * l + 1e-6)
+            .collect();
+        let degraus: [(&[usize], Regra, Vec<&'static str>, Option<f64>); 4] = [
+            (
+                &no_teto,
+                Regra {
+                    mult: teto,
+                    heroi: true,
+                    estresse: true,
+                },
+                vec![],
+                Some(TETO_NIVEL),
+            ),
+            (
+                &base,
+                Regra {
+                    mult: teto,
+                    heroi: true,
+                    estresse: true,
+                },
+                vec![],
+                None,
+            ),
+            (
+                &base,
+                Regra {
+                    mult: teto,
+                    heroi: true,
+                    estresse: false,
+                },
+                vec!["estresse"],
+                None,
+            ),
+            (
+                &base,
+                Regra {
+                    mult: teto,
+                    heroi: false,
+                    estresse: false,
+                },
+                vec!["estresse", "herói"],
+                None,
+            ),
+        ];
+        for (pool, reg, rel, teto_usado) in degraus {
+            if pool.len() < n {
+                continue;
+            }
+            let b = busca(pool.to_vec(), reg);
+            if let Some(e) = minimo_custo(&b, alvo * referencia, limite_nos) {
+                return Some((e, b, rel, teto_usado));
+            }
+        }
+        None
+    };
+    let eco = if op.so_max {
+        None
+    } else {
+        resolver(&pool_todos, 1.05, Perfil::Eco)
+    };
+    let margem_eco = eco.as_ref().map_or(1.05, |r| r.0.d / referencia);
+    let mut eq_alvo = js_max(1.3, margem_eco * 1.1);
+    let mut eq = if op.so_max || op.so_eco {
+        None
+    } else {
+        resolver(&pool_justo, eq_alvo, Perfil::Eq)
+    };
+    if eq.is_none() && !op.so_max && !op.so_eco {
+        eq_alvo = 1.05;
+        eq = resolver(&pool_justo, 1.05, Perfil::Eq);
+    }
+    let maxima = if pool_justo.len() >= n {
+        melhor_d(&pool_justo)
+    } else {
+        None
+    };
+
+    let montar = |r: &Option<(Equipe, Busca<'_>, Vec<&'static str>, Option<f64>)>,
+                  perfil: Perfil,
+                  alvo: f64,
+                  avisos: &mut Vec<String>|
+     -> ResultadoPerfil {
+        let Some((e, b, rel, teto_usado)) = r else {
+            return empacotar(
+                c,
+                l,
+                referencia,
+                None,
+                Some(alvo),
+                perfil.teto_mult(),
+                Vec::new(),
+            );
+        };
+        let mut p = empacotar(
+            c,
+            l,
+            referencia,
+            Some(e),
+            Some(alvo),
+            perfil.teto_mult(),
+            rel.clone(),
+        );
+        p.teto_usado = *teto_usado;
+        if let Some(restr) = p.restr.as_mut() {
+            let t = teto_usado.unwrap_or(f64::INFINITY);
+            restr.teto_nivel = e.pick.iter().all(|&i| c[i].lvl <= t * l + 1e-6);
+        }
+        if !rel.is_empty() {
+            avisos.push(format!(
+                "{}: nenhuma equipe cumpriu todas as regras de segurança; relaxei {}.",
+                perfil.nome(),
+                rel.join(", ")
+            ));
+        }
+        if teto_usado.is_none() {
+            avisos.push(format!(
+                "{}: sem teto de nível (nenhuma equipe viável até {}× o nível do boss).",
+                perfil.nome(),
+                js::numero(TETO_NIVEL)
+            ));
+        }
+        // Planos B e C: a melhor equipe sem cada titular, as duas mais baratas e distintas.
+        let mut vistos = HashSet::from([chave(c, &e.pick)]);
+        let mut alt: Vec<Equipe> = e
+            .pick
+            .iter()
+            .filter_map(|&tit| {
+                let pool: Vec<usize> = b
+                    .pool
+                    .iter()
+                    .copied()
+                    .filter(|&x| c[x].id != c[tit].id)
+                    .collect();
+                minimo_custo(&busca(pool, b.reg), alvo * referencia, limite_nos)
+            })
+            .filter(|x| vistos.insert(chave(c, &x.pick)))
+            .collect();
+        alt.sort_by(|a, z| ordem(ou(a.total - z.total, z.d - a.d)));
+        p.alternativas = alt
+            .iter()
+            .take(2)
+            .map(|x| {
+                empacotar(
+                    c,
+                    l,
+                    referencia,
+                    Some(x),
+                    Some(alvo),
+                    perfil.teto_mult(),
+                    rel.clone(),
+                )
+            })
+            .collect();
+        p.reservas = b.reservas(&e.pick, alvo);
+        p
+    };
+    let res_eco = montar(&eco, Perfil::Eco, 1.05, &mut avisos);
+    let res_eq = montar(&eq, Perfil::Eq, eq_alvo, &mut avisos);
+    let mut res_max = empacotar(c, l, referencia, maxima.as_ref(), None, None, Vec::new());
+    if !res_max.indisponivel && res_max.poder < 1.0 {
+        res_max.inviavel = true;
+    }
+    if let (Some(a), Some(z)) = (&eco, &eq) {
+        if chave(c, &a.0.pick) == chave(c, &z.0.pick) {
+            avisos.push("Boss fraco para as ofertas disponíveis: a equipe econômica já cumpre a margem da equilibrada, por isso as duas coincidem.".into());
+        }
+    }
+    if impossivel && !op.so_max {
+        avisos.push("Boss impossível com as ofertas atuais: nem a melhor equipe possível por dano chega a 105% da meta.".into());
+    }
+    if res_eco.indisponivel && res_eq.indisponivel {
+        avisos.push(format!(
+            "Nenhuma equipe das ofertas atuais alcança a margem mínima de 105% contra este boss (nível {}), com {n} Pokémon: faltam ofertas de nível mais alto.",
+            js::numero(l)
+        ));
+    }
+    Selecao {
+        eco: res_eco,
+        eq: res_eq,
+        max: res_max,
+        avisos,
+        elegiveis: pool_justo.len(),
+        excluidas_preco: c
+            .iter()
+            .filter(|x| x.justo.is_finite() && x.unit > x.justo)
+            .count(),
+        sem_avaliacao: c.iter().filter(|x| !x.justo.is_finite()).count(),
+        impossivel,
+    }
+}
+
+/// Chance de a equipe passar da meta de dano, com a variação de dano do jogo (cada golpe
+/// sai entre 85% e 100% do dano cheio; o modelo usa a média, 92,5%). Amostras com o gerador
+/// determinístico do duelo oficial (LCG 1664525/1013904223): mesma entrada, mesma chance.
+pub fn chance_vitoria(
+    c: &[Candidato],
+    pick: &[usize],
+    n: usize,
+    nivel_boss: f64,
+    referencia: f64,
+    amostras: u32,
+) -> f64 {
+    if pick.is_empty() || amostras == 0 {
+        return 0.0;
+    }
+    let forca = pick
+        .iter()
+        .fold(0.0, |s, &i| s + js_min(1.0, c[i].lvl / nivel_boss));
+    let mult = js::pow(3.0, js_max(0.0, n as f64 - forca));
+    let mut semente: u32 = 0x5EED;
+    let mut variacao = || {
+        semente = semente.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (0.85 + 0.15 * (f64::from(semente) / 4_294_967_296.0)) / 0.925
+    };
+    let mut vitorias = 0u32;
+    for _ in 0..amostras {
+        let d: f64 = pick
+            .iter()
+            .map(|&i| {
+                let x = &c[i];
+                let (causado, recebido) = (variacao(), variacao());
+                let t = if x.dps_in > 0.0 {
+                    js_min(TEMPO_MAXIMO, x.hp / (x.dps_in * mult * recebido))
+                } else {
+                    TEMPO_MAXIMO
+                };
+                x.dps_out * causado * t
+            })
+            .sum();
+        if d >= referencia {
+            vitorias += 1;
+        }
+    }
+    f64::from(vitorias) / f64::from(amostras)
 }

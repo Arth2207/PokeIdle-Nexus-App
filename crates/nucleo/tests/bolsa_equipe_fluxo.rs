@@ -74,7 +74,13 @@ fn equipe_da_bolsa_respeita_as_regras() {
     let ofs = ofertas(&motor, rb.boss.team_level, 120);
     let preco_de = |_: &Value, _: &Value| (Some(100.0), Some("último"));
     let cot = HashMap::new();
-    for orcamento in [None, Some(3_000.0), Some(30_000.0)] {
+    for (orcamento, melhorias) in [
+        (None, false),
+        (Some(3_000.0), false),
+        (Some(30_000.0), false),
+        (None, true),
+        (Some(30_000.0), true),
+    ] {
         let e = EntradaBolsa {
             motor: &motor,
             boss: &rb,
@@ -87,8 +93,17 @@ fn equipe_da_bolsa_respeita_as_regras() {
             preco_de: &preco_de,
             agora: 0,
             orcamento,
+            melhorias,
         };
         let r = be::equipe_bolsa(&e, &mut Faltas::default()).unwrap();
+        if melhorias {
+            let eco = &r["perfis"]["eco"];
+            if eco["indisponivel"] == false {
+                let ch = eco["chanceVitoria"].as_f64().unwrap();
+                assert!((0.0..=1.0).contains(&ch));
+                assert_eq!(eco["ordemCompra"].as_array().unwrap().len(), 5);
+            }
+        }
         for p in ["eco", "eq", "max"] {
             let perfil = &r["perfis"][p];
             if perfil["indisponivel"] == false {
@@ -124,6 +139,7 @@ fn hibrida_nunca_custa_mais_que_comprar_tudo() {
         moeda: "gold",
         ofertas: &ofs,
         n: 5,
+        melhorias: false,
     })
     .unwrap();
     if r.get("indisponivel").is_none() {
@@ -153,6 +169,7 @@ fn equipe_propria_monta_com_a_colecao() {
         preco_de: &preco_de,
         eco_compra: None,
         agora: 0,
+        melhorias: true,
     };
     let r = be::equipe_propria(&e).unwrap();
     assert!(r["perfis"].is_object());

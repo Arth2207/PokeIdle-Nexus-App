@@ -24,6 +24,8 @@ pub struct Estado {
     /// Equipe da bolsa: jobs de cálculo e o pool de CPU.
     pub equipe_bolsa: Arc<ServicoEquipeBolsa>,
     pub escrita_equipes: bool,
+    /// `NEXUS_MELHORIAS`.
+    pub melhorias: bool,
     pub limitador: Arc<Limitador>,
     pub origens_cors: Arc<Vec<String>>,
     /// Serializa as gravações do inventário (ler, aplicar, gravar).
@@ -41,6 +43,7 @@ impl Estado {
         Ok(Self {
             escrita_bolsa: cfg.escrita_bolsa,
             escrita_equipes: cfg.escrita_equipes,
+            melhorias: cfg.melhorias,
             equipes: Arc::new(ServicoEquipes::novo(
                 db.clone(),
                 ModeloAtivo::de_texto(&cfg.modelo),
@@ -59,6 +62,7 @@ impl Estado {
             equipes: Arc::new(ServicoEquipes::novo(db.clone(), ModeloAtivo::Legado)),
             equipe_bolsa: Arc::new(ServicoEquipeBolsa::novo(1)),
             escrita_equipes: false,
+            melhorias: false,
             db,
             bolsa,
             escrita_bolsa: false,

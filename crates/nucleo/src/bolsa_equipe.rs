@@ -742,9 +742,19 @@ fn perfil_de(s: &Selecao, p: Perfil) -> &ResultadoPerfil {
 
 /// `resolverPorPerfil`: cada perfil escolhe primeiro entre as espécies da lista dele; se não
 /// fechar equipe viável, completa com as demais. Registra ou resolve as faltas.
+/// Seleção do modo: a do legado (paridade) ou a exata (`NEXUS_MELHORIAS`).
+pub fn selecionar(c: &[Candidato], op: &Opcoes, exato: bool) -> Selecao {
+    if exato {
+        otimizador::selecionar_exato(c, op, LIMITE_NOS_EXATA)
+    } else {
+        otimizador::selecionar(c, op)
+    }
+}
+
 pub fn resolver_por_perfil(
     c: &[Candidato],
     op: &Opcoes,
+    exato: bool,
     boss: &BossLista,
     listas: Option<&[Vec<AlvoEspecie>; 3]>,
     faltas: &mut Faltas,
@@ -752,7 +762,7 @@ pub fn resolver_por_perfil(
 ) -> Resolvido {
     let ordem = [(Perfil::Max, 0usize), (Perfil::Eq, 1), (Perfil::Eco, 2)];
     let Some(listas) = listas.filter(|l| !l[0].is_empty()) else {
-        let s = otimizador::selecionar(c, op);
+        let s = selecionar(c, op, exato);
         let pc = |r: &ResultadoPerfil| PerfilComposto {
             r: r.clone(),
             lista: None,
@@ -790,7 +800,7 @@ pub fn resolver_por_perfil(
                 so_eco: op.so_eco || p == Perfil::Eco,
                 ..op.clone()
             };
-            let s = otimizador::selecionar(&sub, &o);
+            let s = selecionar(&sub, &o, exato);
             let pk = perfil_de(&s, p);
             let prefixo = format!("{nm}: nenhuma equipe cumpriu");
             ok = !pk.indisponivel
@@ -805,7 +815,7 @@ pub fn resolver_por_perfil(
                 (s.elegiveis, s.excluidas_preco, s.sem_avaliacao),
             ),
             None => {
-                let s = cheio.get_or_insert_with(|| otimizador::selecionar(c, op));
+                let s = cheio.get_or_insert_with(|| selecionar(c, op, exato));
                 (
                     perfil_de(s, p).clone(),
                     s.avisos.clone(),
@@ -926,6 +936,8 @@ pub struct EntradaBolsa<'a> {
     pub agora: i64,
     /// `orcamento=<gemas>`: a melhor equipe até esse valor (busca exata).
     pub orcamento: Option<f64>,
+    /// `NEXUS_MELHORIAS`: busca exata nos perfis, chance de vitória e ordem de compra.
+    pub melhorias: bool,
 }
 
 /// Limite de nós da busca exata por chamada.
@@ -1073,7 +1085,15 @@ pub fn equipe_bolsa(e: &EntradaBolsa<'_>, faltas: &mut Faltas) -> Result<Value, 
         so_max: false,
         so_eco: false,
     };
-    let res = resolver_por_perfil(&cands, &op, boss, e.listas.as_ref(), faltas, e.agora);
+    let res = resolver_por_perfil(
+        &cands,
+        &op,
+        e.melhorias,
+        boss,
+        e.listas.as_ref(),
+        faltas,
+        e.agora,
+    );
 
     let slot = |i: usize, d: f64, dt: f64| -> Map<String, Value> {
         let x = &cartas[i];
@@ -1185,6 +1205,15 @@ pub fn equipe_bolsa(e: &EntradaBolsa<'_>, faltas: &mut Faltas) -> Result<Value, 
         );
         if let Value::Object(o) = &mut perfil {
             o.insert("lucro".into(), lucro);
+            if let (true, Some(eq)) = (e.melhorias, &p.equipe) {
+                let chance =
+                    otimizador::chance_vitoria(&cands, &eq.pick, e.n, boss.team_level, ref_d, 400);
+                o.insert("chanceVitoria".into(), js::json_num(chance));
+                o.insert(
+                    "ordemCompra".into(),
+                    ordem_compra(&cands, &eq.pick, &p.reservas),
+                );
+            }
         }
         perfis.insert(chave.into(), perfil);
     }
@@ -1318,6 +1347,22 @@ pub fn equipe_bolsa(e: &EntradaBolsa<'_>, faltas: &mut Faltas) -> Result<Value, 
     }))
 }
 
+/// Ordem de compra: primeiro as vagas mais difíceis de repor (menos reservas) e, entre elas,
+/// as mais caras, que são as que mais pesam se o anúncio sumir.
+fn ordem_compra(c: &[Candidato], pick: &[usize], reservas: &[Vec<otimizador::Reserva>]) -> Value {
+    let mut v: Vec<(usize, usize)> = pick
+        .iter()
+        .enumerate()
+        .map(|(i, &ci)| (ci, reservas.get(i).map_or(0, Vec::len)))
+        .collect();
+    v.sort_by(|a, b| a.1.cmp(&b.1).then(c[b.0].unit.total_cmp(&c[a.0].unit)));
+    Value::Array(
+        v.into_iter()
+            .map(|(ci, r)| json!({ "ofertaId": c[ci].id, "reservas": r, "preco": js::json_num(c[ci].unit) }))
+            .collect(),
+    )
+}
+
 fn foe_hp_round(hp: f64) -> f64 {
     js::round(hp)
 }
@@ -1334,6 +1379,7 @@ pub struct EntradaPropria<'a> {
     /// Equipe econômica de compra já calculada para o mesmo boss: (total, vagas).
     pub eco_compra: Option<(f64, usize)>,
     pub agora: i64,
+    pub melhorias: bool,
 }
 
 /// `equipePropria`: a melhor equipe só com os pokémon da conta.
@@ -1475,7 +1521,7 @@ pub fn equipe_propria(e: &EntradaPropria<'_>) -> Result<Value, &'static str> {
         so_max: false,
         so_eco: true,
     };
-    let r = otimizador::selecionar(&sub, &op);
+    let r = selecionar(&sub, &op, e.melhorias);
     for a in &r.avisos {
         if !a.contains("Econômica: a opção mais barata") {
             avisos.push(match a.strip_prefix("Econômica:") {
@@ -1591,6 +1637,7 @@ pub struct EntradaHibrida<'a> {
     pub moeda: &'a str,
     pub ofertas: &'a [OfertaEquipe],
     pub n: usize,
+    pub melhorias: bool,
 }
 
 /// Custo simbólico de usar um pokémon da conta: quase zero, mas o mais fraco que cumpre a
@@ -1670,9 +1717,9 @@ pub fn equipe_hibrida(e: &EntradaHibrida<'_>) -> Result<Value, &'static str> {
         so_max: false,
         so_eco: true,
     };
-    let r = otimizador::selecionar(&cands, &op);
+    let r = selecionar(&cands, &op, e.melhorias);
     let compra: Vec<Candidato> = cands.iter().skip(da_conta).cloned().collect();
-    let so_compra = otimizador::selecionar(&compra, &op);
+    let so_compra = selecionar(&compra, &op, e.melhorias);
     let custo_tudo = so_compra.eco.equipe.as_ref().map(|x| x.total);
     let base = json!({
         "boss": { "key": boss.key, "nome": boss.nome, "teamLevel": js::json_num(l) },

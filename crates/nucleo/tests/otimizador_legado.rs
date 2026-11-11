@@ -91,3 +91,61 @@ fn otimizador_igual_ao_legado() {
         erros.join("\n")
     );
 }
+
+/// A seleção exata nunca é pior que a heurística: a Máxima tem dano ≥, e a Econômica, quando
+/// as duas fecham com as regras completas no teto de 2,5×, custa ≤. Toda equipe exata
+/// cumpre a meta de dano.
+#[test]
+fn selecao_exata_nunca_perde_para_a_heuristica() {
+    use nucleo::otimizador::selecionar_exato;
+    let f: Value = serde_json::from_str(include_str!("fixtures/otimizador-legado.json")).unwrap();
+    for (i, caso) in f["casos"].as_array().unwrap().iter().enumerate() {
+        let c: Vec<Candidato> = caso["candidatos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(candidato)
+            .collect();
+        let o = &caso["opcoes"];
+        let op = Opcoes {
+            n: 5,
+            nivel_boss: o["nivelBoss"].as_f64().unwrap(),
+            referencia: o["referencia"].as_f64().unwrap(),
+            teto_justo: o.get("tetoJusto").and_then(Value::as_bool).unwrap_or(true),
+            moeda_orb: o.get("moeda").and_then(Value::as_str).unwrap_or("orb") == "orb",
+            so_max: o.get("soMax").and_then(Value::as_bool).unwrap_or(false),
+            so_eco: o.get("soEco").and_then(Value::as_bool).unwrap_or(false),
+        };
+        let h = selecionar(&c, &op);
+        let x = selecionar_exato(&c, &op, u64::MAX);
+        if let (Some(he), Some(xe)) = (&h.max.equipe, &x.max.equipe) {
+            assert!(
+                xe.d >= he.d - 1e-6,
+                "caso {i}: máxima exata {} < heurística {}",
+                xe.d,
+                he.d
+            );
+        }
+        for (p, alvo) in [(&x.eco, 1.05), (&x.eq, x.eq.alvo.unwrap_or(1.05))] {
+            if let Some(e) = &p.equipe {
+                assert!(
+                    e.d + 1e-6 >= alvo * op.referencia,
+                    "caso {i}: equipe exata abaixo da meta"
+                );
+            }
+        }
+        let regras_completas = |p: &ResultadoPerfil| {
+            p.teto_usado == Some(2.5) && p.restr.as_ref().is_some_and(|r| r.relaxadas.is_empty())
+        };
+        if regras_completas(&h.eco) && regras_completas(&x.eco) {
+            let (ht, xt) = (
+                h.eco.equipe.as_ref().unwrap().total,
+                x.eco.equipe.as_ref().unwrap().total,
+            );
+            assert!(
+                xt <= ht + 1e-6,
+                "caso {i}: econômica exata {xt} > heurística {ht}"
+            );
+        }
+    }
+}

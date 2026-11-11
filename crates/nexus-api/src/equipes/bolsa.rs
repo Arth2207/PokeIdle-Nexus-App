@@ -32,6 +32,8 @@ const RECARGA_WIKI: Duration = Duration::from_secs(30 * 60);
 const RECARGA_PRECOS: Duration = Duration::from_secs(30 * 60);
 const VALIDADE_PROPRIA: Duration = Duration::from_secs(60);
 const MAX_JOBS: usize = 40;
+/// Janela das vendas nos preços típicos do modo de melhorias (60 dias).
+const JANELA_PRECOS_MS: i64 = 60 * 86_400_000;
 
 /// Parâmetros de um job de equipe.
 #[derive(Debug, Clone, PartialEq)]
@@ -228,14 +230,24 @@ impl ServicoEquipeBolsa {
         moeda: &str,
         lo: f64,
         hi: f64,
+        melhorias: bool,
     ) -> Arc<HashMap<i64, f64>> {
-        let k = format!("{moeda}|{lo}|{hi}");
+        let k = format!("{moeda}|{lo}|{hi}|{melhorias}");
         let mut c = self.precos.lock().await;
         if let Some((_, p)) = c.get(&k).filter(|(em, _)| em.elapsed() < RECARGA_PRECOS) {
             return p.clone();
         }
         let corte = agora_ms() - OFERTA_FRESCA_POKEMON_MS;
-        let p = match persistencia::bolsa_equipe::precos_tipicos(db, moeda, lo, hi, corte).await {
+        let p = match persistencia::bolsa_equipe::precos_tipicos_modo(
+            db,
+            moeda,
+            lo,
+            hi,
+            corte,
+            melhorias.then(|| agora_ms() - JANELA_PRECOS_MS),
+        )
+        .await
+        {
             Ok(m) => Arc::new(m),
             Err(e) => {
                 tracing::warn!(erro = %e, "preços típicos indisponíveis");
@@ -383,6 +395,7 @@ impl ServicoEquipeBolsa {
                 &p.moeda,
                 js_round(0.7 * l).max(1.0),
                 js_round(2.5 * l),
+                estado.melhorias,
             )
             .await;
         let mut faltas = persistencia::bolsa_equipe::carregar_faltas(&estado.db).await?;
@@ -390,7 +403,7 @@ impl ServicoEquipeBolsa {
             return Err(ErroEquipeBolsa::Cancelado);
         }
         let faltas_antes = faltas.clone();
-        let (pedido, sn) = (p.clone(), snapshot.clone());
+        let (pedido, sn, melhorias) = (p.clone(), snapshot.clone(), estado.melhorias);
         let (resposta, faltas) = self
             .no_pool(move || {
                 let Ok(rb) = be::resolver_boss(
@@ -429,6 +442,7 @@ impl ServicoEquipeBolsa {
                     preco_de: &preco_de,
                     agora,
                     orcamento: pedido.orcamento,
+                    melhorias,
                 };
                 let r = be::equipe_bolsa(&entrada, &mut faltas)
                     .unwrap_or_else(|e| json!({ "erro": e }));
@@ -527,6 +541,7 @@ impl ServicoEquipeBolsa {
             .await
             .map_err(|e| ErroEquipeBolsa::Repo(e.to_string()))?;
         let agora = agora_ms();
+        let melhorias = estado.melhorias;
         let resposta = self
             .no_pool(move || {
                 let Ok(rb) =
@@ -545,6 +560,7 @@ impl ServicoEquipeBolsa {
                     preco_de: &preco_de,
                     eco_compra,
                     agora,
+                    melhorias,
                 };
                 be::equipe_propria(&e).unwrap_or_else(|e| json!({ "erro": e }))
             })
@@ -571,7 +587,9 @@ impl ServicoEquipeBolsa {
         let motor = estado.equipes.motor().await?;
         let est = estado.equipes.estado().await?;
         let (tr, lista, lo, hi) = be::contexto_alvos(&motor, &est, nick.as_deref());
-        let precos = self.precos(&estado.db, "orb", lo, hi).await;
+        let precos = self
+            .precos(&estado.db, "orb", lo, hi, estado.melhorias)
+            .await;
         let agora = agora_ms();
         let mut faltas = persistencia::bolsa_equipe::carregar_faltas(&estado.db).await?;
         if faltas.limpar(agora) && estado.escrita_equipes {
@@ -654,6 +672,7 @@ impl ServicoEquipeBolsa {
             })
             .await
             .map_err(|e| ErroEquipeBolsa::Repo(e.to_string()))?;
+        let melhorias = estado.melhorias;
         self.no_pool(move || {
             let rb = match be::resolver_boss(&motor, &est, &wiki, boss.as_deref(), nick.as_deref())
             {
@@ -677,6 +696,7 @@ impl ServicoEquipeBolsa {
                 moeda: &moeda,
                 ofertas: &ofertas,
                 n: 5,
+                melhorias,
             };
             be::equipe_hibrida(&e).unwrap_or_else(|e| json!({ "erro": e }))
         })
