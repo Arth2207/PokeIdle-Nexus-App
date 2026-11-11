@@ -12,6 +12,7 @@
 //!   nexus-api importar equipes < estado.json   estado de equipes (equipes-estado.json do legado)
 //!   nexus-api importar wiki < wiki.txt         bosses da wiki do jogo (POKEIDLE-wiki.txt)
 //!   nexus-api importar faltas < faltas.json    faltas de coleta (.bolsa-faltas.json do legado)
+//!   nexus-api importar raros < raros.json      nomes dos itens raros (raros-estado.json do legado)
 //!   nexus-api importar welcome < payload.json  constantes do servidor (tabela de tipos etc.)
 //!   nexus-api pokedex-divergencias             diagnóstico: pokédex do motor × catálogo do precificador
 //!   nexus-api paridade [url]                   uma rodada de comparação com o legado
@@ -46,7 +47,7 @@ use crate::configuracao::Configuracao;
 use crate::estado::Estado;
 
 const USO: &str = "uso: nexus-api [migrar | token criar <nome> <escopos> [conta] | \
-importar itens|especies|base|meus-itens|pokedex|equipes|wiki|faltas|welcome | paridade [url] | healthcheck]";
+importar itens|especies|base|meus-itens|pokedex|equipes|wiki|faltas|welcome|raros | paridade [url] | healthcheck]";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -312,6 +313,22 @@ async fn importar(cfg: &Configuracao, tipo: &str) -> anyhow::Result<()> {
             persistencia::equipes::gravar_parametro(&db, equipes::CHAVE_CONSTANTES_SERVIDOR, &k).await?;
             println!("constantes do servidor importadas");
         }
+        "raros" => {
+            // raros-estado.json do legado: só os nomes por id (sem o "(provável)").
+            let v: serde_json::Value = serde_json::from_str(&texto).context("JSON inválido")?;
+            let itens = v.pointer("/raros/itens").and_then(serde_json::Value::as_array).context("sem raros.itens")?;
+            let nomes: serde_json::Map<String, serde_json::Value> = itens
+                .iter()
+                .filter_map(|i| {
+                    let id = i.get("id")?.as_i64()?;
+                    let nome = i.get("nome")?.as_str()?.replacen(" (provável)", "", 1).replacen("(provável)", "", 1);
+                    Some((id.to_string(), serde_json::Value::from(nome.trim_end().to_owned())))
+                })
+                .collect();
+            let n = nomes.len();
+            persistencia::equipes::gravar_parametro(&db, bolsa::consultas::CHAVE_RAROS_NOMES, &serde_json::Value::Object(nomes)).await?;
+            println!("nomes de itens raros importados: {n}");
+        }
         "faltas" => {
             let m: serde_json::Map<String, serde_json::Value> =
                 serde_json::from_str(&texto).context("JSON inválido")?;
@@ -320,7 +337,7 @@ async fn importar(cfg: &Configuracao, tipo: &str) -> anyhow::Result<()> {
             println!("faltas de coleta importadas: {}", f.0.len());
         }
         outro => bail!(
-            "não sei importar {outro:?} (use itens, especies, base, meus-itens, pokedex, equipes, wiki, faltas ou welcome)"
+            "não sei importar {outro:?} (use itens, especies, base, meus-itens, pokedex, equipes, wiki, faltas, welcome ou raros)"
         ),
     }
     Ok(())

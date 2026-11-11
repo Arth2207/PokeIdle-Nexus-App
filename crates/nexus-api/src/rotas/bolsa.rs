@@ -93,7 +93,10 @@ pub async fn ofertas(State(estado): State<Estado>, Query(p): Query<Params>) -> R
 pub async fn meus_itens(State(estado): State<Estado>, Query(p): Query<Params>) -> Response {
     let s = snapshot!(estado);
     match estado.bolsa.repo.meus_itens().await {
-        Ok(inv) => Json(consultas::meus_itens(&s, &p, &inv)).into_response(),
+        Ok(inv) => {
+            let raros = consultas::raros_nomes(&estado.db).await;
+            Json(consultas::meus_itens(&s, &p, &inv, &raros)).into_response()
+        }
         Err(erro) => indisponivel(&erro),
     }
 }

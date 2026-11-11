@@ -218,21 +218,18 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
         let motor = eq.motor().await.map_err(|e| e.to_string())?;
         let estado = eq.estado().await.map_err(|e| e.to_string())?;
         let n = resposta_bosses(&motor, &estado, None);
-        let marca = |v: &Value| {
-            (
-                v.get("atualizadoEm").cloned(),
-                v.pointer("/conta/em").cloned(),
-            )
-        };
+        // Mesmo estado no que importa para o motor: lista de bosses e nível de treinador.
+        let marca = |v: &Value| (v.get("bosses").cloned(), v.pointer("/conta/trLv").cloned());
         if marca(&l) != marca(&n) {
             let r = rel.entry("equipes.bosses").or_default();
             r.exemplos
                 .push("estado do Nexus defasado; comparação pulada nesta rodada".into());
             return Ok(());
         }
-        rel.entry("equipes.bosses")
-            .or_default()
-            .registrar("padrão", diferenca(&l, &n, ""));
+        rel.entry("equipes.bosses").or_default().registrar(
+            "padrão",
+            diferenca(&sem_campos_da_conta(l.clone()), &sem_campos_da_conta(n), ""),
+        );
 
         let chaves: Vec<String> = l
             .get("bosses")
@@ -265,7 +262,7 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
                 Err(e) => (e.status, serde_json::json!({ "erro": e.erro })),
             };
             let diff = if status == n.0 {
-                diferenca(&l, &n.1, "")
+                diferenca(&sem_campos_da_conta(l), &sem_campos_da_conta(n.1), "")
             } else {
                 Some(format!("status {status} ≠ {}", n.0))
             };
@@ -370,7 +367,19 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
             rel.entry("balao")
                 .or_default()
                 .registrar(id, diferenca(&l, &n, ""));
-            let (_, mut l) = self.legado(&format!("/api/bolsa/ticker{q}")).await?;
+            let (status, mut l) = self.legado(&format!("/api/bolsa/ticker{q}")).await?;
+            // O legado quebra (500) nos tickers de item sem id (`i:n:...`): passa `NaN` para
+            // o SQL. É defeito dele, não divergência do Nexus.
+            if status >= 500 {
+                for rota in ["ticker", "ticker.ofertas"] {
+                    let r = rel.entry(rota).or_default();
+                    if r.exemplos.len() < 5 {
+                        r.exemplos
+                            .push(format!("{id}: legado respondeu {status} (ignorado)"));
+                    }
+                }
+                continue;
+            }
             let mut n = consultas::ticker_completo(&self.servico, &s, &p)
                 .await
                 .map_err(|e| e.to_string())?
@@ -381,9 +390,10 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
             rel.entry("ticker")
                 .or_default()
                 .registrar(id, diferenca(&l, &n, ""));
-            rel.entry("ticker.ofertas")
-                .or_default()
-                .registrar(id, diferenca(&lo, &no, ""));
+            rel.entry("ticker.ofertas").or_default().registrar(
+                id,
+                diferenca(&ordenar_ofertas(lo), &ordenar_ofertas(no), ""),
+            );
         }
 
         // /feedback e /dicas com os parâmetros padrão.
@@ -436,7 +446,16 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
             .meus_itens()
             .await
             .map_err(|e| e.to_string())?;
-        let n = json(&consultas::meus_itens(&s, &Params::default(), &inventario));
+        let raros = match &self.estado {
+            Some(e) => consultas::raros_nomes(&e.db).await,
+            None => Default::default(),
+        };
+        let n = json(&consultas::meus_itens(
+            &s,
+            &Params::default(),
+            &inventario,
+            &raros,
+        ));
         let por_item = |v: &Value| -> BTreeMap<i64, Value> {
             v.get("itens")
                 .and_then(Value::as_array)
@@ -607,6 +626,48 @@ fn qualidade_equipe(l: &Value, n: &Value) -> Option<String> {
         }
     }
     None
+}
+
+/// Ofertas de um ticker em ordem de (preço, id): a consulta do legado só ordena por preço, e
+/// empates saem em qualquer ordem.
+fn ordenar_ofertas(mut v: Value) -> Value {
+    if let Value::Array(a) = &mut v {
+        let chave = |x: &Value| {
+            (
+                x.get("preco").and_then(Value::as_f64).unwrap_or(f64::NAN),
+                x.get("id").and_then(Value::as_i64).unwrap_or(0),
+            )
+        };
+        a.sort_by(|x, y| {
+            let (px, ix) = chave(x);
+            let (py, iy) = chave(y);
+            px.total_cmp(&py).then(ix.cmp(&iy))
+        });
+    }
+    v
+}
+
+/// Tira os campos que dependem do instante ou da coleção da conta. O estado do Nexus chega
+/// pela importação, até 10 minutos depois do relay gravar no legado; o que fica compara o
+/// motor (lista de bosses, equipe teórica, boss).
+fn sem_campos_da_conta(mut v: Value) -> Value {
+    if let Value::Object(o) = &mut v {
+        o.remove("atualizadoEm");
+        o.remove("minha");
+        if let Some(Value::Object(c)) = o.get_mut("conta") {
+            c.remove("em");
+            c.remove("pokemons");
+        }
+        if let Some(Value::Array(eq)) = o.get_mut("ideal").and_then(|i| i.get_mut("equipe")) {
+            for m in eq.iter_mut() {
+                if let Value::Object(m) = m {
+                    m.remove("possui");
+                    m.remove("nivelQueTenho");
+                }
+            }
+        }
+    }
+    v
 }
 
 fn comparar_ofertas(r: &mut ResultadoRota, legado: &Value, nexus: &Value) {

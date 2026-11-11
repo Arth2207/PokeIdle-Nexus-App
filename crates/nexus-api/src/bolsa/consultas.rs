@@ -388,6 +388,7 @@ pub fn meus_itens(
     s: &Snapshot,
     p: &Params,
     inventario: &nucleo::bolsa::ingestao::MeusItens,
+    raros: &std::collections::HashMap<i32, String>,
 ) -> dto::MeusItensResposta {
     let m = &s.mercado;
     let moeda = if p.moeda.as_deref() == Some("gold") {
@@ -399,7 +400,15 @@ pub fn meus_itens(
         .itens
         .iter()
         .map(|(&id, &q)| {
-            let t = ticker(m, Some(&format!("i:{id}:{moeda}")));
+            // Como o legado: sem ticker pelo id, procura pelo nome que o painel de raros
+            // conhece (itens que o catálogo não tem, como os fragmentos).
+            let nr = raros.get(&id);
+            let t = ticker(m, Some(&format!("i:{id}:{moeda}"))).or_else(|| {
+                let nr = nr?.to_lowercase();
+                m.tickers.iter().find(|t| {
+                    !t.pokemon && t.moeda.como_str() == moeda && t.nome.to_lowercase() == nr
+                })
+            });
             let vd = t.map(|t| &t.vd);
             let qf = q as f64;
             let valor = t.map(|t| t.a.ultimo * qf);
@@ -410,6 +419,7 @@ pub fn meus_itens(
                     .map(|t| t.nome.clone())
                     .filter(|n| !n.is_empty())
                     .or_else(|| m.catalogo.item(id).map(|c| c.nome.clone()))
+                    .or_else(|| nr.cloned())
                     .unwrap_or_else(|| format!("#{id}")),
                 quantidade: q,
                 sprite: t
@@ -451,4 +461,23 @@ pub fn meus_itens(
         aviso: itens.is_empty().then(|| AVISO_SEM_ITENS.to_owned()),
         itens,
     }
+}
+
+/// Chave em `nexus.parametro` dos nomes de itens raros (do `raros-estado.json` do legado).
+pub const CHAVE_RAROS_NOMES: &str = "raros.nomes";
+
+/// Nomes dos itens raros por id. Sem a importação, um mapa vazio.
+pub async fn raros_nomes(db: &sqlx::PgPool) -> std::collections::HashMap<i32, String> {
+    persistencia::equipes::ler_parametro(db, CHAVE_RAROS_NOMES)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| {
+            v.as_object().map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| Some((k.parse().ok()?, v.as_str()?.to_owned())))
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
 }
