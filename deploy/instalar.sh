@@ -39,8 +39,10 @@ if [ ! -f "$BASE/secrets/database_url" ]; then
 fi
 
 # Chave do CI: só pode rodar o deploy.sh, sem shell, sem túneis.
+# A chave privada é apagada depois de ir para o GitHub, então o sinal de "já instalado"
+# é o authorized_keys, não o arquivo da chave.
 CHAVE=/home/$USUARIO/.ssh/ci_deploy
-if [ ! -f "$CHAVE" ]; then
+if [ ! -s "/home/$USUARIO/.ssh/authorized_keys" ]; then
   install -d -o "$USUARIO" -g "$USUARIO" -m 700 "/home/$USUARIO/.ssh"
   ssh-keygen -t ed25519 -N "" -C "github-actions-deploy" -f "$CHAVE" -q
   printf 'command="%s",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty %s\n' \
@@ -53,5 +55,14 @@ if [ ! -f "$CHAVE" ]; then
   echo
   cat "$CHAVE"
 fi
+
+# HTTPS do Tailscale: emite agora e agenda a renovação diária.
+install -o root -g root -m 755 "$RAIZ/deploy/renovar-tls.sh" "$BASE/renovar-tls.sh"
+"$BASE/renovar-tls.sh"
+printf '%s\n' \
+  '# Renova o certificado HTTPS do Tailscale usado pelo Nginx do Nexus.' \
+  "17 4 * * * root $BASE/renovar-tls.sh 2>&1 | logger -t nexus-tls" \
+  > /etc/cron.d/nexus-tls
+chmod 644 /etc/cron.d/nexus-tls
 
 echo "instalação concluída em $BASE"

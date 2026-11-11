@@ -28,11 +28,11 @@ O legado liberava qualquer requisição vinda da faixa de IPs da VPN. Isso acaba
 O tráfego externo chega por dois caminhos, e os dois terminam no Nginx:
 
 - **Público:** passa pelo Cloudflare Tunnel (`cloudflared`), que já entrega TLS e proteção contra DDoS. Nenhuma porta da VPS fica aberta para a internet.
-- **Privado:** passa pela rede Tailscale. O Nginx escuta só no IP do Tailscale e em localhost; o Docker ignora o UFW, por isso o IP fica explícito no `compose.yml`. O HTTPS com certificado do `tailscale cert` depende de habilitar HTTPS no painel do tailnet. Até lá, o tráfego interno é HTTP, mas cifrado pelo próprio WireGuard do Tailscale.
+- **Privado:** passa pela rede Tailscale. O Nginx escuta só no IP do Tailscale e em localhost; o Docker ignora o UFW, por isso o IP fica explícito no `compose.yml`. O Nginx serve HTTPS (TLS 1.2/1.3, HTTP/2) na porta 443 do IP do Tailscale, com certificado emitido pelo `tailscale cert`. O certificado vale 90 dias e é renovado por um cron diário (`deploy/renovar-tls.sh`), que recarrega o Nginx quando o arquivo muda. HTTP puro só existe em localhost (porta 8480), para diagnóstico e healthcheck.
 
 O que o Nginx aplica:
 
-- Headers: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`. `Strict-Transport-Security` entra junto com o TLS, e `Content-Security-Policy` junto com as páginas estáticas.
+- Headers: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`. `Strict-Transport-Security` só nas respostas HTTPS. `Content-Security-Policy` entra junto com as páginas estáticas.
 - Limite de tamanho do corpo: 2 MB no geral e 10 MB na ingestão.
 - Rate limit por IP (proteção grossa) e timeouts de leitura e escrita.
 - Log de acesso em JSON, sem o token.

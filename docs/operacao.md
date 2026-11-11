@@ -60,6 +60,9 @@ SELECT nome, escopos, criado_em, expira_em, revogado_em FROM nexus.api_token ORD
 Testar um token:
 
 ```bash
+# de qualquer máquina do tailnet
+curl -H "Authorization: Bearer nxs_..." https://<maquina>.<tailnet>.ts.net/api/eu
+# na própria VPS (ela não usa MagicDNS)
 curl -H "Authorization: Bearer nxs_..." http://127.0.0.1:8480/api/eu
 ```
 
@@ -87,6 +90,15 @@ Depois de mudar o `nginx.conf`:
 cd /opt/nexus-deploy
 sudo -u nexus-deploy docker compose exec nginx nginx -t
 sudo -u nexus-deploy docker compose exec nginx nginx -s reload
+```
+
+## Certificado HTTPS
+
+Renovado sozinho todo dia às 04:17 (`/etc/cron.d/nexus-tls`); o log vai para o syslog com a tag `nexus-tls`. Para forçar e conferir:
+
+```bash
+sudo /opt/nexus-deploy/renovar-tls.sh
+openssl x509 -in /opt/nexus-deploy/tls/cert.pem -noout -enddate
 ```
 
 ## Banco
