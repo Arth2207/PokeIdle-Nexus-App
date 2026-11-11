@@ -40,7 +40,7 @@ Fontes: os módulos públicos que o jogo serve em `/shared/*.mjs`, as mensagens 
 | Ponto | Jogo | Legado |
 |---|---|---|
 | Golpes do boss | padrão público: *Legendary Strike* (280, 10 s) e *Legendary Burst* (400, 15 s), especiais | escolhe os dois golpes mais fortes da espécie ("a ficha real do boss não é pública") |
-| Lista de bosses | o servidor manda `bossesJogaveis` no `welcome`; o módulo público mais novo organiza em trincas por região | duas listas no código (a antiga, no `sim.js`, e a de trincas, no `equipes-core.js`), mais a wiki como reserva |
+| Lista de bosses | 27 bosses em 9 trincas por região (Articuno, nível 300, até Fezandipiti, 179.500), confirmada pela lista viva que o relay envia e pelo módulo público | a lista viva (`equipes-estado.json`) está certa, mas o `sim.js` ainda carrega uma lista antiga (Regirock…) e o `equipes-core.js` tem a tabela da wiki como reserva |
 | Constantes de hunt | `multHpSelvagem`, `multDanoSelvagem`, `ampliacaoHunt` e a tabela de tipos completa vêm no `welcome` | aplica as do `welcome` se chegarem; senão usa valores da wiki |
 | Nível acima de 150 | arenas (ginásio e guerra) usam nível efetivo `150 × (n/150)^expoente` | não aplica (não afeta boss, mas afeta ginásio) |
 | Duelo oficial 1×1 | 400 amostras com variação de dano e gerador determinístico; devolve chance de vitória | não existe |
@@ -107,7 +107,7 @@ As duas rodam juntas: a resposta mostra a do modelo ativo, e as métricas regist
 | `.bolsa-faltas.json` (compartilhado entre processos) | `nexus.falta_coleta`, com escrita atômica |
 | `.bolsa-equipes-cache.json` | desnecessário: o resultado é recalculado em segundo plano |
 | `equipe-sugestoes.jsonl` | `nexus.equipe_sugestao` (base da calibração e do scoring da fase 6) |
-| `POKEIDLE-wiki.txt` (bosses da wiki) | `nexus.boss`, alimentada pelo `welcome` e, na falta dele, pela wiki |
+| `POKEIDLE-wiki.txt` (bosses da wiki) | `nexus.boss`, alimentada pela lista viva do jogo (relay); a wiki e o módulo público ficam como reserva |
 
 ## Testes
 
@@ -131,6 +131,5 @@ As duas rodam juntas: a resposta mostra a do modelo ativo, e as métricas regist
 
 ## Decisões em aberto
 
-- **Qual lista de bosses vale.** O `welcome` mais recente gravado é anterior ao módulo público com as trincas. A fonte da verdade deve ser o `welcome` atual; precisa de uma captura nova para confirmar.
 - **Quando trocar de modelo.** O modelo `Jogo` só substitui o `Legado` com lutas reais suficientes para calibrar. Até lá, ele roda em paralelo e só aparece nas métricas.
 - **Ginásio e guerra.** O código público dá as regras de ginásio (nível efetivo, buffs do pódio, time de 5 do mesmo tipo). Não fazem parte do legado; podem virar uma rota nova depois da fase 2.
