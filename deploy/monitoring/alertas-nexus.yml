@@ -28,7 +28,7 @@
     labels: { severity: ticket, team: nexus }
     annotations:
       summary: "p95 de {{ $labels.rota }} acima de 3s"
-  # Fase de shadow: paridade com o legado. Ainda não aplicado no Prometheus.
+  # Fase de shadow: paridade com o legado.
   - alert: NexusParidadeBaixa
     expr: min by (rota) (nexus_paridade_razao) < 0.99
     for: 30m
