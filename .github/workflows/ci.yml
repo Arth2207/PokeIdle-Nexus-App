@@ -39,6 +39,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # O container da action traz um Rust antigo; o rust-toolchain.toml exige 1.99.1.
+          rust-version: "1.99.1"
 
   imagem:
     name: imagem Docker
