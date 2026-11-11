@@ -132,6 +132,8 @@ Parte dos dados que a bolsa usa vive em arquivos no sistema legado. O subcomando
 | `importar especies` | catálogo `PI_ESPECIES` exportado como JSON | `nexus.especie` |
 | `importar base` | `precos.json` (vendas, itens, pesos e viés) | `nexus.venda_base`, `nexus.item_preco_base`, `nexus.parametro` |
 | `importar meus-itens` | `.bolsa-meus-itens.json` | `nexus.meus_itens` |
+| `importar pokedex` | `engine/data/pokedex.json` | `nexus.pokedex_motor` |
+| `importar equipes` | `data/equipes-estado.json` | `nexus.equipes_estado`, `nexus.equipes_conta` |
 
 ```bash
 cd /opt/nexus-deploy

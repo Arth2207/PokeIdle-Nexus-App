@@ -52,6 +52,8 @@ Comportamentos que precisam ser preservados:
 | POST | `/api/shiny/registrar` | relay |
 | GET | `/api/shiny` | painel |
 
+No Nexus, `GET /api/equipes/bosses` (`nick`) e `GET /api/equipes/plano` (`nick`, `boss`, `perfil=realista|ideal`) exigem o escopo `leitura` e devolvem o mesmo JSON do legado, conferido pelo comparador de paridade. `POST /api/equipes/ingest` exige `relay` ou `escrita` e responde `503` enquanto `NEXUS_ESCRITA_EQUIPES` estiver desligada; até o cutover, o estado chega ao Nexus pela importação do `equipes-estado.json`.
+
 ## Fila de comandos e ingestão
 
 | Método | Rota | Função |

@@ -103,6 +103,7 @@ pub struct Comparador<R> {
     url: String,
     http: reqwest::Client,
     rodada: std::sync::atomic::AtomicUsize,
+    equipes: Option<Arc<crate::equipes::ServicoEquipes>>,
 }
 
 /// `R: RepoMercado + RepoIngestao`: o comparador lê o mercado e o inventário, então o
@@ -116,7 +117,83 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
                 .timeout(Duration::from_secs(60))
                 .build()?,
             rodada: Default::default(),
+            equipes: None,
         })
+    }
+
+    /// Liga a comparação das rotas `/api/equipes/*`.
+    pub fn com_equipes(mut self, equipes: Arc<crate::equipes::ServicoEquipes>) -> Self {
+        self.equipes = Some(equipes);
+        self
+    }
+
+    /// `/api/equipes/bosses` e `/plano` (o próximo boss da conta padrão e, em rodízio, três
+    /// bosses nos dois perfis). Só compara quando os dois lados olham o mesmo estado: o do
+    /// Nexus chega pela importação, alguns minutos depois do relay gravar no legado.
+    async fn comparar_equipes(
+        &self,
+        eq: &crate::equipes::ServicoEquipes,
+        rel: &mut Relatorio,
+    ) -> Result<(), String> {
+        use nucleo::equipes::{resposta_bosses, resposta_plano};
+        let (_, l) = self.legado("/api/equipes/bosses").await?;
+        let motor = eq.motor().await.map_err(|e| e.to_string())?;
+        let estado = eq.estado().await.map_err(|e| e.to_string())?;
+        let n = resposta_bosses(&motor, &estado, None);
+        let marca = |v: &Value| {
+            (
+                v.get("atualizadoEm").cloned(),
+                v.pointer("/conta/em").cloned(),
+            )
+        };
+        if marca(&l) != marca(&n) {
+            let r = rel.entry("equipes.bosses").or_default();
+            r.exemplos
+                .push("estado do Nexus defasado; comparação pulada nesta rodada".into());
+            return Ok(());
+        }
+        rel.entry("equipes.bosses")
+            .or_default()
+            .registrar("padrão", diferenca(&l, &n, ""));
+
+        let chaves: Vec<String> = l
+            .get("bosses")
+            .and_then(Value::as_array)
+            .map(|b| {
+                b.iter()
+                    .filter_map(|x| Some(x.get("key")?.as_str()?.to_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let passo = self.rodada.load(std::sync::atomic::Ordering::Relaxed);
+        let mut casos: Vec<(Option<String>, &str)> = vec![(None, "realista")];
+        if !chaves.is_empty() {
+            for i in 0..3 {
+                if let Some(k) = chaves.get((passo * 3 + i) % chaves.len()) {
+                    casos.push((Some(k.clone()), "realista"));
+                    casos.push((Some(k.clone()), "ideal"));
+                }
+            }
+        }
+        let r = rel.entry("equipes.plano").or_default();
+        for (boss, perfil) in casos {
+            let q = match &boss {
+                Some(b) => format!("?boss={}&perfil={perfil}", urlencoding(b)),
+                None => format!("?perfil={perfil}"),
+            };
+            let (status, l) = self.legado(&format!("/api/equipes/plano{q}")).await?;
+            let n = match resposta_plano(&motor, &estado, None, boss.as_deref(), Some(perfil)) {
+                Ok(v) => (200, v),
+                Err(e) => (e.status, serde_json::json!({ "erro": e.erro })),
+            };
+            let diff = if status == n.0 {
+                diferenca(&l, &n.1, "")
+            } else {
+                Some(format!("status {status} ≠ {}", n.0))
+            };
+            r.registrar(&q, diff);
+        }
+        Ok(())
     }
 
     async fn legado(&self, caminho: &str) -> Result<(u16, Value), String> {
@@ -306,6 +383,15 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
             None => r.so_legado += 1,
         });
         r.so_nexus = ni.keys().filter(|k| !li.contains_key(*k)).count() as u64;
+
+        if let Some(eq) = &self.equipes {
+            if let Err(e) = self.comparar_equipes(eq, &mut rel).await {
+                rel.entry("equipes.bosses")
+                    .or_default()
+                    .exemplos
+                    .push(format!("falhou: {e}"));
+            }
+        }
 
         for (rota, r) in &rel {
             let rotulo =

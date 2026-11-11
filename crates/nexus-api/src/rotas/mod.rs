@@ -1,6 +1,7 @@
 //! Montagem do roteador HTTP.
 
 mod bolsa;
+mod equipes;
 mod saude;
 
 use axum::extract::DefaultBodyLimit;
@@ -37,6 +38,8 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/bolsa/dicas", get(bolsa::dicas))
         .route("/api/bolsa/ofertas", get(bolsa::ofertas))
         .route("/api/bolsa/meus-itens", get(bolsa::meus_itens))
+        .route("/api/equipes/bosses", get(equipes::bosses))
+        .route("/api/equipes/plano", get(equipes::plano))
         .route_layer(middleware::from_fn(|req, next| {
             auth::exigir_escopo(LEITURA, req, next)
         }))
@@ -48,6 +51,7 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/bolsa/ofertas", post(bolsa::gravar_ofertas))
         .route("/api/bolsa/resumo-itens", post(bolsa::gravar_resumo))
         .route("/api/bolsa/meus-itens", post(bolsa::gravar_meus_itens))
+        .route("/api/equipes/ingest", post(equipes::ingest))
         .route_layer(middleware::from_fn(|req, next| {
             auth::exigir_escopo(INGESTAO, req, next)
         }))
@@ -210,6 +214,18 @@ mod testes {
             status_de(get("/api/bolsa/serie?id=i:1:orb")).await,
             StatusCode::UNAUTHORIZED
         );
+    }
+
+    #[tokio::test]
+    async fn equipes_sem_token_da_401() {
+        for caminho in ["/api/equipes/bosses", "/api/equipes/plano?boss=articuno"] {
+            assert_eq!(status_de(get(caminho)).await, StatusCode::UNAUTHORIZED);
+        }
+        let ingest = Request::post("/api/equipes/ingest")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        assert_eq!(status_de(ingest).await, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

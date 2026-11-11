@@ -8,6 +8,8 @@
 //!   nexus-api importar especies < esp.json     catálogo de espécies (PI_ESPECIES em JSON)
 //!   nexus-api importar base < base.json        base do precificador (vendas antigas, cotações)
 //!   nexus-api importar meus-itens < inv.json   inventário (.bolsa-meus-itens.json do legado)
+//!   nexus-api importar pokedex < pokedex.json  pokédex do motor de combate
+//!   nexus-api importar equipes < estado.json   estado de equipes (equipes-estado.json do legado)
 //!   nexus-api paridade [url]                   uma rodada de comparação com o legado
 //!   nexus-api paridade-continua                comparador em loop, gravando em nexus.paridade
 //!   nexus-api avaliar-fichas <agora_ms>        diagnóstico: valor justo de fichas (stdin)
@@ -18,6 +20,7 @@ mod bolsa;
 mod configuracao;
 mod conversao;
 mod desligamento;
+mod equipes;
 mod estado;
 mod etag;
 mod limite;
@@ -39,7 +42,7 @@ use crate::configuracao::Configuracao;
 use crate::estado::Estado;
 
 const USO: &str = "uso: nexus-api [migrar | token criar <nome> <escopos> | \
-importar itens|especies|base|meus-itens | paridade [url] | healthcheck]";
+importar itens|especies|base|meus-itens|pokedex|equipes | paridade [url] | healthcheck]";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -79,7 +82,8 @@ async fn servir(cfg: Configuracao) -> anyhow::Result<()> {
     );
     if let Some(url) = &cfg.paridade_url {
         let comparador = bolsa::paridade::Comparador::novo(Arc::clone(&estado.bolsa), url)
-            .context("não consegui criar o cliente HTTP do comparador")?;
+            .context("não consegui criar o cliente HTTP do comparador")?
+            .com_equipes(Arc::clone(&estado.equipes));
         Arc::new(comparador).iniciar(
             Duration::from_secs(cfg.paridade_ciclo_s.max(60)),
             parar_tarefas.clone(),
@@ -236,7 +240,29 @@ async fn importar(cfg: &Configuracao, tipo: &str) -> anyhow::Result<()> {
                 .await?;
             println!("inventário importado: {} itens", m.itens.len());
         }
-        outro => bail!("não sei importar {outro:?} (use itens, especies, base ou meus-itens)"),
+        "pokedex" => {
+            let valor: serde_json::Value = serde_json::from_str(&texto).context("JSON inválido")?;
+            // Valida antes de gravar: uma pokédex que o motor não lê não substitui a atual.
+            let dex = nucleo::combate::especie::Pokedex::de_valor(valor.clone())?;
+            ensure!(
+                !dex.especies().is_empty(),
+                "a pokédex veio vazia; nada foi alterado"
+            );
+            let n = persistencia::equipes::importar_pokedex(&db, &valor).await?;
+            println!("pokédex do motor importada: {n} espécies");
+        }
+        "equipes" => {
+            let e: nucleo::equipes::EstadoEquipes =
+                serde_json::from_str(&texto).context("JSON inválido")?;
+            let n = persistencia::equipes::importar_estado(&db, &e).await?;
+            println!(
+                "estado de equipes importado: {} bosses, {n} contas",
+                e.bosses.len()
+            );
+        }
+        outro => bail!(
+            "não sei importar {outro:?} (use itens, especies, base, meus-itens, pokedex ou equipes)"
+        ),
     }
     Ok(())
 }
@@ -248,7 +274,8 @@ async fn paridade(cfg: &Configuracao, url: Option<&str>) -> anyhow::Result<()> {
         .or_else(|| cfg.paridade_url.clone())
         .context("informe a URL do legado (argumento ou NEXUS_PARIDADE_URL)")?;
     let estado = Estado::novo(cfg).context("NEXUS_DATABASE_URL inválida")?;
-    let comparador = bolsa::paridade::Comparador::novo(Arc::clone(&estado.bolsa), &url)?;
+    let comparador = bolsa::paridade::Comparador::novo(Arc::clone(&estado.bolsa), &url)?
+        .com_equipes(Arc::clone(&estado.equipes));
     let relatorio = comparador.rodada().await.map_err(anyhow::Error::msg)?;
     println!("{}", serde_json::to_string_pretty(&relatorio)?);
     Ok(())
@@ -265,7 +292,8 @@ async fn paridade_continua(cfg: Configuracao) -> anyhow::Result<()> {
         .context("NEXUS_PARIDADE_URL é obrigatória para o comparador")?;
     let ciclo = Duration::from_secs(cfg.paridade_ciclo_s.max(60));
     let estado = Estado::novo(&cfg).context("NEXUS_DATABASE_URL inválida")?;
-    let comparador = bolsa::paridade::Comparador::novo(Arc::clone(&estado.bolsa), &url)?;
+    let comparador = bolsa::paridade::Comparador::novo(Arc::clone(&estado.bolsa), &url)?
+        .com_equipes(Arc::clone(&estado.equipes));
     tracing::info!(%url, ciclo_s = ciclo.as_secs(), "comparador de paridade iniciado");
     let parar = desligamento::sinal_de_parada();
     tokio::pin!(parar);

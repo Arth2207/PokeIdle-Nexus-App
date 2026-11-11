@@ -120,7 +120,7 @@ As duas rodam juntas: a resposta mostra a do modelo ativo, e as métricas regist
 ## Etapas
 
 1. **Fórmulas e duelo** (`Legado`) com fixtures do JS. *Feito:* módulo `nucleo::combate` (tipos, espécies, combatente, duelo, trait `ModeloCombate` e o modelo `Legado`), idêntico bit a bit às fixtures.
-2. **`equipeIdeal`, `equipeColecao` e `/api/equipes/*`.**
+2. **`equipeIdeal`, `equipeColecao` e `/api/equipes/*`.** *Feito:* `nucleo::equipes`, tabelas `nexus.pokedex_motor` e `nexus.equipes_*`, rotas no `nexus-api` e comparador estendido. As 130 chamadas das fixtures batem exatamente com o legado.
 3. **Matriz oferta × boss e otimizador portado**, com paridade de qualidade; `/api/bolsa/equipe` e `equipe-propria`.
 4. **`alvos-coleta`, lucro e faltas** no Postgres; o `/dicas` volta a aquecer o cálculo de equipe.
 5. **Modelo `Jogo`** e a tabela de tentativas, com a calibração pronta para receber dados.

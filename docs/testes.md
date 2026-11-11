@@ -65,6 +65,8 @@ Para isso o `nucleo` usa `js::pow`, um porte do `Math.pow` do V8 do Node 20 (o `
 
 Para regerar: `node ferramentas/fixtures/combate-legado.cjs <raiz do legado> > crates/nucleo/tests/fixtures/combate-legado.json`. O gerador usa uma semente fixa, então a saída só muda se o legado mudar.
 
+As rotas de equipes seguem a mesma ideia: `ferramentas/fixtures/equipes-legado.cjs` chama em memória as próprias rotas `/api/equipes/bosses` e `/plano` do legado (com os nicks trocados) para a lista viva de bosses e para a tabela da wiki, e o teste exige o mesmo JSON, número a número. Cada cenário roda num processo separado, porque o cache do `equipeIdeal` do legado não leva a fonte da lista na chave.
+
 ### Otimizador
 
 O otimizador é heurístico: duas execuções corretas podem achar equipes diferentes com a mesma qualidade. Por isso a paridade dele é por **qualidade**, e não por igualdade:

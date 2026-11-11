@@ -59,6 +59,14 @@ Catálogo de itens do jogo (id, nome, categoria, raro, preço no NPC, ícone). C
 | `nexus.parametro` | Pequenos valores: pesos da confiança, viés do precificador, carimbo do inventário | `precos.json`, `.bolsa-meus-itens.json` |
 | `nexus.meus_itens` | Inventário de itens (item → quantidade) | `.bolsa-meus-itens.json` |
 
+### Equipes (schema `nexus`)
+
+| Tabela | Conteúdo | Origem no legado |
+|---|---|---|
+| `nexus.pokedex_motor` | Pokédex do motor de combate no formato compacto, na ordem do arquivo (a ordem desempata a equipe teórica). Cerca de 1.300 linhas | `engine/data/pokedex.json` |
+| `nexus.equipes_estado` | Lista viva de bosses enviada pelo relay (linha única) | `equipes-estado.json` |
+| `nexus.equipes_conta` | Por conta: nível de treinador, bosses vencidos e coleção, na ordem de chegada | `equipes-estado.json` |
+
 Carga e atualização em [operação](operacao.md#dados-da-bolsa).
 
 ## Hypertables (TimescaleDB)
@@ -122,7 +130,8 @@ A tabela `dim_hunt` tem hoje só 94 hunts, com os campos de nível e espécies v
 |---|---|
 | SQLite `mapa.db` (~600 MB, eventos brutos do coletor) | Hypertables no schema `nexus`, com compressão após 7 dias e retenção configurável |
 | `meus-itens` (JSON) | `nexus.meus_itens` |
-| `equipes-estado.json`, `raros-estado.json` | `nexus.estado_equipes`, `nexus.estado_raros` |
+| `equipes-estado.json` | `nexus.equipes_estado`, `nexus.equipes_conta` |
+| `raros-estado.json` | `nexus.estado_raros` |
 | `holodex-dados.json` (estado do motor) | Tabelas por responsabilidade no schema `nexus`, desenhadas na fase 4 |
 
 Motivo na [ADR 0006](adr/0006-consolidar-estado-no-postgres.md).

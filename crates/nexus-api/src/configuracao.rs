@@ -8,6 +8,7 @@
 //! | `NEXUS_PORTA_METRICAS`| não         | `9190`      |
 //! | `NEXUS_LOG_FORMATO`   | não         | `texto`     |
 //! | `NEXUS_ESCRITA_BOLSA` | não         | `false`     |
+//! | `NEXUS_ESCRITA_EQUIPES` | não       | `false`     |
 //! | `NEXUS_CORS_ORIGENS`  | não         | (nenhuma)   |
 //! | `NEXUS_LIMITE_RPS`    | não         | `10`        |
 //! | `NEXUS_LIMITE_RAJADA` | não         | `40`        |
@@ -17,6 +18,8 @@
 //!
 //! - `NEXUS_ESCRITA_BOLSA`: liga as rotas de ingestão da bolsa e a limpeza de ofertas. Elas
 //!   gravam em tabelas do legado; só ligar no cutover da fase 1.
+//! - `NEXUS_ESCRITA_EQUIPES`: liga o `POST /api/equipes/ingest`. Até o cutover da fase 2 o
+//!   relay manda para o legado, e o estado chega pela importação.
 //! - `NEXUS_CORS_ORIGENS`: origens do painel web, separadas por vírgula.
 //! - `NEXUS_LIMITE_*`: rate limit por token (requisições por segundo e rajada).
 //! - `NEXUS_PARIDADE_URL`: URL do legado (ex.: `http://host:8181`). Liga o comparador.
@@ -42,6 +45,8 @@ pub struct Configuracao {
     pub log_formato: FormatoLog,
     #[serde(default)]
     pub escrita_bolsa: bool,
+    #[serde(default)]
+    pub escrita_equipes: bool,
     #[serde(default)]
     pub cors_origens: String,
     #[serde(default = "limite_rps_padrao")]
