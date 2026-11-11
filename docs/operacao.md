@@ -106,6 +106,7 @@ openssl x509 -in /opt/nexus-deploy/tls/cert.pem -noout -enddate
 ## Banco
 
 - As migrations rodam sozinhas em todo deploy (`nexus-api migrar`), antes da troca de cor.
+- Nunca aplique migrations novas no banco de produção à mão antes do deploy. Se uma imagem anterior (ou um commit intermediário) for implantada depois disso, o `migrar` dela recusa as migrations que não conhece e o deploy aborta.
 - Para aplicar à mão: `sudo -u nexus-deploy docker compose run --rm nexus-api-blue migrar`.
 - Trocar a senha do `nexus_app`: altere no Postgres (`ALTER ROLE nexus_app PASSWORD '...'`), regrave `/opt/nexus-deploy/secrets/database_url` (dono 65532, modo 400) e faça um deploy, para os containers lerem o secret novo.
 
