@@ -45,6 +45,10 @@ Anúncios ativos. Cerca de 23 mil linhas, 23 MB. A mesma oferta é vista várias
 
 Preço mínimo por item e moeda, por instante. PK `(ts, item_id, moeda)`; a gravação usa `ON CONFLICT DO NOTHING` e por isso é idempotente.
 
+### `nexus.item_catalogo`
+
+Catálogo de itens do jogo (id, nome, categoria, raro, preço no NPC, ícone). Cerca de 420 linhas. Quase todas as vendas de item chegam sem `item_id`, só com a descrição (`"3 × Rare Candy"`), e o ticker é achado pelo nome neste catálogo. A coluna `ordem` guarda a ordem da fonte, porque há nomes repetidos e vale o último, como no legado. Carga e atualização em [operação](operacao.md#catálogo-de-itens).
+
 ## Hypertables (TimescaleDB)
 
 | Tabela | Tamanho | Chunks |

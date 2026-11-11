@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/nexus-api"]
+members = ["crates/contrato", "crates/nucleo", "crates/persistencia", "crates/nexus-api"]
 
 [workspace.package]
 edition = "2021"

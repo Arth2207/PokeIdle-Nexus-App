@@ -1,0 +1,86 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, nome, categoria, raro, preco_npc, icone FROM nexus.item_catalogo ORDER BY ordem",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "item_catalogo",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "nome",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "item_catalogo",
+            "name": "nome"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "categoria",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "item_catalogo",
+            "name": "categoria"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "raro",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "item_catalogo",
+            "name": "raro"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "preco_npc",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "item_catalogo",
+            "name": "preco_npc"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "icone",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "item_catalogo",
+            "name": "icone"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "4c877ee65d49278f867b9bb3308188918fc238086253410ec5fe3b2651548b69"
+}

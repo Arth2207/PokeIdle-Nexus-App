@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM nexus.item_catalogo",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "012a1a815ac8b9d84296f94967ac6b371df86b9cffaee0998d8a2a128c5a216b"
+}
