@@ -1,0 +1,30 @@
+# Bloco acrescentado a /opt/monitoring/prometheus/alert.rules.yml
+- name: nexus-api
+  rules:
+  - alert: NexusApiInstanciaFora
+    expr: up{job="nexus-api"} == 0
+    for: 2m
+    labels: { severity: page, team: nexus }
+    annotations:
+      summary: "nexus-api {{ $labels.instance }} não responde às coletas"
+  - alert: NexusBancoInacessivel
+    expr: sum(rate(nexus_http_requisicoes_total{rota="/health/ready",status="503"}[2m])) > 0
+    for: 1m
+    labels: { severity: page, team: nexus }
+    annotations:
+      summary: "nexus-api sem acesso ao Postgres (readiness em 503)"
+  - alert: NexusErros5xx
+    expr: |
+      sum(rate(nexus_http_requisicoes_total{status=~"5..",rota!="/health/ready"}[5m]))
+        / sum(rate(nexus_http_requisicoes_total[5m])) > 0.01
+    for: 5m
+    labels: { severity: ticket, team: nexus }
+    annotations:
+      summary: "nexus-api com mais de 1% de respostas 5xx"
+  - alert: NexusLatenciaAlta
+    expr: |
+      histogram_quantile(0.95, sum by (le, rota) (rate(nexus_http_duracao_segundos_bucket[5m]))) > 3
+    for: 10m
+    labels: { severity: ticket, team: nexus }
+    annotations:
+      summary: "p95 de {{ $labels.rota }} acima de 3s"

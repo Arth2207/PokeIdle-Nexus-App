@@ -1,0 +1,87 @@
+# Produção do Nexus. Instalado em /opt/nexus-deploy por deploy/instalar.sh.
+#
+# Duas cópias da API (blue e green) para deploy sem downtime: o deploy.sh sobe a cor
+# inativa com a imagem nova, espera ela ficar saudável e troca o upstream do Nginx.
+# As imagens de cada cor ficam em ./imagens.env, que o deploy.sh atualiza e exporta.
+
+name: nexus
+
+x-api: &api
+  environment:
+    NEXUS_ENDERECO: 0.0.0.0
+    NEXUS_LOG_FORMATO: json
+    NEXUS_DATABASE_URL_FILE: /run/secrets/database_url
+  secrets:
+    - database_url
+  volumes:
+    # Postgres do host pelo socket Unix: nenhuma porta de banco exposta em rede.
+    - /var/run/postgresql:/var/run/postgresql
+  networks:
+    default: {}
+    monitoring:
+      aliases: [nexus-api]
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  healthcheck:
+    test: ["CMD", "/nexus-api", "healthcheck"]
+    interval: 10s
+    timeout: 5s
+    retries: 3
+    start_period: 5s
+  stop_grace_period: 30s
+  restart: unless-stopped
+  deploy:
+    resources:
+      limits:
+        cpus: "1.5"
+        memory: 512M
+  logging: &logs
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  nexus-api-blue:
+    <<: *api
+    image: ${NEXUS_IMAGEM_BLUE:-ghcr.io/arth2207/nexus-api:inexistente}
+
+  nexus-api-green:
+    <<: *api
+    image: ${NEXUS_IMAGEM_GREEN:-ghcr.io/arth2207/nexus-api:inexistente}
+
+  nginx:
+    image: nginx:1.28.0-alpine
+    ports:
+      # Só Tailscale e localhost. O Docker ignora o UFW, então o IP precisa ser explícito.
+      - "100.115.131.15:8480:80"
+      - "127.0.0.1:8480:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/upstream:/etc/nginx/upstream:ro
+    read_only: true
+    tmpfs: [/tmp, /var/cache/nginx, /var/run]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/nginx-saude"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+    logging: *logs
+
+secrets:
+  database_url:
+    file: ./secrets/database_url
+
+networks:
+  monitoring:
+    name: monitoring_default
+    external: true

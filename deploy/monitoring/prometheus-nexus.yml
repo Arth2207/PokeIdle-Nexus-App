@@ -1,0 +1,8 @@
+# Job acrescentado a /opt/monitoring/prometheus/prometheus.yml (scrape_configs).
+# DNS da rede Docker: resolve só as cores (blue/green) em execução.
+  - job_name: nexus-api
+    dns_sd_configs:
+      - names: ['nexus-api']
+        type: A
+        port: 9190
+        refresh_interval: 30s
