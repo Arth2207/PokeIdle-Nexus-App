@@ -1,10 +1,21 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT em, tipo, moeda, preco, quantidade, descricao, item_id,\n                   COALESCE(species_id,\n                            CASE WHEN jsonb_typeof(ficha->'speciesId') = 'number'\n                                 THEN (ficha->>'speciesId')::numeric::int END) AS especie,\n                   COALESCE(ficha->'shiny' = 'true'::jsonb, false) AS \"shiny!\"\n            FROM public.fato_venda_mercado\n            WHERE em >= $1 AND em <= $2\n            ORDER BY em, id\n            ",
+  "query": "\n            SELECT id, em, lido_em, tipo, moeda, preco, quantidade, descricao, item_id, ficha,\n                   COALESCE(species_id,\n                            CASE WHEN jsonb_typeof(ficha->'speciesId') = 'number'\n                                 THEN (ficha->>'speciesId')::numeric::int END) AS especie,\n                   COALESCE(ficha->'shiny' = 'true'::jsonb, false) AS \"shiny!\"\n            FROM public.fato_venda_mercado\n            WHERE em >= $1\n            ORDER BY em, id\n            ",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "public.fato_venda_mercado",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
         "name": "em",
         "type_info": "Int8",
         "origin": {
@@ -15,7 +26,18 @@
         }
       },
       {
-        "ordinal": 1,
+        "ordinal": 2,
+        "name": "lido_em",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "public.fato_venda_mercado",
+            "name": "lido_em"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
         "name": "tipo",
         "type_info": "Text",
         "origin": {
@@ -26,7 +48,7 @@
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 4,
         "name": "moeda",
         "type_info": "Text",
         "origin": {
@@ -37,7 +59,7 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 5,
         "name": "preco",
         "type_info": "Int8",
         "origin": {
@@ -48,7 +70,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 6,
         "name": "quantidade",
         "type_info": "Int4",
         "origin": {
@@ -59,7 +81,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 7,
         "name": "descricao",
         "type_info": "Text",
         "origin": {
@@ -70,7 +92,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 8,
         "name": "item_id",
         "type_info": "Int4",
         "origin": {
@@ -81,13 +103,24 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 9,
+        "name": "ficha",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "public.fato_venda_mercado",
+            "name": "ficha"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
         "name": "especie",
         "type_info": "Int4",
         "origin": "Expression"
       },
       {
-        "ordinal": 8,
+        "ordinal": 11,
         "name": "shiny!",
         "type_info": "Bool",
         "origin": "Expression"
@@ -95,12 +128,14 @@
     ],
     "parameters": {
       "Left": [
-        "Int8",
         "Int8"
       ]
     },
     "nullable": [
       false,
+      false,
+      true,
+      true,
       true,
       true,
       true,
@@ -111,5 +146,5 @@
       null
     ]
   },
-  "hash": "d98b01f2afd5f66e0783d94f8f8bdf0d0d5033e5ed62fcdfb05cacf9bf9b564d"
+  "hash": "238dd40a9aed4234c72477af1cbd7e9365971003df55172023fa670af8e50ad1"
 }

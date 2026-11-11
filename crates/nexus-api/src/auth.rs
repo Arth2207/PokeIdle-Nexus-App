@@ -237,6 +237,44 @@ mod testes {
             .unwrap()
     }
 
+    /// Roteador mínimo: injeta um cliente com os escopos dados e exige `relay` ou `escrita`.
+    async fn status_com_escopos(escopos: Vec<Escopo>) -> StatusCode {
+        use axum::routing::post;
+        use tower::ServiceExt;
+        const INGESTAO: &[Escopo] = &[Escopo::Relay, Escopo::Escrita];
+        let app = axum::Router::new()
+            .route("/x", post(|| async { "ok" }))
+            .route_layer(axum::middleware::from_fn(|req, next| {
+                exigir_escopo(INGESTAO, req, next)
+            }))
+            .layer(axum::Extension(Cliente {
+                nome: "teste".into(),
+                escopos,
+            }));
+        let req = Request::builder()
+            .method("POST")
+            .uri("/x")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        app.oneshot(req).await.unwrap().status()
+    }
+
+    #[tokio::test]
+    async fn escopo_por_rota() {
+        assert_eq!(
+            status_com_escopos(vec![Escopo::Leitura]).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status_com_escopos(vec![Escopo::Relay]).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            status_com_escopos(vec![Escopo::Admin]).await,
+            StatusCode::OK
+        );
+    }
+
     #[test]
     fn extrai_so_bearer_com_prefixo() {
         assert_eq!(

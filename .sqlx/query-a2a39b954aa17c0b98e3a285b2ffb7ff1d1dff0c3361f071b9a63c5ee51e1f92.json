@@ -1,0 +1,93 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT DISTINCT ON (rota) rota, comparados, iguais, so_legado, so_nexus, exemplos,\n               extract(epoch FROM now() - em)::float8 AS \"idade_s!\"\n        FROM nexus.paridade\n        ORDER BY rota, em DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "rota",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "paridade",
+            "name": "rota"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "comparados",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "paridade",
+            "name": "comparados"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "iguais",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "paridade",
+            "name": "iguais"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "so_legado",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "paridade",
+            "name": "so_legado"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "so_nexus",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "paridade",
+            "name": "so_nexus"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "exemplos",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "paridade",
+            "name": "exemplos"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "idade_s!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "a2a39b954aa17c0b98e3a285b2ffb7ff1d1dff0c3361f071b9a63c5ee51e1f92"
+}

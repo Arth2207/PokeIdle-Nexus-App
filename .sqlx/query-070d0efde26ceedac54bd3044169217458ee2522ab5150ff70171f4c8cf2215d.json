@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO nexus.especie (id, ordem, nome, tipos, base, golpes, evolucoes, mega_base, sprite_id, desempate)\n        SELECT id, ordem, nome,\n               ARRAY(SELECT jsonb_array_elements_text(tipos)),\n               ARRAY(SELECT jsonb_array_elements_text(base)::int),\n               golpes,\n               ARRAY(SELECT jsonb_array_elements_text(evolucoes)::int),\n               mega_base, sprite_id, desempate\n        FROM jsonb_to_recordset($1::jsonb) AS x(id int, ordem int, nome text, tipos jsonb, base jsonb,\n             golpes jsonb, evolucoes jsonb, mega_base int, sprite_id int, desempate int)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "070d0efde26ceedac54bd3044169217458ee2522ab5150ff70171f4c8cf2215d"
+}

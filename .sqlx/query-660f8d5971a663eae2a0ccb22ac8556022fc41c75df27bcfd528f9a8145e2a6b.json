@@ -1,0 +1,122 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, nome, tipos, base, golpes, evolucoes, mega_base, sprite_id, desempate\n             FROM nexus.especie ORDER BY ordem",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "especie",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "nome",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "especie",
+            "name": "nome"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "tipos",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "especie",
+            "name": "tipos"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "base",
+        "type_info": "Int4Array",
+        "origin": {
+          "Table": {
+            "table": "especie",
+            "name": "base"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "golpes",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "especie",
+            "name": "golpes"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "evolucoes",
+        "type_info": "Int4Array",
+        "origin": {
+          "Table": {
+            "table": "especie",
+            "name": "evolucoes"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "mega_base",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "especie",
+            "name": "mega_base"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "sprite_id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "especie",
+            "name": "sprite_id"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "desempate",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "especie",
+            "name": "desempate"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "660f8d5971a663eae2a0ccb22ac8556022fc41c75df27bcfd528f9a8145e2a6b"
+}

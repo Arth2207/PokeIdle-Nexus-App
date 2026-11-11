@@ -1,0 +1,194 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT em, preco, base, adicionais, pve, familia, familia_nome, shiny, nivel, especie,\n                    nome, incerta, nota, mega, refinada\n             FROM nexus.venda_base ORDER BY em",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "em",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "venda_base",
+            "name": "em"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "preco",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "venda_base",
+            "name": "preco"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "base",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "venda_base",
+            "name": "base"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "adicionais",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "venda_base",
+            "name": "adicionais"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "pve",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "venda_base",
+            "name": "pve"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "familia",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "venda_base",
+            "name": "familia"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "familia_nome",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "venda_base",
+            "name": "familia_nome"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "shiny",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "venda_base",
+            "name": "shiny"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "nivel",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "venda_base",
+            "name": "nivel"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "especie",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "venda_base",
+            "name": "especie"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "nome",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "venda_base",
+            "name": "nome"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "incerta",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "venda_base",
+            "name": "incerta"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "nota",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "venda_base",
+            "name": "nota"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "mega",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "venda_base",
+            "name": "mega"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "refinada",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "venda_base",
+            "name": "refinada"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "e3c2ee4fb9315d49f8faa32bc7734fec8d6b743cb4ca05996d92a42c7da44c8b"
+}

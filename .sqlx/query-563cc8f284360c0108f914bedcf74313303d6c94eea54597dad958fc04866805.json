@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO nexus.venda_base (em, preco, base, adicionais, pve, familia, familia_nome, shiny,\n                                      nivel, especie, nome, incerta, nota, mega, refinada)\n        SELECT * FROM jsonb_to_recordset($1::jsonb) AS x(em bigint, preco bigint, base float8,\n             adicionais float8, pve float8, familia int, familia_nome text, shiny bool, nivel int,\n             especie int, nome text, incerta bool, nota float8, mega bool, refinada bool)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "563cc8f284360c0108f914bedcf74313303d6c94eea54597dad958fc04866805"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM nexus.meus_itens",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "07af70345918d7c663693eb196fe2517ef62eca90b0b9d9bd3dca267732c9cb3"
+}

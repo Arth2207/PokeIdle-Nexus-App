@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM nexus.item_preco_base",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "7dc307cb71ce781cc30d38378be056d5583a136ce40451f52b2d341c0fa72ff9"
+}

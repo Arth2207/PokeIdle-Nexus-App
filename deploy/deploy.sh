@@ -97,6 +97,11 @@ cmd_deploy() {
     # SIGTERM: termina as requisições em andamento antes de sair.
     compose stop -t 30 "nexus-api-$ativa"
   fi
+  # O comparador de paridade acompanha a versão nova.
+  definir_imagem paridade "$imagem"
+  export_imagens
+  compose up -d --no-deps --force-recreate nexus-paridade || log "aviso: comparador não subiu"
+
   docker image prune -f >/dev/null
   log "deploy concluído: $sha"
 }

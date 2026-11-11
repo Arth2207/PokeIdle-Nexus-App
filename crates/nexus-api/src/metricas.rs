@@ -74,5 +74,25 @@ async fn exportar(State(estado): State<EstadoMetricas>) -> String {
     let pool = &estado.app.db;
     metrics::gauge!("nexus_db_conexoes").set(f64::from(pool.size()));
     metrics::gauge!("nexus_db_conexoes_ociosas").set(pool.num_idle() as f64);
+    // Última rodada do comparador de paridade (gravada pelo container nexus-paridade).
+    let ultimas = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        persistencia::paridade::ultimas(pool),
+    )
+    .await;
+    if let Ok(Ok(ultimas)) = ultimas {
+        ultimas.into_iter().for_each(|u| {
+            let l = u.linha;
+            let razao = if l.comparados == 0 {
+                1.0
+            } else {
+                f64::from(l.iguais) / f64::from(l.comparados)
+            };
+            metrics::gauge!("nexus_paridade_razao", "rota" => l.rota.clone()).set(razao);
+            metrics::gauge!("nexus_paridade_comparados", "rota" => l.rota.clone())
+                .set(f64::from(l.comparados));
+            metrics::gauge!("nexus_paridade_idade_segundos", "rota" => l.rota).set(u.idade_s);
+        });
+    }
     estado.handle.render()
 }

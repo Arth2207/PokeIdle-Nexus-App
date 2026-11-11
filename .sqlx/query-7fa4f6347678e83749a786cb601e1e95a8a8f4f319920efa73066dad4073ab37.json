@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO nexus.item_preco_base (dia, item_id, preco)\n        SELECT dia::date, item_id, preco\n        FROM jsonb_to_recordset($1::jsonb) AS x(dia text, item_id int, preco float8)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7fa4f6347678e83749a786cb601e1e95a8a8f4f319920efa73066dad4073ab37"
+}

@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT ON (item_id, moeda) item_id, moeda, anuncios, preco_min, ts\n             FROM public.fato_resumo_item WHERE ts >= $1 ORDER BY item_id, moeda, ts DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "item_id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "public.fato_resumo_item",
+            "name": "item_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "moeda",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "public.fato_resumo_item",
+            "name": "moeda"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "anuncios",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "public.fato_resumo_item",
+            "name": "anuncios"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "preco_min",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "public.fato_resumo_item",
+            "name": "preco_min"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "ts",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "public.fato_resumo_item",
+            "name": "ts"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "700cdc94d501ef2cea63231a9f85ec2271f251bcda58b4a5d7d7842b606f2bde"
+}

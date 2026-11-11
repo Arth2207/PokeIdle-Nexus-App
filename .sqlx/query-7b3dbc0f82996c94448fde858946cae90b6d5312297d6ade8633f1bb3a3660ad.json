@@ -1,0 +1,80 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT species_id AS \"id!\", COALESCE((ficha->>'shiny') = 'true', false) AS \"sh!\",\n                   moeda, count(*)::int AS n, min(p) AS mn, max(p) AS mx,\n                   percentile_cont(ARRAY[.05,.95]) WITHIN GROUP (ORDER BY p) AS q,\n                   min(em) AS desde\n            FROM (SELECT species_id, ficha, moeda, em, preco::float AS p\n                  FROM public.fato_venda_mercado\n                  WHERE tipo = 'pokemon' AND species_id IS NOT NULL AND preco > 0) x\n            GROUP BY 1, 2, 3\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "public.fato_venda_mercado",
+            "name": "species_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "sh!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "moeda",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "public.fato_venda_mercado",
+            "name": "moeda"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "n",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "mn",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "mx",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "q",
+        "type_info": "Float8Array",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "desde",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      null,
+      true,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "7b3dbc0f82996c94448fde858946cae90b6d5312297d6ade8633f1bb3a3660ad"
+}

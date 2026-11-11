@@ -1,0 +1,140 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id, ts_visto, tipo, moeda, preco, species_id, item_id, quantidade, nome, ficha\n            FROM public.fato_oferta_mercado\n            WHERE ativo\n              AND ts_visto >= (CASE WHEN tipo = 'pokemon' THEN $1::bigint ELSE $4::bigint END)\n              AND ($2::text IS NULL OR tipo = $2)\n              AND ($3::text IS NULL OR moeda = $3)\n            ORDER BY ts_visto DESC, id DESC\n            LIMIT $5\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "public.fato_oferta_mercado",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "ts_visto",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "public.fato_oferta_mercado",
+            "name": "ts_visto"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "tipo",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "public.fato_oferta_mercado",
+            "name": "tipo"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "moeda",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "public.fato_oferta_mercado",
+            "name": "moeda"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "preco",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "public.fato_oferta_mercado",
+            "name": "preco"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "species_id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "public.fato_oferta_mercado",
+            "name": "species_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "item_id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "public.fato_oferta_mercado",
+            "name": "item_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "quantidade",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "public.fato_oferta_mercado",
+            "name": "quantidade"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "nome",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "public.fato_oferta_mercado",
+            "name": "nome"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "ficha",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "public.fato_oferta_mercado",
+            "name": "ficha"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "5d2e9aa2ab0059d92ee33d3fa460254b1dd82b69909d59c59e68e406993dbad9"
+}

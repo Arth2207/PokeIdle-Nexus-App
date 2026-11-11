@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM nexus.venda_base",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "5e61560be4cd512c650b238d74733a6bb039f4ec1e095456537b654155646e2c"
+}

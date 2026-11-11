@@ -1,0 +1,45 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (dia - date '1970-01-01') AS \"dia!\", item_id, preco FROM nexus.item_preco_base ORDER BY dia, item_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "dia!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "item_id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "item_preco_base",
+            "name": "item_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "preco",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "item_preco_base",
+            "name": "preco"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "0c4a53d495cd2979a1fa9c4c980dd201f63ce767aae77aab844a8c9675cf2966"
+}

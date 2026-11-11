@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE public.fato_oferta_mercado SET ativo = FALSE\n            WHERE ativo AND ((expira_em IS NOT NULL AND expira_em < $1) OR ts_visto < $2)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "03d7c05ae7270efa2b294ab877e00902a30f637926d477beb486df01f923be3a"
+}

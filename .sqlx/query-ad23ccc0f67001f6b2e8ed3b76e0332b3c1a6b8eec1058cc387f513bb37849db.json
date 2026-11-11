@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO nexus.meus_itens (item_id, quantidade) SELECT * FROM UNNEST($1::int[], $2::bigint[])",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4Array",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ad23ccc0f67001f6b2e8ed3b76e0332b3c1a6b8eec1058cc387f513bb37849db"
+}

@@ -3,35 +3,67 @@
 mod bolsa;
 mod saude;
 
+use axum::extract::DefaultBodyLimit;
+use axum::http::{header, HeaderValue, Method};
 use axum::middleware;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
+use tower_http::compression::CompressionLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 use crate::auth::{self, Cliente, Escopo};
 use crate::estado::Estado;
-use crate::metricas;
+use crate::{etag, limite, metricas};
+
+/// Escopos aceitos em cada grupo de rotas.
+const LEITURA: &[Escopo] = &[Escopo::Leitura];
+const INGESTAO: &[Escopo] = &[Escopo::Relay, Escopo::Escrita];
+
+const LIMITE_CORPO: usize = 2 * 1024 * 1024;
+const LIMITE_CORPO_INGESTAO: usize = 10 * 1024 * 1024;
 
 pub fn router(estado: Estado) -> Router {
-    // Leitura da bolsa: exige o escopo `leitura`. O middleware é uma closure que fixa a
-    // lista de escopos e repassa a requisição para `exigir_escopo`.
-    let bolsa_leitura = Router::new()
+    // Leitura da bolsa: escopo `leitura`, ETag e CORS para o painel web.
+    // Os middlewares de rota rodam de baixo para cima: token → rate limit → escopo → handler.
+    let leitura = Router::new()
+        .route("/api/bolsa/mercado", get(bolsa::mercado))
+        .route("/api/bolsa/ticker", get(bolsa::ticker))
+        .route("/api/bolsa/balao", get(bolsa::balao))
         .route("/api/bolsa/serie", get(bolsa::serie))
+        .route("/api/bolsa/feedback", get(bolsa::feedback))
+        .route("/api/bolsa/dicas", get(bolsa::dicas))
+        .route("/api/bolsa/ofertas", get(bolsa::ofertas))
+        .route("/api/bolsa/meus-itens", get(bolsa::meus_itens))
         .route_layer(middleware::from_fn(|req, next| {
-            auth::exigir_escopo(&[Escopo::Leitura], req, next)
-        }));
+            auth::exigir_escopo(LEITURA, req, next)
+        }))
+        .route_layer(middleware::from_fn(etag::etag));
 
-    // Rotas que exigem token. O `route_layer` aplica o middleware só a elas. Como ele é
-    // adicionado por último, roda antes do de escopo: primeiro "quem é", depois "pode?".
+    // Ingestão: escopo `relay` ou `escrita`, corpo de até 10 MB, sem CORS (o relay não é
+    // navegador). As rotas só gravam com NEXUS_ESCRITA_BOLSA=true.
+    let ingestao = Router::new()
+        .route("/api/bolsa/ofertas", post(bolsa::gravar_ofertas))
+        .route("/api/bolsa/resumo-itens", post(bolsa::gravar_resumo))
+        .route("/api/bolsa/meus-itens", post(bolsa::gravar_meus_itens))
+        .route_layer(middleware::from_fn(|req, next| {
+            auth::exigir_escopo(INGESTAO, req, next)
+        }))
+        .layer(DefaultBodyLimit::max(LIMITE_CORPO_INGESTAO));
+
+    // Cada grupo recebe token e rate limit. O CORS fica por fora do token nas leituras,
+    // porque o preflight (OPTIONS) do navegador não manda token.
+    let leitura = protegido(leitura, &estado);
+    let leitura = match cors(&estado.origens_cors) {
+        Some(c) => leitura.layer(c),
+        None => leitura,
+    };
     let protegidas = Router::new()
-        .route("/api/eu", get(eu))
-        .merge(bolsa_leitura)
-        .route_layer(middleware::from_fn_with_state(
-            estado.clone(),
-            auth::exigir_token,
-        ));
+        .merge(protegido(Router::new().route("/api/eu", get(eu)), &estado))
+        .merge(leitura)
+        .merge(protegido(ingestao, &estado));
 
     // Uma linha de log por requisição: método, caminho, status, latência e request id.
     let log_requisicoes = TraceLayer::new_for_http()
@@ -56,11 +88,40 @@ pub fn router(estado: Estado) -> Router {
         .route("/health/live", get(saude::vivo))
         .route("/health/ready", get(saude::pronto))
         .merge(protegidas)
+        .layer(DefaultBodyLimit::max(LIMITE_CORPO))
+        .layer(CompressionLayer::new())
         .layer(middleware::from_fn(metricas::registrar))
         .layer(log_requisicoes)
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
         .with_state(estado)
+}
+
+/// Exige token válido e aplica o rate limit por cliente (token roda primeiro).
+fn protegido(r: Router<Estado>, estado: &Estado) -> Router<Estado> {
+    r.route_layer(middleware::from_fn_with_state(
+        estado.clone(),
+        limite::limitar,
+    ))
+    .route_layer(middleware::from_fn_with_state(
+        estado.clone(),
+        auth::exigir_token,
+    ))
+}
+
+/// CORS só para as origens configuradas; sem origem configurada, nenhum cabeçalho CORS.
+/// A ingestão não precisa: o relay não é navegador.
+fn cors(origens: &[String]) -> Option<CorsLayer> {
+    let origens: Vec<HeaderValue> = origens
+        .iter()
+        .filter_map(|o| HeaderValue::from_str(o).ok())
+        .collect();
+    (!origens.is_empty()).then(|| {
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::list(origens))
+            .allow_methods([Method::GET])
+            .allow_headers([header::AUTHORIZATION])
+    })
 }
 
 /// Mostra quem é o dono do token. Útil para testar se um token funciona.

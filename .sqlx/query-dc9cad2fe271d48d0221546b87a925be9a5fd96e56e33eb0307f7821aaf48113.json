@@ -1,0 +1,68 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COALESCE(item_id::text,\n                            lower(trim(regexp_replace(descricao, '^\\d+\\s*[×x]\\s*', '')))) AS id,\n                   moeda, count(*)::int AS n, min(p) AS mn, max(p) AS mx,\n                   percentile_cont(ARRAY[.05,.95]) WITHIN GROUP (ORDER BY p) AS q,\n                   min(em) AS desde\n            FROM (SELECT item_id, descricao, moeda, em,\n                         preco::float / GREATEST(quantidade, 1) AS p\n                  FROM public.fato_venda_mercado WHERE tipo <> 'pokemon' AND preco > 0) x\n            GROUP BY 1, 2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "moeda",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "public.fato_venda_mercado",
+            "name": "moeda"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "n",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "mn",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "mx",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "q",
+        "type_info": "Float8Array",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "desde",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      true,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "dc9cad2fe271d48d0221546b87a925be9a5fd96e56e33eb0307f7821aaf48113"
+}

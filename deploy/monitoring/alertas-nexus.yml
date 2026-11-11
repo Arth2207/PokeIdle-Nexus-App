@@ -28,3 +28,22 @@
     labels: { severity: ticket, team: nexus }
     annotations:
       summary: "p95 de {{ $labels.rota }} acima de 3s"
+  # Fase de shadow: paridade com o legado. Ainda não aplicado no Prometheus.
+  - alert: NexusParidadeBaixa
+    expr: min by (rota) (nexus_paridade_razao) < 0.99
+    for: 30m
+    labels: { severity: ticket, team: nexus }
+    annotations:
+      summary: "paridade de {{ $labels.rota }} abaixo de 99% (veja nexus.paridade)"
+  - alert: NexusParidadeParada
+    expr: max(nexus_paridade_idade_segundos) > 3600
+    for: 15m
+    labels: { severity: ticket, team: nexus }
+    annotations:
+      summary: "comparador de paridade sem rodada há mais de 1 h"
+  - alert: NexusBolsaMontagemFalhando
+    expr: increase(nexus_bolsa_montagem_falhas_total[15m]) > 2
+    for: 5m
+    labels: { severity: ticket, team: nexus }
+    annotations:
+      summary: "nexus-api não consegue montar o mercado da bolsa"

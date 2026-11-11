@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO nexus.item_catalogo (id, ordem, nome, categoria, raro, preco_npc, icone)\n        SELECT * FROM UNNEST($1::int[], $2::int[], $3::text[], $4::text[], $5::bool[], $6::bigint[], $7::text[])\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4Array",
+        "Int4Array",
+        "TextArray",
+        "TextArray",
+        "BoolArray",
+        "Int8Array",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "039b7759741903dbf0c31280f176037ca7164175afe912685416c229755e8938"
+}

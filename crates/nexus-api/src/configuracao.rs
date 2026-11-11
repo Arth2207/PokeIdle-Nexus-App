@@ -7,6 +7,19 @@
 //! | `NEXUS_PORTA`         | não         | `8190`      |
 //! | `NEXUS_PORTA_METRICAS`| não         | `9190`      |
 //! | `NEXUS_LOG_FORMATO`   | não         | `texto`     |
+//! | `NEXUS_ESCRITA_BOLSA` | não         | `false`     |
+//! | `NEXUS_CORS_ORIGENS`  | não         | (nenhuma)   |
+//! | `NEXUS_LIMITE_RPS`    | não         | `10`        |
+//! | `NEXUS_LIMITE_RAJADA` | não         | `40`        |
+//! | `NEXUS_BOLSA_CICLO_S` | não         | `180`       |
+//! | `NEXUS_PARIDADE_URL`  | não         | (desligado) |
+//! | `NEXUS_PARIDADE_CICLO_S` | não      | `600`       |
+//!
+//! - `NEXUS_ESCRITA_BOLSA`: liga as rotas de ingestão da bolsa e a limpeza de ofertas. Elas
+//!   gravam em tabelas do legado; só ligar no cutover da fase 1.
+//! - `NEXUS_CORS_ORIGENS`: origens do painel web, separadas por vírgula.
+//! - `NEXUS_LIMITE_*`: rate limit por token (requisições por segundo e rajada).
+//! - `NEXUS_PARIDADE_URL`: URL do legado (ex.: `http://host:8181`). Liga o comparador.
 //!
 //! \* Ou `NEXUS_DATABASE_URL_FILE` com o caminho de um arquivo que contém a URL
 //! (é assim que o Docker entrega secrets, em `/run/secrets/`).
@@ -27,6 +40,48 @@ pub struct Configuracao {
     pub database_url: Segredo,
     #[serde(default)]
     pub log_formato: FormatoLog,
+    #[serde(default)]
+    pub escrita_bolsa: bool,
+    #[serde(default)]
+    pub cors_origens: String,
+    #[serde(default = "limite_rps_padrao")]
+    pub limite_rps: f64,
+    #[serde(default = "limite_rajada_padrao")]
+    pub limite_rajada: f64,
+    #[serde(default = "bolsa_ciclo_padrao")]
+    pub bolsa_ciclo_s: u64,
+    #[serde(default)]
+    pub paridade_url: Option<String>,
+    #[serde(default = "paridade_ciclo_padrao")]
+    pub paridade_ciclo_s: u64,
+}
+
+impl Configuracao {
+    /// Origens do CORS, já separadas.
+    pub fn origens_cors(&self) -> Vec<String> {
+        self.cors_origens
+            .split(',')
+            .map(str::trim)
+            .filter(|o| !o.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+}
+
+fn limite_rps_padrao() -> f64 {
+    10.0
+}
+
+fn limite_rajada_padrao() -> f64 {
+    40.0
+}
+
+fn bolsa_ciclo_padrao() -> u64 {
+    180
+}
+
+fn paridade_ciclo_padrao() -> u64 {
+    600
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]

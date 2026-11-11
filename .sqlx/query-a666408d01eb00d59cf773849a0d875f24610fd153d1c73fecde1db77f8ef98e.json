@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT chave, valor FROM nexus.parametro WHERE chave LIKE 'precificador.%'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "chave",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "parametro",
+            "name": "chave"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "valor",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "parametro",
+            "name": "valor"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "a666408d01eb00d59cf773849a0d875f24610fd153d1c73fecde1db77f8ef98e"
+}

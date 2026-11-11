@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM nexus.paridade WHERE em < now() - interval '30 days'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "d1939a6180f3ff21bd38f6583a2a86972f077bd773ee7b2127e66a7a691753b8"
+}

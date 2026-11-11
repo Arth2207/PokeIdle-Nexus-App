@@ -52,6 +52,35 @@ services:
     <<: *api
     image: ${NEXUS_IMAGEM_GREEN:-ghcr.io/arth2207/nexus-api:inexistente}
 
+  # Comparador de paridade com o sistema legado (shadow das fases). Só faz GETs na porta do
+  # legado e grava o resultado em nexus.paridade; a API publica em /metrics.
+  # Usa a rede do host porque o firewall não deixa a rede do Docker chegar nessa porta.
+  # Não abre nenhuma porta.
+  nexus-paridade:
+    image: ${NEXUS_IMAGEM_PARIDADE:-ghcr.io/arth2207/nexus-api:inexistente}
+    command: ["paridade-continua"]
+    network_mode: host
+    environment:
+      NEXUS_LOG_FORMATO: json
+      NEXUS_DATABASE_URL_FILE: /run/secrets/database_url
+      NEXUS_PARIDADE_URL: http://127.0.0.1:8181
+      NEXUS_PARIDADE_CICLO_S: "600"
+    secrets:
+      - database_url
+    volumes:
+      - /var/run/postgresql:/var/run/postgresql
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 384M
+    logging: *logs
+
   nginx:
     image: nginx:1.28.0-alpine
     ports:

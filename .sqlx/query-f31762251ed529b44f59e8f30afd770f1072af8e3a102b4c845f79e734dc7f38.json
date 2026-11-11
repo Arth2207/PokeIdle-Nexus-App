@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE public.fato_oferta_mercado o SET ativo = FALSE\n                FROM UNNEST($2::text[], $3::text[]) AS e(tipo, moeda)\n                WHERE o.ativo AND o.ts_visto < $1 AND o.tipo = e.tipo AND o.moeda = e.moeda\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f31762251ed529b44f59e8f30afd770f1072af8e3a102b4c845f79e734dc7f38"
+}

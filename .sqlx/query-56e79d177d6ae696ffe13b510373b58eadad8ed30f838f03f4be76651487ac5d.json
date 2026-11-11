@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT valor FROM nexus.parametro WHERE chave = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "valor",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "parametro",
+            "name": "valor"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "56e79d177d6ae696ffe13b510373b58eadad8ed30f838f03f4be76651487ac5d"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO public.fato_oferta_mercado\n                (id, ts_primeiro, ts_visto, tipo, moeda, preco, species_id, item_id, quantidade,\n                 nome, ficha, expira_em, ativo)\n            SELECT id, ts_primeiro, ts_visto, tipo, moeda, preco, species_id, item_id, quantidade,\n                   nome, ficha, expira_em, TRUE\n            FROM jsonb_to_recordset($1::jsonb) AS x(id bigint, ts_primeiro bigint, ts_visto bigint,\n                 tipo text, moeda text, preco bigint, species_id int, item_id int, quantidade int,\n                 nome text, ficha jsonb, expira_em bigint)\n            ON CONFLICT (id) DO UPDATE SET\n                ts_visto = EXCLUDED.ts_visto, preco = EXCLUDED.preco, tipo = EXCLUDED.tipo,\n                moeda = EXCLUDED.moeda, species_id = EXCLUDED.species_id,\n                item_id = EXCLUDED.item_id, quantidade = EXCLUDED.quantidade,\n                nome = EXCLUDED.nome, ficha = EXCLUDED.ficha,\n                expira_em = COALESCE(EXCLUDED.expira_em, fato_oferta_mercado.expira_em),\n                ativo = TRUE\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "accfe11c10ffb11b6c4bc2df4106187465769484370d0f544e042d50f1a2f487"
+}

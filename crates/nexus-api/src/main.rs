@@ -4,19 +4,29 @@
 //!   nexus-api                                  sobe o servidor
 //!   nexus-api migrar                           aplica as migrations pendentes
 //!   nexus-api token criar <nome> <escopos>     cria um token (escopos separados por vírgula)
-//!   nexus-api catalogo importar < itens.json   grava o catálogo de itens do jogo (lido do stdin)
+//!   nexus-api importar itens < itens.json      catálogo de itens (items-catalogo.json do legado)
+//!   nexus-api importar especies < esp.json     catálogo de espécies (PI_ESPECIES em JSON)
+//!   nexus-api importar base < base.json        base do precificador (vendas antigas, cotações)
+//!   nexus-api importar meus-itens < inv.json   inventário (.bolsa-meus-itens.json do legado)
+//!   nexus-api paridade [url]                   uma rodada de comparação com o legado
+//!   nexus-api paridade-continua                comparador em loop, gravando em nexus.paridade
+//!   nexus-api avaliar-fichas <agora_ms>        diagnóstico: valor justo de fichas (stdin)
 //!   nexus-api healthcheck                      checa o /health/ready local (usado pelo Docker)
 
 mod auth;
 mod bolsa;
 mod configuracao;
+mod conversao;
 mod desligamento;
 mod estado;
+mod etag;
+mod limite;
 mod metricas;
 mod rotas;
 mod telemetria;
 
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, ensure, Context};
@@ -28,8 +38,8 @@ use crate::auth::Escopo;
 use crate::configuracao::Configuracao;
 use crate::estado::Estado;
 
-const USO: &str =
-    "uso: nexus-api [migrar | token criar <nome> <escopos> | catalogo importar | healthcheck]";
+const USO: &str = "uso: nexus-api [migrar | token criar <nome> <escopos> | \
+importar itens|especies|base|meus-itens | paridade [url] | healthcheck]";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -44,7 +54,11 @@ async fn main() -> anyhow::Result<()> {
         [] => servir(cfg).await,
         ["migrar"] => migrar(&cfg).await,
         ["token", "criar", nome, escopos] => criar_token(&cfg, nome, escopos).await,
-        ["catalogo", "importar"] => importar_catalogo(&cfg).await,
+        ["importar", tipo] => importar(&cfg, tipo).await,
+        ["avaliar-fichas", agora] => avaliar_fichas(&cfg, agora).await,
+        ["paridade-continua"] => paridade_continua(cfg).await,
+        ["paridade"] => paridade(&cfg, None).await,
+        ["paridade", url] => paridade(&cfg, Some(url)).await,
         ["healthcheck"] => healthcheck(&cfg).await,
         _ => bail!(USO),
     }
@@ -56,6 +70,28 @@ async fn servir(cfg: Configuracao) -> anyhow::Result<()> {
 
     let metricas = metricas::instalar().context("não consegui iniciar as métricas")?;
     let estado = Estado::novo(&cfg).context("NEXUS_DATABASE_URL inválida")?;
+
+    // Uma task remonta o mercado em segundo plano; o comparador (se configurado) roda junto.
+    let parar_tarefas = CancellationToken::new();
+    Arc::clone(&estado.bolsa).iniciar(
+        Duration::from_secs(cfg.bolsa_ciclo_s.max(10)),
+        parar_tarefas.clone(),
+    );
+    if let Some(url) = &cfg.paridade_url {
+        let comparador = bolsa::paridade::Comparador::novo(Arc::clone(&estado.bolsa), url)
+            .context("não consegui criar o cliente HTTP do comparador")?;
+        Arc::new(comparador).iniciar(
+            Duration::from_secs(cfg.paridade_ciclo_s.max(60)),
+            parar_tarefas.clone(),
+        );
+        tracing::info!(%url, "comparador de paridade ligado");
+    }
+    if cfg.escrita_bolsa {
+        iniciar_limpeza_ofertas(estado.clone(), parar_tarefas.clone());
+        tracing::warn!(
+            "escrita da bolsa LIGADA: o Nexus grava em fato_oferta_mercado e fato_resumo_item"
+        );
+    }
 
     let app = rotas::router(estado.clone());
     let app_metricas = metricas::router(metricas, estado);
@@ -80,6 +116,7 @@ async fn servir(cfg: Configuracao) -> anyhow::Result<()> {
     let met = axum::serve(listener_metricas, app_metricas)
         .with_graceful_shutdown(parar.cancelled_owned());
     tokio::try_join!(api, met).context("servidor HTTP falhou")?;
+    parar_tarefas.cancel();
 
     tracing::info!("nexus-api encerrado");
     Ok(())
@@ -132,36 +169,185 @@ struct ItemArquivo {
     icone: Option<String>,
 }
 
-async fn importar_catalogo(cfg: &Configuracao) -> anyhow::Result<()> {
+/// Formato do `.bolsa-meus-itens.json`: `{ ts, itens: { [id]: quantidade } }`.
+#[derive(serde::Deserialize)]
+struct ArquivoMeusItens {
+    ts: Option<i64>,
+    #[serde(default)]
+    itens: std::collections::BTreeMap<String, i64>,
+}
+
+/// Importa para o schema `nexus` um arquivo do legado lido do stdin.
+async fn importar(cfg: &Configuracao, tipo: &str) -> anyhow::Result<()> {
     // Leitura bloqueante do stdin: é um comando de linha, roda uma vez e sai.
     let texto = std::io::read_to_string(std::io::stdin()).context("não consegui ler o stdin")?;
-    let arquivo: ArquivoCatalogo =
-        serde_json::from_str(&texto).context("JSON do catálogo inválido")?;
-    ensure!(
-        !arquivo.itens.is_empty(),
-        "o catálogo veio vazio; nada foi alterado"
-    );
+    let db = Estado::novo(cfg).context("NEXUS_DATABASE_URL inválida")?.db;
+    match tipo {
+        "itens" => {
+            let arquivo: ArquivoCatalogo = serde_json::from_str(&texto).context("JSON inválido")?;
+            ensure!(
+                !arquivo.itens.is_empty(),
+                "o catálogo veio vazio; nada foi alterado"
+            );
+            let itens: Vec<_> = arquivo
+                .itens
+                .into_iter()
+                .map(|i| nucleo::bolsa::catalogo::ItemCatalogo {
+                    id: i.id,
+                    nome: i.nome,
+                    categoria: i.categoria,
+                    raro: i.raro,
+                    preco_npc: i.npc,
+                    icone: i.icone,
+                })
+                .collect();
+            let n = persistencia::importacao::catalogo(&db, &itens).await?;
+            println!("catálogo de itens importado: {n} itens");
+        }
+        "especies" => {
+            let lista: Vec<persistencia::importacao::EspecieArquivo> =
+                serde_json::from_str(&texto).context("JSON inválido")?;
+            ensure!(!lista.is_empty(), "a lista veio vazia; nada foi alterado");
+            let n = persistencia::importacao::especies(&db, &lista).await?;
+            println!("catálogo de espécies importado: {n} espécies");
+        }
+        "base" => {
+            let base: persistencia::importacao::BaseArquivo =
+                serde_json::from_str(&texto).context("JSON inválido")?;
+            let (vendas, itens) = persistencia::importacao::base(&db, &base).await?;
+            println!("base do precificador importada: {vendas} vendas, {itens} cotações de itens");
+        }
+        "meus-itens" => {
+            use nucleo::bolsa::ingestao::{MeusItens, RepoIngestao};
+            let arquivo: ArquivoMeusItens =
+                serde_json::from_str(&texto).context("JSON inválido")?;
+            let itens = arquivo
+                .itens
+                .into_iter()
+                .filter_map(|(k, v)| Some((k.parse().ok()?, v)))
+                .filter(|(k, v): &(i32, i64)| *k > 0 && *v > 0)
+                .collect();
+            let m = MeusItens {
+                ts: arquivo.ts,
+                itens,
+            };
+            persistencia::PgRepoMercado::novo(db)
+                .gravar_meus_itens(&m)
+                .await?;
+            println!("inventário importado: {} itens", m.itens.len());
+        }
+        outro => bail!("não sei importar {outro:?} (use itens, especies, base ou meus-itens)"),
+    }
+    Ok(())
+}
 
-    let itens: Vec<_> = arquivo
-        .itens
-        .into_iter()
-        .map(|i| nucleo::bolsa::catalogo::ItemCatalogo {
-            id: i.id,
-            nome: i.nome,
-            categoria: i.categoria,
-            raro: i.raro,
-            preco_npc: i.npc,
-            icone: i.icone,
+/// Uma rodada do comparador, com o relatório no stdout.
+async fn paridade(cfg: &Configuracao, url: Option<&str>) -> anyhow::Result<()> {
+    let url = url
+        .map(str::to_owned)
+        .or_else(|| cfg.paridade_url.clone())
+        .context("informe a URL do legado (argumento ou NEXUS_PARIDADE_URL)")?;
+    let estado = Estado::novo(cfg).context("NEXUS_DATABASE_URL inválida")?;
+    let comparador = bolsa::paridade::Comparador::novo(Arc::clone(&estado.bolsa), &url)?;
+    let relatorio = comparador.rodada().await.map_err(anyhow::Error::msg)?;
+    println!("{}", serde_json::to_string_pretty(&relatorio)?);
+    Ok(())
+}
+
+/// Comparador contínuo. Roda num container à parte, na rede do host (o firewall não deixa a
+/// rede do Docker chegar na porta do legado), e grava cada rodada em `nexus.paridade`. A API
+/// publica a última rodada em /metrics.
+async fn paridade_continua(cfg: Configuracao) -> anyhow::Result<()> {
+    telemetria::iniciar(cfg.log_formato).context("não consegui iniciar os logs")?;
+    let url = cfg
+        .paridade_url
+        .clone()
+        .context("NEXUS_PARIDADE_URL é obrigatória para o comparador")?;
+    let ciclo = Duration::from_secs(cfg.paridade_ciclo_s.max(60));
+    let estado = Estado::novo(&cfg).context("NEXUS_DATABASE_URL inválida")?;
+    let comparador = bolsa::paridade::Comparador::novo(Arc::clone(&estado.bolsa), &url)?;
+    tracing::info!(%url, ciclo_s = ciclo.as_secs(), "comparador de paridade iniciado");
+    let parar = desligamento::sinal_de_parada();
+    tokio::pin!(parar);
+    loop {
+        match comparador.rodada().await {
+            Ok(rel) => {
+                rel.iter().for_each(|(rota, r)| {
+                    tracing::info!(rota, comparados = r.comparados, iguais = r.iguais,
+                        so_legado = r.so_legado, so_nexus = r.so_nexus, exemplos = ?r.exemplos, "paridade");
+                });
+                if let Err(erro) =
+                    persistencia::paridade::gravar(&estado.db, &bolsa::paridade::linhas(&rel)).await
+                {
+                    tracing::warn!(%erro, "não consegui gravar a rodada de paridade");
+                }
+            }
+            Err(erro) => tracing::warn!(%erro, "rodada de paridade falhou"),
+        }
+        tokio::select! {
+            () = &mut parar => break,
+            () = tokio::time::sleep(ciclo) => {}
+        }
+    }
+    tracing::info!("comparador encerrado");
+    Ok(())
+}
+
+/// Diagnóstico do precificador: lê `{ fichas: [{ id, ficha }] }` do stdin e devolve o valor
+/// justo de cada uma no instante dado, para comparar com o precificador do legado.
+async fn avaliar_fichas(cfg: &Configuracao, agora: &str) -> anyhow::Result<()> {
+    use nucleo::precificador::ficha::Ficha;
+    let agora: i64 = agora.parse().context("agora_ms inválido")?;
+    let entrada: serde_json::Value =
+        serde_json::from_str(&std::io::read_to_string(std::io::stdin())?)?;
+    let estado = Estado::novo(cfg).context("NEXUS_DATABASE_URL inválida")?;
+    let s = estado
+        .bolsa
+        .snapshot_em(agora)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let avaliador = s.mercado.avaliador();
+    let saida: Vec<serde_json::Value> = entrada["fichas"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .map(|x| {
+            let res = avaliador.avaliar(&Ficha::de_json(&x["ficha"]), agora).map(|v| {
+                let e = &v.estimativa;
+                serde_json::json!({
+                    "low": e.low, "median": e.median, "high": e.high, "mercado": e.mercado_total,
+                    "familia": e.familia_total, "percent": e.confianca.percent,
+                    "chance": e.confianca.chance, "lowest": e.confianca.lowest, "pve": v.pve,
+                    "nivel": v.nivel, "familiaNome": v.familia_nome, "faltam": v.faltam_adicionais,
+                })
+            });
+            serde_json::json!({ "id": x["id"], "res": res })
         })
         .collect();
-
-    let estado = Estado::novo(cfg).context("NEXUS_DATABASE_URL inválida")?;
-    let gravados = persistencia::PgRepoMercado::novo(estado.db)
-        .gravar_catalogo(&itens)
-        .await
-        .context("falha ao gravar o catálogo")?;
-    println!("catálogo importado: {gravados} itens");
+    println!("{}", serde_json::to_string(&saida)?);
     Ok(())
+}
+
+/// Marca inativas as ofertas expiradas ou não vistas há 6 h (`limparOfertas` do legado).
+/// Só roda com a escrita da bolsa ligada.
+fn iniciar_limpeza_ofertas(estado: Estado, parar: CancellationToken) {
+    use nucleo::bolsa::ingestao::RepoIngestao;
+    tokio::spawn(async move {
+        let mut espera = Duration::from_secs(30);
+        loop {
+            tokio::select! {
+                () = parar.cancelled() => break,
+                () = tokio::time::sleep(espera) => {}
+            }
+            espera = Duration::from_secs(5 * 60);
+            match estado.bolsa.repo.limpar_ofertas(bolsa::agora_ms()).await {
+                Ok(n) if n > 0 => tracing::info!(n, "ofertas marcadas inativas"),
+                Ok(_) => {}
+                Err(erro) => tracing::warn!(%erro, "limpeza de ofertas falhou"),
+            }
+        }
+    });
 }
 
 /// Faz um GET mínimo em /health/ready. A imagem final não tem curl nem shell,

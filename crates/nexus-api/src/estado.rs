@@ -3,20 +3,25 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use persistencia::PgRepoMercado;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
-use persistencia::PgRepoMercado;
-
 use crate::bolsa::ServicoBolsa;
 use crate::configuracao::Configuracao;
+use crate::limite::Limitador;
 
-/// Clonar é barato: o `PgPool` é um ponteiro com contagem de referência (`Arc`) por dentro.
-/// Cada rota recebe sua cópia, e todas apontam para o mesmo pool.
+/// Clonar é barato: tudo aqui é `Arc` (ou tem um por dentro, como o `PgPool`). Cada rota
+/// recebe sua cópia, e todas apontam para os mesmos dados.
 #[derive(Clone)]
 pub struct Estado {
     pub db: PgPool,
     pub bolsa: Arc<ServicoBolsa<PgRepoMercado>>,
+    pub escrita_bolsa: bool,
+    pub limitador: Arc<Limitador>,
+    pub origens_cors: Arc<Vec<String>>,
+    /// Serializa as gravações do inventário (ler, aplicar, gravar).
+    pub meus_itens_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Estado {
@@ -27,11 +32,24 @@ impl Estado {
             .max_connections(5)
             .acquire_timeout(Duration::from_secs(2))
             .connect_lazy(cfg.database_url.expor())?;
-        Ok(Self::com_pool(db))
+        Ok(Self {
+            escrita_bolsa: cfg.escrita_bolsa,
+            limitador: Arc::new(Limitador::novo(cfg.limite_rps, cfg.limite_rajada)),
+            origens_cors: Arc::new(cfg.origens_cors()),
+            ..Self::com_pool(db)
+        })
     }
 
+    /// Estado com valores padrão (escrita desligada, sem CORS).
     pub fn com_pool(db: PgPool) -> Self {
         let bolsa = Arc::new(ServicoBolsa::novo(PgRepoMercado::novo(db.clone())));
-        Self { db, bolsa }
+        Self {
+            db,
+            bolsa,
+            escrita_bolsa: false,
+            limitador: Arc::new(Limitador::novo(10.0, 40.0)),
+            origens_cors: Arc::new(Vec::new()),
+            meus_itens_lock: Arc::new(tokio::sync::Mutex::new(())),
+        }
     }
 }
