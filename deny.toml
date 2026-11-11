@@ -6,6 +6,12 @@ all-features = false
 [advisories]
 # Qualquer vulnerabilidade conhecida quebra o build.
 yanked = "deny"
+ignore = [
+    # astral-tokio-tar sem manutenção. Vem do testcontainers, usado só nos testes de
+    # integração (dev-dependency): não entra no binário nem na imagem. Revisar quando o
+    # testcontainers trocar de crate de tar.
+    { id = "RUSTSEC-2026-0440", reason = "só em dev-dependency (testcontainers); fora da imagem" },
+]
 
 [licenses]
 confidence-threshold = 0.9
