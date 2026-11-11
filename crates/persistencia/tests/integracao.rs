@@ -90,6 +90,40 @@ async fn bolsa_no_banco_de_teste() {
     coleta_completa_so_desativa_o_proprio_escopo(&repo, &db).await;
     resumo_e_inventario(&repo).await;
     leitura_monta_o_mercado(&repo, &db).await;
+    equipes_no_banco(&db).await;
+}
+
+/// Pokédex do motor e estado de equipes: ida e volta, com a ordem preservada.
+async fn equipes_no_banco(db: &PgPool) {
+    use persistencia::equipes;
+
+    let dex = json!([{"d": 9, "n": "B"}, {"d": 3, "n": "A"}]);
+    assert_eq!(equipes::importar_pokedex(db, &dex).await.unwrap(), 2);
+    assert_eq!(equipes::carregar_pokedex(db).await.unwrap(), dex);
+
+    let vazio = equipes::carregar_estado(db).await.unwrap();
+    assert!(vazio.bosses.is_empty() && vazio.contas.is_empty());
+
+    let mut e: nucleo::equipes::EstadoEquipes = serde_json::from_str(
+        r#"{"bosses":[{"key":"x"}],"bossesEm":5,"contas":{"zeta":{"trLv":1},"alfa":{"trLv":2}}}"#,
+    )
+    .unwrap();
+    assert_eq!(equipes::importar_estado(db, &e).await.unwrap(), 2);
+    assert_eq!(equipes::carregar_estado(db).await.unwrap(), e);
+
+    let corpo =
+        json!({"nick": "novo", "trLv": 3, "bosses": [{"key": "a"}, {"key": "b"}, {"key": "c"}]});
+    let (nick, _) = e.ingerir(&corpo, 99).unwrap();
+    equipes::gravar_ingest(db, &e, &nick).await.unwrap();
+    let lido = equipes::carregar_estado(db).await.unwrap();
+    assert_eq!(lido, e);
+    assert_eq!(
+        lido.contas
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .collect::<Vec<_>>(),
+        ["zeta", "alfa", "novo"]
+    );
 }
 
 async fn ingestao_de_ofertas_e_idempotente(repo: &PgRepoMercado, db: &PgPool) {
