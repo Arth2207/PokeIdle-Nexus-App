@@ -13,6 +13,7 @@ Cada decisão relevante fica registrada num ADR (Architecture Decision Record): 
 | [0007](0007-websocket-no-lugar-de-polling.md) | WebSocket no lugar do polling da fila de comandos | aceito |
 | [0008](0008-build-somente-no-ci.md) | Imagens compiladas só no CI | aceito |
 | [0009](0009-app-desktop-tauri-leptos.md) | App desktop em Tauri 2 com interface em Leptos | aceito |
+| [0010](0010-paridade-primeiro-melhorias-depois.md) | Paridade primeiro, melhorias atrás de uma flag | aceito |
 
 ## Modelo
 

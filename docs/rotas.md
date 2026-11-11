@@ -91,6 +91,7 @@ O detalhamento dessas rotas entra neste documento quando a fase 4 começar.
 
 | Método | Rota | Parâmetros | Resposta |
 |---|---|---|---|
+| POST | `/api/boss/tentativa` | `{ nick, boss, nivelBoss?, tiposBoss?, venceu, duracaoS, equipe, danoCausado?, danoRecebido?, eventos? }` | Grava uma tentativa de boss (escopo `relay` ou `escrita`, só com `NEXUS_ESCRITA_EQUIPES`) |
 | GET | `/api/bolsa/equipe-hibrida` | `boss`, `nick`, `moeda` | A equipe com os pokémon da conta, comprando só as vagas que faltam: slots com `origem` (`conta` ou `compra`), `custoCompra`, `custoComprarTudo` e `economia` |
 
 `GET /api/bolsa/equipe` ganhou campos novos (o contrato antigo continua igual): `exata` (a melhor equipe por dano pela busca exata, comparada com a da heurística, com `provado` e `distancia` até o ótimo), `curva` (fronteira custo × poder de equipes completas) e, com `orcamento=<gemas>`, `orcamento` (a melhor equipe até esse valor).

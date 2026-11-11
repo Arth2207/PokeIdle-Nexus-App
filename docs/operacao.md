@@ -136,6 +136,7 @@ Parte dos dados que a bolsa usa vive em arquivos no sistema legado. O subcomando
 | `importar equipes` | `data/equipes-estado.json` | `nexus.equipes_estado`, `nexus.equipes_conta` |
 | `importar wiki` | `data/POKEIDLE-wiki.txt` (seção "## Bosses") | `nexus.boss_wiki` |
 | `importar faltas` | `data/.bolsa-faltas.json` | `nexus.falta_coleta` |
+| `importar welcome` | último `welcome` do coletor (`data/mapa.db`, tabela `welcome_dump`) | `nexus.parametro` (`servidor.constantes`) |
 
 ```bash
 cd /opt/nexus-deploy
@@ -151,6 +152,12 @@ As rotas `POST /api/bolsa/ofertas`, `resumo-itens` e `meus-itens` e a limpeza pe
 ### Escrita de equipes
 
 `POST /api/equipes/ingest`, a gravação das faltas de coleta e o registro das sugestões de equipe (`nexus.equipe_sugestao`) só acontecem com `NEXUS_ESCRITA_EQUIPES=true`. Até o cutover da fase 2, quem recebe o relay é o legado, e o estado chega pela importação; o Nexus calcula as faltas, mas não as grava.
+
+### Melhorias e tokens por conta
+
+`NEXUS_MELHORIAS=true` liga o que diverge do legado de propósito ([ADR 0010](adr/0010-paridade-primeiro-melhorias-depois.md)): seleção exata nos perfis de equipe, chance de vitória, ordem de compra, preços típicos corrigidos e a tabela de tipos do servidor. Só no cutover da fase 2.
+
+`nexus-api token criar <nome> <escopos> <conta>` cria um token preso a uma conta: nas rotas de equipes ele só enxerga essa conta (pedir outra dá `403`). `nexus-api pokedex-divergencias` compara as duas pokédex do sistema.
 
 ### Modelos de combate
 
