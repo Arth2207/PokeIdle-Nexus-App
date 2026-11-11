@@ -9,12 +9,17 @@ publish.workspace = true
 anyhow = "1.0.104"
 axum = "0.8.9"
 config = { version = "0.15.27", default-features = false }
+contrato = { version = "0.1.0", path = "../contrato" }
 dotenvy = "0.15.7"
 getrandom = "0.4.3"
 hex = "0.4.3"
 metrics = "0.24.6"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
+moka = { version = "0.12.16", features = ["future"] }
+nucleo = { version = "0.1.0", path = "../nucleo" }
+persistencia = { version = "0.1.0", path = "../persistencia" }
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 sha2 = "0.11.1"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate"] }
 thiserror = "2.0.21"

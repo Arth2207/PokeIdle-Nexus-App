@@ -4,9 +4,11 @@
 //!   nexus-api                                  sobe o servidor
 //!   nexus-api migrar                           aplica as migrations pendentes
 //!   nexus-api token criar <nome> <escopos>     cria um token (escopos separados por vírgula)
+//!   nexus-api catalogo importar < itens.json   grava o catálogo de itens do jogo (lido do stdin)
 //!   nexus-api healthcheck                      checa o /health/ready local (usado pelo Docker)
 
 mod auth;
+mod bolsa;
 mod configuracao;
 mod desligamento;
 mod estado;
@@ -26,7 +28,8 @@ use crate::auth::Escopo;
 use crate::configuracao::Configuracao;
 use crate::estado::Estado;
 
-const USO: &str = "uso: nexus-api [migrar | token criar <nome> <escopos> | healthcheck]";
+const USO: &str =
+    "uso: nexus-api [migrar | token criar <nome> <escopos> | catalogo importar | healthcheck]";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -41,6 +44,7 @@ async fn main() -> anyhow::Result<()> {
         [] => servir(cfg).await,
         ["migrar"] => migrar(&cfg).await,
         ["token", "criar", nome, escopos] => criar_token(&cfg, nome, escopos).await,
+        ["catalogo", "importar"] => importar_catalogo(&cfg).await,
         ["healthcheck"] => healthcheck(&cfg).await,
         _ => bail!(USO),
     }
@@ -108,6 +112,55 @@ async fn criar_token(cfg: &Configuracao, nome: &str, escopos: &str) -> anyhow::R
 
     println!("token criado para {nome:?} com escopos {escopos:?}");
     println!("guarde agora, ele não será mostrado de novo:\n\n{token}\n");
+    Ok(())
+}
+
+/// Formato do `items-catalogo.json` do legado: `{ "t": ..., "itens": [{ id, nome, ... }] }`.
+#[derive(serde::Deserialize)]
+struct ArquivoCatalogo {
+    itens: Vec<ItemArquivo>,
+}
+
+#[derive(serde::Deserialize)]
+struct ItemArquivo {
+    id: i32,
+    nome: String,
+    categoria: Option<String>,
+    #[serde(default)]
+    raro: bool,
+    npc: Option<i64>,
+    icone: Option<String>,
+}
+
+async fn importar_catalogo(cfg: &Configuracao) -> anyhow::Result<()> {
+    // Leitura bloqueante do stdin: é um comando de linha, roda uma vez e sai.
+    let texto = std::io::read_to_string(std::io::stdin()).context("não consegui ler o stdin")?;
+    let arquivo: ArquivoCatalogo =
+        serde_json::from_str(&texto).context("JSON do catálogo inválido")?;
+    ensure!(
+        !arquivo.itens.is_empty(),
+        "o catálogo veio vazio; nada foi alterado"
+    );
+
+    let itens: Vec<_> = arquivo
+        .itens
+        .into_iter()
+        .map(|i| nucleo::bolsa::catalogo::ItemCatalogo {
+            id: i.id,
+            nome: i.nome,
+            categoria: i.categoria,
+            raro: i.raro,
+            preco_npc: i.npc,
+            icone: i.icone,
+        })
+        .collect();
+
+    let estado = Estado::novo(cfg).context("NEXUS_DATABASE_URL inválida")?;
+    let gravados = persistencia::PgRepoMercado::novo(estado.db)
+        .gravar_catalogo(&itens)
+        .await
+        .context("falha ao gravar o catálogo")?;
+    println!("catálogo importado: {gravados} itens");
     Ok(())
 }
 

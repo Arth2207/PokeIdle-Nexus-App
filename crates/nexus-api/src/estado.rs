@@ -1,10 +1,14 @@
 //! Estado compartilhado entre todas as rotas.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
+use persistencia::PgRepoMercado;
+
+use crate::bolsa::ServicoBolsa;
 use crate::configuracao::Configuracao;
 
 /// Clonar é barato: o `PgPool` é um ponteiro com contagem de referência (`Arc`) por dentro.
@@ -12,6 +16,7 @@ use crate::configuracao::Configuracao;
 #[derive(Clone)]
 pub struct Estado {
     pub db: PgPool,
+    pub bolsa: Arc<ServicoBolsa<PgRepoMercado>>,
 }
 
 impl Estado {
@@ -22,6 +27,11 @@ impl Estado {
             .max_connections(5)
             .acquire_timeout(Duration::from_secs(2))
             .connect_lazy(cfg.database_url.expor())?;
-        Ok(Self { db })
+        Ok(Self::com_pool(db))
+    }
+
+    pub fn com_pool(db: PgPool) -> Self {
+        let bolsa = Arc::new(ServicoBolsa::novo(PgRepoMercado::novo(db.clone())));
+        Self { db, bolsa }
     }
 }

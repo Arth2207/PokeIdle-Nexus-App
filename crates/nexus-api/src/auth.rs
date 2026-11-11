@@ -136,6 +136,28 @@ pub async fn exigir_token(State(estado): State<Estado>, mut req: Request, next: 
     }
 }
 
+/// Middleware: exige que o cliente (já autenticado por [`exigir_token`]) tenha ao menos um
+/// dos escopos pedidos. `admin` passa em qualquer rota.
+///
+/// Os escopos chegam como `&'static [Escopo]`: uma lista fixa, escrita no código ao montar o
+/// roteador, que vive o programa inteiro. Por isso o middleware não precisa copiá-la.
+pub async fn exigir_escopo(escopos: &'static [Escopo], req: Request, next: Next) -> Response {
+    let permitido = req.extensions().get::<Cliente>().is_some_and(|cliente| {
+        cliente
+            .escopos
+            .iter()
+            .any(|e| *e == Escopo::Admin || escopos.contains(e))
+    });
+    if permitido {
+        next.run(req).await
+    } else {
+        erro_json(
+            StatusCode::FORBIDDEN,
+            "o token não tem permissão para esta rota",
+        )
+    }
+}
+
 fn extrair_bearer(req: &Request) -> Option<&str> {
     let valor = req.headers().get(header::AUTHORIZATION)?.to_str().ok()?;
     let token = valor.strip_prefix("Bearer ")?.trim();

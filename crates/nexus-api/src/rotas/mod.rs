@@ -1,5 +1,6 @@
 //! Montagem do roteador HTTP.
 
+mod bolsa;
 mod saude;
 
 use axum::middleware;
@@ -9,19 +10,28 @@ use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetReques
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
-use crate::auth::{self, Cliente};
+use crate::auth::{self, Cliente, Escopo};
 use crate::estado::Estado;
 use crate::metricas;
 
 pub fn router(estado: Estado) -> Router {
-    // Rotas que exigem token. O `route_layer` aplica o middleware só a elas.
-    let protegidas =
-        Router::new()
-            .route("/api/eu", get(eu))
-            .route_layer(middleware::from_fn_with_state(
-                estado.clone(),
-                auth::exigir_token,
-            ));
+    // Leitura da bolsa: exige o escopo `leitura`. O middleware é uma closure que fixa a
+    // lista de escopos e repassa a requisição para `exigir_escopo`.
+    let bolsa_leitura = Router::new()
+        .route("/api/bolsa/serie", get(bolsa::serie))
+        .route_layer(middleware::from_fn(|req, next| {
+            auth::exigir_escopo(&[Escopo::Leitura], req, next)
+        }));
+
+    // Rotas que exigem token. O `route_layer` aplica o middleware só a elas. Como ele é
+    // adicionado por último, roda antes do de escopo: primeiro "quem é", depois "pode?".
+    let protegidas = Router::new()
+        .route("/api/eu", get(eu))
+        .merge(bolsa_leitura)
+        .route_layer(middleware::from_fn_with_state(
+            estado.clone(),
+            auth::exigir_token,
+        ));
 
     // Uma linha de log por requisição: método, caminho, status, latência e request id.
     let log_requisicoes = TraceLayer::new_for_http()
@@ -75,7 +85,7 @@ mod testes {
             .acquire_timeout(Duration::from_millis(300))
             .connect_lazy("postgres://ninguem:nada@127.0.0.1:1/inexistente")
             .unwrap();
-        Estado { db }
+        Estado::com_pool(db)
     }
 
     async fn status_de(req: Request<Body>) -> StatusCode {
@@ -131,6 +141,14 @@ mod testes {
     async fn token_valido_no_formato_mas_banco_fora_da_503() {
         let req = get_com_token("/api/eu", "nxs_0000");
         assert_eq!(status_de(req).await, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn bolsa_sem_token_da_401() {
+        assert_eq!(
+            status_de(get("/api/bolsa/serie?id=i:1:orb")).await,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[tokio::test]
