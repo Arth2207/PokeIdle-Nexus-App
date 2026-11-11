@@ -94,6 +94,16 @@ A busca exata é rápida porque o teto por carta poda quase tudo: a equipe ótim
 
 `ferramentas/carga/equipes.js` (k6) mede as rotas de equipes e da bolsa. Com `OTIMIZADOR=1`, mantém cálculos de equipe rodando em paralelo e falha se o p95 das leituras passar de 50 ms. No legado, que é produção, a medição é leve (2 req/s), só para ter o p95 de referência.
 
+Resultado na VPS (rotas de equipes, alvos de coleta e mercado):
+
+| Cenário | p50 | p95 | p99 |
+|---|---|---|---|
+| Legado, 2 req/s | 1,3 ms | 8,9 ms | 32,8 ms |
+| Nexus, 2 req/s | 2,5 ms | 6,8 ms | 10,1 ms |
+| Nexus, 8 req/s com o otimizador rodando em paralelo | 2,9 ms | 7,3 ms | 17,1 ms |
+
+O Nexus passa pelo Nginx e valida o token no banco a cada requisição, por isso a mediana fica um pouco acima; nas caudas (p95, p99) ele é mais rápido e mais estável.
+
 Com `k6`, nas duas rotas pesadas (`/api/bolsa/equipe` e `/api/equipes/plano`), primeiro contra o Node e depois contra o Nexus, na mesma máquina e com os mesmos dados.
 
 São medidos p50, p95, p99 e throughput máximo antes de a latência degradar. O resultado entra neste documento como a justificativa objetiva da migração.

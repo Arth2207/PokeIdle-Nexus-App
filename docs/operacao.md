@@ -136,6 +136,7 @@ Parte dos dados que a bolsa usa vive em arquivos no sistema legado. O subcomando
 | `importar equipes` | `data/equipes-estado.json` | `nexus.equipes_estado`, `nexus.equipes_conta` |
 | `importar wiki` | `data/POKEIDLE-wiki.txt` (seção "## Bosses") | `nexus.boss_wiki` |
 | `importar faltas` | `data/.bolsa-faltas.json` | `nexus.falta_coleta` |
+| `importar raros` | `data/raros-estado.json` (só os nomes por id) | `nexus.parametro` (`raros.nomes`) |
 | `importar welcome` | último `welcome` do coletor (`data/mapa.db`, tabela `welcome_dump`) | `nexus.parametro` (`servidor.constantes`) |
 
 ```bash
