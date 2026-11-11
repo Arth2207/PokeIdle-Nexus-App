@@ -337,12 +337,14 @@ Todas vêm do repositório público do PokeAPI (`PokeAPI/sprites`), baixadas pel
 
 | Uso | Variante | Observação |
 |---|---|---|
-| Destaques (Visão geral, Bestiário, Combate) | `other/official-artwork/` (arte oficial, ~475 px) | padrão; a mesma usada no dossiê, que converte o id das formas especiais pela função `arteD()`, a ser portada |
-| Destaques, opção em Aparência | `other/home/` (render 3D, ~512 px, com shiny) | para quem prefere volume |
+| Destaques (Visão geral, Bestiário, Combate) | `other/home/` (render 3D, ~512 px, com shiny) | padrão: é a única fonte com volume e sombreamento, o que sustenta o efeito 2.5D |
+| Destaques, opção em Aparência | `other/official-artwork/` (arte oficial, ~475 px) | a mesma do dossiê, que converte o id das formas especiais pela função `arteD()`, a ser portada |
 | Listas e tela do Jogo | `other/showdown/` (GIF animado) | movimento onde ajuda a identificar |
 | Ícones pequenos | sprite padrão (96 px) | só em tamanhos ≤ 48 px |
 
 O efeito 2.5D é aplicado pelo app sobre a imagem de fundo transparente: sombra projetada no card, luz de contorno na cor do bioma (e do tema noturno), parallax com o mouse e uma respiração lenta. Tudo isso é desligado no modo desempenho.
+
+**Evolução futura: retrato pintado.** O visual dos mockups (pelagem, luz e pose integradas à cena) não sai de nenhuma imagem pronta. Depois da fase A3, o app pode ganhar um botão "gerar retrato": um modelo de imagem aberto, rodando numa GPU alugada, transforma a arte oficial num retrato pintado no estilo do app, só para as criaturas que o usuário de fato usa, com aprovação manual de cada retrato e cache local. Por serem derivados da arte oficial, esses retratos são de uso estritamente pessoal e nunca entram no repositório nem em qualquer distribuição.
 
 ## Componentes padronizados
 
