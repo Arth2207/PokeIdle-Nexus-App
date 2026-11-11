@@ -132,6 +132,7 @@ Elementos globais, presentes em toda tela:
 - **Central de alertas**: estoque baixo, shiny encontrado, boss liberado, automação falhou.
 - **Modo desempenho**: desliga paralaxe, animações e o 3D.
 - **Fundo**: a paisagem do bioma da caçada da conta ativa.
+- **Tema claro e noturno**: o noturno mostra a mesma paisagem à noite, com flora bioluminescente, e painéis de vidro fumê. Pode seguir o horário local ou ser fixado. As cores de gráfico do tema noturno são passos próprios das mesmas paletas, validados contra o fundo escuro, não uma inversão do tema claro.
 
 ## Mapa do legado para o novo
 
