@@ -103,7 +103,10 @@ pub struct Comparador<R> {
     url: String,
     http: reqwest::Client,
     rodada: std::sync::atomic::AtomicUsize,
-    equipes: Option<Arc<crate::equipes::ServicoEquipes>>,
+    estado: Option<crate::estado::Estado>,
+    /// Compara também `/api/bolsa/equipe` e `/equipe-propria`, que disparam o cálculo pesado
+    /// do legado.
+    equipe_bolsa: bool,
 }
 
 /// `R: RepoMercado + RepoIngestao`: o comparador lê o mercado e o inventário, então o
@@ -117,14 +120,88 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
                 .timeout(Duration::from_secs(60))
                 .build()?,
             rodada: Default::default(),
-            equipes: None,
+            estado: None,
+            equipe_bolsa: false,
         })
     }
 
-    /// Liga a comparação das rotas `/api/equipes/*`.
-    pub fn com_equipes(mut self, equipes: Arc<crate::equipes::ServicoEquipes>) -> Self {
-        self.equipes = Some(equipes);
+    /// Liga a comparação das rotas de equipes (`/api/equipes/*` e as de equipe da bolsa).
+    pub fn com_equipes(mut self, estado: crate::estado::Estado, equipe_bolsa: bool) -> Self {
+        self.estado = Some(estado);
+        self.equipe_bolsa = equipe_bolsa;
         self
+    }
+
+    /// `/api/bolsa/equipe-propria` (conta padrão, próximo boss) e `/api/bolsa/alvos-coleta`:
+    /// comparação normal. `/api/bolsa/equipe`: por qualidade, porque o otimizador é
+    /// heurístico e duas buscas corretas podem achar equipes diferentes.
+    async fn comparar_equipe_bolsa(
+        &self,
+        estado: &crate::estado::Estado,
+        rel: &mut Relatorio,
+    ) -> Result<(), String> {
+        let (_, l) = self.legado("/api/bolsa/alvos-coleta").await?;
+        let n = estado
+            .equipe_bolsa
+            .alvos(estado, None, None)
+            .await
+            .map_err(|e| e.to_string())?;
+        rel.entry("alvos-coleta")
+            .or_default()
+            .registrar("padrão", diferenca(&l, &n, ""));
+
+        if !self.equipe_bolsa {
+            return Ok(());
+        }
+        let (status, l) = self.legado("/api/bolsa/equipe-propria").await?;
+        let n = estado
+            .equipe_bolsa
+            .propria(estado, None, None)
+            .await
+            .map_err(|e| e.to_string())?;
+        let ns = if n.get("erro").is_some() { 404 } else { 200 };
+        let diff = if status == ns {
+            diferenca(&l, &n, "")
+        } else {
+            Some(format!("status {status} ≠ {ns}"))
+        };
+        rel.entry("equipe-propria")
+            .or_default()
+            .registrar("padrão", diff);
+
+        // O legado responde 202 até terminar: espera até 2 minutos.
+        let mut l = None;
+        for _ in 0..24 {
+            let (status, v) = self.legado("/api/bolsa/equipe").await?;
+            if status != 202 {
+                l = Some(v);
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+        let Some(l) = l else {
+            rel.entry("equipe")
+                .or_default()
+                .exemplos
+                .push("o legado não terminou o cálculo em 2 min".into());
+            return Ok(());
+        };
+        let pedido = crate::equipes::bolsa::Pedido {
+            boss: None,
+            moeda: "orb".into(),
+            nick: None,
+            idade_min: 90.0,
+            n: 5,
+        };
+        let job = estado.equipe_bolsa.trabalho(estado, pedido);
+        let n = match job.esperar(Duration::from_secs(120)).await {
+            crate::equipes::bolsa::Situacao::Pronto(v) => v,
+            _ => return Err("o cálculo de equipe do Nexus não terminou".into()),
+        };
+        rel.entry("equipe")
+            .or_default()
+            .registrar("padrão", qualidade_equipe(&l, &n));
+        Ok(())
     }
 
     /// `/api/equipes/bosses` e `/plano` (o próximo boss da conta padrão e, em rodízio, três
@@ -384,9 +461,15 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
         });
         r.so_nexus = ni.keys().filter(|k| !li.contains_key(*k)).count() as u64;
 
-        if let Some(eq) = &self.equipes {
-            if let Err(e) = self.comparar_equipes(eq, &mut rel).await {
+        if let Some(estado) = &self.estado {
+            if let Err(e) = self.comparar_equipes(&estado.equipes, &mut rel).await {
                 rel.entry("equipes.bosses")
+                    .or_default()
+                    .exemplos
+                    .push(format!("falhou: {e}"));
+            }
+            if let Err(e) = self.comparar_equipe_bolsa(estado, &mut rel).await {
+                rel.entry("equipe")
                     .or_default()
                     .exemplos
                     .push(format!("falhou: {e}"));
@@ -454,6 +537,75 @@ pub fn linhas(rel: &Relatorio) -> Vec<persistencia::paridade::Linha> {
             exemplos: r.exemplos.clone(),
         })
         .collect()
+}
+
+/// Paridade por qualidade de `/api/bolsa/equipe`: mesmo boss e mesmas candidatas; em cada
+/// perfil, dano do Nexus ≥ 99% do Node, restrições respeitadas e custo dentro de ±5%.
+fn qualidade_equipe(l: &Value, n: &Value) -> Option<String> {
+    for campo in ["/boss/key", "/candidatas", "/ofertasAnalisadas"] {
+        if l.pointer(campo) != n.pointer(campo) {
+            return Some(format!(
+                "{campo}: {:?} ≠ {:?}",
+                l.pointer(campo),
+                n.pointer(campo)
+            ));
+        }
+    }
+    let num = |v: &Value, p: &str| v.pointer(p).and_then(Value::as_f64);
+    for perfil in ["eco", "eq", "max"] {
+        let base = format!("/perfis/{perfil}");
+        let indisp = |v: &Value| {
+            v.pointer(&format!("{base}/indisponivel"))
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+        };
+        match (indisp(l), indisp(n)) {
+            (true, true) => continue,
+            (false, true) => return Some(format!("{perfil}: só o legado achou equipe")),
+            (true, false) => continue,
+            (false, false) => {}
+        }
+        let (dl, dn) = (
+            num(l, &format!("{base}/poder")),
+            num(n, &format!("{base}/poder")),
+        );
+        if let (Some(dl), Some(dn)) = (dl, dn) {
+            if dn < 0.99 * dl {
+                return Some(format!("{perfil}: poder {dn:.3} < 99% de {dl:.3}"));
+            }
+        }
+        let restr = n
+            .pointer(&format!("{base}/restr"))
+            .and_then(Value::as_object);
+        if let Some(r) = restr {
+            let relaxadas: Vec<&str> = r
+                .get("relaxadas")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            for (k, nome) in [
+                ("piso", "piso"),
+                ("heroi", "herói"),
+                ("estresse", "estresse"),
+            ] {
+                if r.get(k) == Some(&Value::Bool(false))
+                    && !relaxadas.contains(&nome)
+                    && perfil != "max"
+                {
+                    return Some(format!("{perfil}: restrição {k} violada"));
+                }
+            }
+        }
+        if let (Some(cl), Some(cn)) = (
+            num(l, &format!("{base}/total")),
+            num(n, &format!("{base}/total")),
+        ) {
+            if cl > 0.0 && (cn - cl).abs() > 0.05 * cl {
+                return Some(format!("{perfil}: custo {cn} fora de ±5% de {cl}"));
+            }
+        }
+    }
+    None
 }
 
 fn comparar_ofertas(r: &mut ResultadoRota, legado: &Value, nexus: &Value) {

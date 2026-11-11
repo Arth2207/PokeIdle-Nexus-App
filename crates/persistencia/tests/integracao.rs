@@ -91,6 +91,38 @@ async fn bolsa_no_banco_de_teste() {
     resumo_e_inventario(&repo).await;
     leitura_monta_o_mercado(&repo, &db).await;
     equipes_no_banco(&db).await;
+    equipe_da_bolsa_no_banco(&db).await;
+}
+
+/// Wiki de bosses, faltas, sugestões e preços típicos.
+async fn equipe_da_bolsa_no_banco(db: &PgPool) {
+    use nucleo::bolsa_equipe::{parse_wiki, Faltas};
+    use persistencia::bolsa_equipe as be;
+
+    let wiki = parse_wiki("## Bosses\n| Kanto · Aves | Articuno | 300 | Fragmento de Z-Move (0,5%) · TM AoE Piece (0,5%) |\n## Fim");
+    assert_eq!(be::importar_wiki(db, &wiki).await.unwrap(), 1);
+    assert_eq!(be::carregar_wiki(db).await.unwrap(), wiki);
+
+    let mut f = Faltas::default();
+    f.0.insert(
+        "articuno|economica".into(),
+        json!({"boss": "articuno", "nivel": 2, "expira": 10}),
+    );
+    be::gravar_faltas(db, &f).await.unwrap();
+    assert_eq!(be::carregar_faltas(db).await.unwrap(), f);
+
+    be::registrar_sugestao(db, 1, "articuno", &json!({"ok": true}))
+        .await
+        .unwrap();
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM nexus.equipe_sugestao")
+        .fetch_one(db)
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+
+    // Preços típicos: só roda a consulta contra o schema do legado (o conteúdo vem das
+    // vendas de teste, que podem não ter pokémon na faixa).
+    be::precos_tipicos(db, "orb", 1.0, 1e9, 0).await.unwrap();
 }
 
 /// Pokédex do motor e estado de equipes: ida e volta, com a ordem preservada.

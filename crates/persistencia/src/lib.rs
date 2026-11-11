@@ -4,6 +4,7 @@
 //! lidas. O Nexus escreve apenas no schema `nexus`, exceto pelas rotas de ingestão da bolsa,
 //! que ficam desligadas em produção até o cutover.
 
+pub mod bolsa_equipe;
 pub mod equipes;
 pub mod importacao;
 pub mod ingestao;

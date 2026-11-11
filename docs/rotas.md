@@ -30,7 +30,7 @@ Convenções do legado que mantemos:
 
 No Nexus, as rotas de leitura (`GET`) exigem o escopo `leitura`, e as de escrita (`POST`) exigem `relay` ou `escrita`. As de escrita respondem `503` enquanto `NEXUS_ESCRITA_BOLSA` estiver desligada (veja [operação](operacao.md#escrita-da-bolsa)). Ticker inexistente ou id mal formado dá `404` com `{ "erro": "ticker não encontrado" }`, como no legado.
 
-`equipe`, `equipe-propria` e `alvos-coleta` ficam para a fase 2: dependem do motor de combate. Por isso o `GET /api/bolsa/dicas` do Nexus ainda não dispara o cálculo de equipe em segundo plano.
+`equipe`, `equipe-propria` e `alvos-coleta` chegaram na fase 2. O cálculo roda num pool de CPU separado (`NEXUS_CPU_THREADS`): `GET /api/bolsa/equipe` responde direto quando termina em até 1,5 s, senão `202` com o resultado anterior e o progresso, como no legado. Pedidos iguais esperam o mesmo cálculo, e quando o painel troca de boss o cálculo antigo da mesma conta é cancelado. O `GET /api/bolsa/dicas` volta a aquecer o cálculo da equipe padrão.
 
 Comportamentos que precisam ser preservados:
 

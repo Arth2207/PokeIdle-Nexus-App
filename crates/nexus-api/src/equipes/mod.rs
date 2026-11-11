@@ -80,3 +80,5 @@ impl ServicoEquipes {
         Ok(())
     }
 }
+
+pub mod bolsa;

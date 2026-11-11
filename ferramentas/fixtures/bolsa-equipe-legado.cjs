@@ -42,4 +42,20 @@ for (let i = 0; i < 60; i++) {
   const bossHp = sorteia([0, Math.round(rnd() * 1e7)]);
   lucros.push({ perfil, bossHp, boss, tabela: tab, saida: LUCRO.lucroPerfil(perfil, bossHp, boss, pm) });
 }
-process.stdout.write(JSON.stringify({ secao, wiki, listas, lucros }));
+// Alvos de coleta com o estado real (nicks trocados só na memória deste processo).
+const EST = require(path.join(raiz, 'equipes-estado.js'));
+const E = EST.get(), contas = {};
+Object.values(E.contas).forEach((c, i) => { contas[`conta-${i + 1}`] = c; });
+E.contas = contas;
+const alvos = [];
+for (let i = 0; i < 4; i++) {
+  const precos = new Map();
+  for (const sp of C.DEX) if (rnd() < 0.5) precos.set(sp.d, Math.round(50 + rnd() * 5000));
+  const lista = C.listaBosses(E.bosses);
+  const faltas = i === 0 ? [] : lista.slice(0, 3).map(b => ({ boss: b.key, perfil: sorteia(['equilibrada', 'economica']), extras: sorteia([5, 10, 20]) }));
+  const max = sorteia([null, '10', '60', 'x']);
+  const saida = ALVOS.alvosColeta({ nick: null, max, precos, versaoPrecos: i, faltas, faltasSig: String(i) });
+  alvos.push({ max, precos: [...precos], faltas, saida });
+}
+const estado = { bosses: E.bosses, bossesEm: E.bossesEm, contas: Object.fromEntries(Object.entries(contas).map(([k, c]) => [k, { trLv: c.trLv }])) };
+process.stdout.write(JSON.stringify({ secao, wiki, listas, lucros, estado, alvos }));

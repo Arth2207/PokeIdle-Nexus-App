@@ -9,20 +9,25 @@
 //! | `NEXUS_LOG_FORMATO`   | não         | `texto`     |
 //! | `NEXUS_ESCRITA_BOLSA` | não         | `false`     |
 //! | `NEXUS_ESCRITA_EQUIPES` | não       | `false`     |
+//! | `NEXUS_CPU_THREADS`   | não         | `2`         |
 //! | `NEXUS_CORS_ORIGENS`  | não         | (nenhuma)   |
 //! | `NEXUS_LIMITE_RPS`    | não         | `10`        |
 //! | `NEXUS_LIMITE_RAJADA` | não         | `40`        |
 //! | `NEXUS_BOLSA_CICLO_S` | não         | `180`       |
 //! | `NEXUS_PARIDADE_URL`  | não         | (desligado) |
 //! | `NEXUS_PARIDADE_CICLO_S` | não      | `600`       |
+//! | `NEXUS_PARIDADE_EQUIPE` | não       | `false`     |
 //!
 //! - `NEXUS_ESCRITA_BOLSA`: liga as rotas de ingestão da bolsa e a limpeza de ofertas. Elas
 //!   gravam em tabelas do legado; só ligar no cutover da fase 1.
 //! - `NEXUS_ESCRITA_EQUIPES`: liga o `POST /api/equipes/ingest`. Até o cutover da fase 2 o
 //!   relay manda para o legado, e o estado chega pela importação.
+//! - `NEXUS_CPU_THREADS`: tamanho do pool de CPU do cálculo de equipes (fora do tokio).
 //! - `NEXUS_CORS_ORIGENS`: origens do painel web, separadas por vírgula.
 //! - `NEXUS_LIMITE_*`: rate limit por token (requisições por segundo e rajada).
 //! - `NEXUS_PARIDADE_URL`: URL do legado (ex.: `http://host:8181`). Liga o comparador.
+//! - `NEXUS_PARIDADE_EQUIPE`: o comparador também chama `/api/bolsa/equipe` e
+//!   `/equipe-propria` no legado, o que dispara o cálculo pesado dele. Desligado por padrão.
 //!
 //! \* Ou `NEXUS_DATABASE_URL_FILE` com o caminho de um arquivo que contém a URL
 //! (é assim que o Docker entrega secrets, em `/run/secrets/`).
@@ -48,6 +53,10 @@ pub struct Configuracao {
     #[serde(default)]
     pub escrita_equipes: bool,
     #[serde(default)]
+    pub paridade_equipe: bool,
+    #[serde(default = "cpu_threads_padrao")]
+    pub cpu_threads: usize,
+    #[serde(default)]
     pub cors_origens: String,
     #[serde(default = "limite_rps_padrao")]
     pub limite_rps: f64,
@@ -71,6 +80,10 @@ impl Configuracao {
             .map(str::to_owned)
             .collect()
     }
+}
+
+fn cpu_threads_padrao() -> usize {
+    2
 }
 
 fn limite_rps_padrao() -> f64 {

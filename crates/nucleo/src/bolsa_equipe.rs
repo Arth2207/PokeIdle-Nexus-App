@@ -1510,6 +1510,173 @@ pub fn equipe_propria(e: &EntradaPropria<'_>) -> Result<Value, &'static str> {
     Ok(saida)
 }
 
+// ---------- alvos de coleta (rota) ----------
+
+const MAX_PADRAO: f64 = 40.0;
+const MAX_TOTAL: f64 = 60.0;
+
+/// `contexto(nick)`: nível de treinador, bosses alcançáveis e a faixa de nível dos preços.
+pub fn contexto_alvos(
+    motor: &MotorEquipes,
+    estado: &EstadoEquipes,
+    nick: Option<&str>,
+) -> (f64, Vec<BossLista>, f64, f64) {
+    let mut tr = 0.0;
+    if let Some(n) = nick.filter(|n| !n.is_empty()) {
+        tr = ou(
+            js::mais(estado.conta(Some(n)).and_then(|c| c.get("trLv"))),
+            0.0,
+        );
+    }
+    if tr == 0.0 {
+        for (_, c) in &estado.contas {
+            tr = otimizador_max(tr, ou(js::mais(c.get("trLv")), 0.0));
+        }
+    }
+    let mut lista: Vec<BossLista> = motor
+        .lista_bosses(&estado.bosses)
+        .into_iter()
+        .filter(|b| b.team_level != 0.0 && b.team_level <= tr)
+        .collect();
+    lista.sort_by(|a, b| a.team_level.total_cmp(&b.team_level));
+    let lo = lista
+        .first()
+        .map_or(1.0, |b| js::round(0.7 * b.team_level).max(1.0));
+    let hi = lista.last().map_or(1.0, |b| js::round(2.5 * b.team_level));
+    (tr, lista, lo, hi)
+}
+
+fn otimizador_max(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.max(b)
+    }
+}
+
+/// `alvosColeta`: as espécies úteis nos bosses que a conta alcança, por perfil.
+pub fn alvos_coleta(
+    motor: &MotorEquipes,
+    estado: &EstadoEquipes,
+    nick: Option<&str>,
+    max: Option<&str>,
+    precos: &HashMap<i64, f64>,
+    faltas: &[(String, String, usize)],
+    agora: i64,
+) -> Value {
+    let pedido = js::mais(max.map(Value::from).as_ref());
+    let max = MAX_TOTAL.min(ou(pedido, MAX_PADRAO)).max(1.0);
+    let (tr, lista, _, _) = contexto_alvos(motor, estado, nick);
+    let ex: HashMap<String, usize> = faltas
+        .iter()
+        .map(|(b, p, n)| (format!("{b}|{p}"), *n))
+        .collect();
+    let rankings: Vec<(&BossLista, [Vec<AlvoEspecie>; 3])> = lista
+        .iter()
+        .map(|b| {
+            let extras =
+                PERFIS_LISTA.map(|p| ex.get(&format!("{}|{p}", b.key)).copied().unwrap_or(0));
+            let l = avaliar_especies(motor, b).map_or_else(
+                || [Vec::new(), Vec::new(), Vec::new()],
+                |a| listas_do_boss(&a, precos, extras),
+            );
+            (b, l)
+        })
+        .collect();
+    // (speciesId, alvo) na ordem de entrada.
+    let mut alvos: Vec<(i64, Map<String, Value>)> = Vec::new();
+    let mut add = |boss: &BossLista, e: &AlvoEspecie, perfil: &str, extra: bool| {
+        let lo = js::round(0.7 * boss.team_level).max(1.0);
+        let hi = js::round(2.5 * boss.team_level);
+        if let Some((_, a)) = alvos.iter_mut().find(|(id, _)| *id == e.species_id) {
+            let nmin = js::mais(a.get("nivelMin")).min(lo);
+            let nmax = js::mais(a.get("nivelMax")).max(hi);
+            a.insert("nivelMin".into(), js::json_num(nmin));
+            a.insert("nivelMax".into(), js::json_num(nmax));
+            for (campo, valor) in [("bosses", boss.nome.as_str()), ("perfis", perfil)] {
+                if let Some(Value::Array(v)) = a.get_mut(campo) {
+                    if !v.iter().any(|x| x.as_str() == Some(valor)) {
+                        v.push(Value::from(valor));
+                    }
+                }
+            }
+            let ja = a.get("extra").and_then(Value::as_bool).unwrap_or(false);
+            a.insert("extra".into(), Value::Bool(ja && extra));
+        } else if (alvos.len() as f64) < max {
+            let mut a = Map::new();
+            a.insert("speciesId".into(), Value::from(e.species_id));
+            a.insert("nome".into(), Value::from(e.nome.clone()));
+            a.insert("nivelMin".into(), js::json_num(lo));
+            a.insert("nivelMax".into(), js::json_num(hi));
+            a.insert("bosses".into(), json!([boss.nome]));
+            a.insert("perfis".into(), json!([perfil]));
+            a.insert("extra".into(), Value::Bool(extra));
+            alvos.push((e.species_id, a));
+        }
+    };
+    let nivel_baixo = rankings.first().map_or(0.0, |(b, _)| b.team_level);
+    let base = |grupo: &[&(&BossLista, [Vec<AlvoEspecie>; 3])],
+                add: &mut dyn FnMut(&BossLista, &AlvoEspecie, &str, bool)| {
+        for i in 0..ALVOS_POR_PERFIL {
+            for (boss, listas) in grupo {
+                for (pi, perfil) in PERFIS_LISTA.iter().enumerate() {
+                    if let Some(e) = listas[pi].iter().filter(|x| !x.extra).nth(i) {
+                        add(boss, e, perfil, false);
+                    }
+                }
+            }
+        }
+    };
+    let baixos: Vec<&(&BossLista, [Vec<AlvoEspecie>; 3])> = rankings
+        .iter()
+        .filter(|(b, _)| b.team_level == nivel_baixo)
+        .collect();
+    let altos: Vec<&(&BossLista, [Vec<AlvoEspecie>; 3])> = rankings
+        .iter()
+        .filter(|(b, _)| b.team_level != nivel_baixo)
+        .collect();
+    base(&baixos, &mut add);
+    for i in 0..EXTRA_MAX_POR_PERFIL {
+        for (boss, listas) in &rankings {
+            for (pi, perfil) in PERFIS_LISTA.iter().enumerate() {
+                if let Some(e) = listas[pi].iter().filter(|x| x.extra).nth(i) {
+                    add(boss, e, perfil, true);
+                }
+            }
+        }
+    }
+    base(&altos, &mut add);
+    let nomes = |l: &[AlvoEspecie], extra: bool| {
+        l.iter()
+            .filter(|x| x.extra == extra)
+            .map(|x| x.nome.clone())
+            .collect::<Vec<_>>()
+    };
+    let bosses: Vec<Value> = rankings
+        .iter()
+        .map(|(b, l)| {
+            let mut extras = Map::new();
+            for (pi, p) in PERFIS_LISTA.iter().enumerate() {
+                let n = nomes(&l[pi], true);
+                if !n.is_empty() {
+                    extras.insert((*p).into(), json!(n));
+                }
+            }
+            json!({
+                "nome": b.nome, "nivel": js::json_num(b.team_level), "tipos": b.tipos,
+                "maxima": nomes(&l[0], false), "equilibrada": nomes(&l[1], false), "economica": nomes(&l[2], false),
+                "extras": extras,
+            })
+        })
+        .collect();
+    json!({
+        "geradoEm": agora, "trLv": js::json_num(tr), "piso": otimizador::LIMITE_PISO, "teto": otimizador::LIMITE_TETO_NIVEL,
+        "max": js::json_num(max), "porPerfil": { "maxima": 5, "equilibrada": 5, "economica": 5 },
+        "extrasMax": EXTRA_MAX_POR_PERFIL, "bosses": bosses,
+        "alvos": alvos.into_iter().map(|(_, a)| Value::Object(a)).collect::<Vec<_>>(),
+    })
+}
+
 /// `x > 0` do JS, com `NaN` falso: `!positivo(x)` é o `!(x > 0)` do legado.
 fn positivo(x: f64) -> bool {
     x > 0.0

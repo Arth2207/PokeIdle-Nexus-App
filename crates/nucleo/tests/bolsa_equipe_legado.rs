@@ -107,3 +107,50 @@ fn lucro_igual_ao_legado() {
     }
     assert!(erros.is_empty(), "{}", erros.join("\n"));
 }
+
+#[test]
+fn alvos_iguais_ao_legado() {
+    use nucleo::bolsa_equipe::alvos_coleta;
+    use nucleo::equipes::EstadoEquipes;
+    let f = fixtures();
+    let motor =
+        MotorEquipes::novo(Pokedex::de_json(include_str!("fixtures/pokedex.json")).unwrap());
+    let estado: EstadoEquipes = serde_json::from_value(f["estado"].clone()).unwrap();
+    let mut erros = Vec::new();
+    for (i, caso) in f["alvos"].as_array().unwrap().iter().enumerate() {
+        let precos: HashMap<i64, f64> = caso["precos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| (p[0].as_i64().unwrap(), p[1].as_f64().unwrap()))
+            .collect();
+        let faltas: Vec<(String, String, usize)> = caso["faltas"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| {
+                (
+                    x["boss"].as_str().unwrap().into(),
+                    x["perfil"].as_str().unwrap().into(),
+                    x["extras"].as_u64().unwrap() as usize,
+                )
+            })
+            .collect();
+        let mut nosso = alvos_coleta(
+            &motor,
+            &estado,
+            None,
+            caso["max"].as_str(),
+            &precos,
+            &faltas,
+            0,
+        );
+        let mut deles = caso["saida"].clone();
+        nosso.as_object_mut().unwrap().remove("geradoEm");
+        deles.as_object_mut().unwrap().remove("geradoEm");
+        if let Some(d) = diferenca(&nosso, &deles, "") {
+            erros.push(format!("#{i}: {d}"));
+        }
+    }
+    assert!(erros.is_empty(), "{}", erros.join("\n"));
+}

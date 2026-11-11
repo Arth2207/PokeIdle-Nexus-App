@@ -134,6 +134,8 @@ Parte dos dados que a bolsa usa vive em arquivos no sistema legado. O subcomando
 | `importar meus-itens` | `.bolsa-meus-itens.json` | `nexus.meus_itens` |
 | `importar pokedex` | `engine/data/pokedex.json` | `nexus.pokedex_motor` |
 | `importar equipes` | `data/equipes-estado.json` | `nexus.equipes_estado`, `nexus.equipes_conta` |
+| `importar wiki` | `data/POKEIDLE-wiki.txt` (seção "## Bosses") | `nexus.boss_wiki` |
+| `importar faltas` | `data/.bolsa-faltas.json` | `nexus.falta_coleta` |
 
 ```bash
 cd /opt/nexus-deploy
@@ -146,6 +148,10 @@ O catálogo de espécies é um arquivo JS; para gerar o JSON, basta carregar os 
 
 As rotas `POST /api/bolsa/ofertas`, `resumo-itens` e `meus-itens` e a limpeza periódica de ofertas gravam em tabelas que, até o cutover da fase 1, são do legado. Por isso ficam desligadas: respondem `503` enquanto `NEXUS_ESCRITA_BOLSA` não for `true`. Ligar só no cutover, junto com a troca do relay e do painel para o Nexus.
 
+### Escrita de equipes
+
+`POST /api/equipes/ingest`, a gravação das faltas de coleta e o registro das sugestões de equipe (`nexus.equipe_sugestao`) só acontecem com `NEXUS_ESCRITA_EQUIPES=true`. Até o cutover da fase 2, quem recebe o relay é o legado, e o estado chega pela importação; o Nexus calcula as faltas, mas não as grava.
+
 ### Comparador de paridade
 
 O serviço `nexus-paridade` do Compose roda `nexus-api paridade-continua`. A cada 10 minutos ele compara as rotas de leitura da bolsa com o legado e grava o resultado em `nexus.paridade`. A API publica a última rodada de cada rota em `/metrics` (`nexus_paridade_razao`, `nexus_paridade_comparados`, `nexus_paridade_idade_segundos`).
@@ -156,6 +162,8 @@ psql -c "SELECT DISTINCT ON (rota) rota, comparados, iguais, so_legado, so_nexus
 # Uma rodada avulsa, com relatório no terminal
 sudo -u nexus-deploy docker compose run --rm nexus-paridade paridade http://127.0.0.1:8181
 ```
+
+Além da bolsa, ele compara `/api/equipes/bosses`, `/api/equipes/plano` e `/api/bolsa/alvos-coleta`. Com `NEXUS_PARIDADE_EQUIPE=true`, compara também `/api/bolsa/equipe` (por qualidade: dano ≥ 99% do legado, restrições respeitadas, custo dentro de ±5%) e `/equipe-propria`; fica desligado por padrão porque essas chamadas disparam o cálculo pesado do legado.
 
 O serviço usa a rede do host porque o firewall não deixa a rede do Docker chegar na porta do legado. Ele não abre nenhuma porta e só faz GETs.
 

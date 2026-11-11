@@ -67,6 +67,8 @@ Para regerar: `node ferramentas/fixtures/combate-legado.cjs <raiz do legado> > c
 
 As rotas de equipes seguem a mesma ideia: `ferramentas/fixtures/equipes-legado.cjs` chama em memória as próprias rotas `/api/equipes/bosses` e `/plano` do legado (com os nicks trocados) para a lista viva de bosses e para a tabela da wiki, e o teste exige o mesmo JSON, número a número. Cada cenário roda num processo separado, porque o cache do `equipeIdeal` do legado não leva a fonte da lista na chave.
 
+O otimizador também tem fixtures do próprio legado (`ferramentas/fixtures/otimizador-legado.cjs`): pools de cartas avaliadas contra bosses reais, passados ao `selecionar` do JS. Com a mesma entrada, a porta em Rust escolhe as mesmas equipes, reservas e planos B e C, com os mesmos números. As peças puras da equipe da bolsa (wiki de bosses, listas por perfil, lucro e alvos de coleta) seguem o mesmo esquema (`bolsa-equipe-legado.cjs`).
+
 ### Otimizador
 
 O otimizador é heurístico: duas execuções corretas podem achar equipes diferentes com a mesma qualidade. Por isso a paridade dele é por **qualidade**, e não por igualdade:

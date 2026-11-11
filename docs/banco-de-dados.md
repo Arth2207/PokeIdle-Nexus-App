@@ -66,6 +66,9 @@ Catálogo de itens do jogo (id, nome, categoria, raro, preço no NPC, ícone). C
 | `nexus.pokedex_motor` | Pokédex do motor de combate no formato compacto, na ordem do arquivo (a ordem desempata a equipe teórica). Cerca de 1.300 linhas | `engine/data/pokedex.json` |
 | `nexus.equipes_estado` | Lista viva de bosses enviada pelo relay (linha única) | `equipes-estado.json` |
 | `nexus.equipes_conta` | Por conta: nível de treinador, bosses vencidos e coleção, na ordem de chegada | `equipes-estado.json` |
+| `nexus.boss_wiki` | Bosses da wiki do jogo: nível fixo, drops e entrada | `data/POKEIDLE-wiki.txt` |
+| `nexus.falta_coleta` | Faltas de coleta por (boss, perfil): pedem mais espécies aos alvos | `.bolsa-faltas.json` |
+| `nexus.equipe_sugestao` | Uma linha por plano de equipe calculado, base da calibração | `equipe-sugestoes.jsonl` |
 
 Carga e atualização em [operação](operacao.md#dados-da-bolsa).
 

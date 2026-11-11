@@ -51,7 +51,9 @@ for par in \
   "base:$LEGADO/engine/data/precos.json" \
   "meus-itens:$LEGADO/data/.bolsa-meus-itens.json" \
   "pokedex:$LEGADO/engine/data/pokedex.json" \
-  "equipes:$LEGADO/data/equipes-estado.json"; do
+  "equipes:$LEGADO/data/equipes-estado.json" \
+  "wiki:$LEGADO/data/POKEIDLE-wiki.txt" \
+  "faltas:$LEGADO/data/.bolsa-faltas.json"; do
   tipo=${par%%:*}
   arquivo=${par#*:}
   [ -r "$arquivo" ] || { log "$tipo: $arquivo não encontrado"; continue; }

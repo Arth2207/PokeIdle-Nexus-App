@@ -40,6 +40,9 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/bolsa/meus-itens", get(bolsa::meus_itens))
         .route("/api/equipes/bosses", get(equipes::bosses))
         .route("/api/equipes/plano", get(equipes::plano))
+        .route("/api/bolsa/equipe", get(equipes::equipe_bolsa))
+        .route("/api/bolsa/equipe-propria", get(equipes::equipe_propria))
+        .route("/api/bolsa/alvos-coleta", get(equipes::alvos_coleta))
         .route_layer(middleware::from_fn(|req, next| {
             auth::exigir_escopo(LEITURA, req, next)
         }))

@@ -58,6 +58,23 @@ pub async fn feedback(State(estado): State<Estado>, Query(p): Query<Params>) -> 
 
 pub async fn dicas(State(estado): State<Estado>, Query(p): Query<Params>) -> Response {
     let s = snapshot!(estado);
+    // Como no legado: as dicas aquecem em segundo plano o cálculo da equipe padrão.
+    let (tipo, moeda) = (
+        p.tipo.as_deref().filter(|t| !t.is_empty()),
+        p.moeda.as_deref().filter(|m| !m.is_empty()),
+    );
+    if tipo.is_none_or(|t| t == "pokemon") && moeda.is_none_or(|m| m == "orb") {
+        estado.equipe_bolsa.trabalho(
+            &estado,
+            crate::equipes::bolsa::Pedido {
+                boss: None,
+                moeda: "orb".into(),
+                nick: None,
+                idade_min: 90.0,
+                n: 5,
+            },
+        );
+    }
     match consultas::dicas(&estado.bolsa, &s, &p).await {
         Ok(r) => Json(r).into_response(),
         Err(erro) => indisponivel(&erro),

@@ -9,6 +9,7 @@ use sqlx::PgPool;
 
 use crate::bolsa::ServicoBolsa;
 use crate::configuracao::Configuracao;
+use crate::equipes::bolsa::ServicoEquipeBolsa;
 use crate::equipes::ServicoEquipes;
 use crate::limite::Limitador;
 
@@ -20,6 +21,8 @@ pub struct Estado {
     pub bolsa: Arc<ServicoBolsa<PgRepoMercado>>,
     pub escrita_bolsa: bool,
     pub equipes: Arc<ServicoEquipes>,
+    /// Equipe da bolsa: jobs de cálculo e o pool de CPU.
+    pub equipe_bolsa: Arc<ServicoEquipeBolsa>,
     pub escrita_equipes: bool,
     pub limitador: Arc<Limitador>,
     pub origens_cors: Arc<Vec<String>>,
@@ -38,6 +41,7 @@ impl Estado {
         Ok(Self {
             escrita_bolsa: cfg.escrita_bolsa,
             escrita_equipes: cfg.escrita_equipes,
+            equipe_bolsa: Arc::new(ServicoEquipeBolsa::novo(cfg.cpu_threads)),
             limitador: Arc::new(Limitador::novo(cfg.limite_rps, cfg.limite_rajada)),
             origens_cors: Arc::new(cfg.origens_cors()),
             ..Self::com_pool(db)
@@ -49,6 +53,7 @@ impl Estado {
         let bolsa = Arc::new(ServicoBolsa::novo(PgRepoMercado::novo(db.clone())));
         Self {
             equipes: Arc::new(ServicoEquipes::novo(db.clone())),
+            equipe_bolsa: Arc::new(ServicoEquipeBolsa::novo(1)),
             escrita_equipes: false,
             db,
             bolsa,

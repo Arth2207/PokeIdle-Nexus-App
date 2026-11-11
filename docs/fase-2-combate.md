@@ -121,8 +121,8 @@ As duas rodam juntas: a resposta mostra a do modelo ativo, e as métricas regist
 
 1. **Fórmulas e duelo** (`Legado`) com fixtures do JS. *Feito:* módulo `nucleo::combate` (tipos, espécies, combatente, duelo, trait `ModeloCombate` e o modelo `Legado`), idêntico bit a bit às fixtures.
 2. **`equipeIdeal`, `equipeColecao` e `/api/equipes/*`.** *Feito:* `nucleo::equipes`, tabelas `nexus.pokedex_motor` e `nexus.equipes_*`, rotas no `nexus-api` e comparador estendido. As 130 chamadas das fixtures batem exatamente com o legado.
-3. **Matriz oferta × boss e otimizador portado**, com paridade de qualidade; `/api/bolsa/equipe` e `equipe-propria`.
-4. **`alvos-coleta`, lucro e faltas** no Postgres; o `/dicas` volta a aquecer o cálculo de equipe.
+3. **Matriz oferta × boss e otimizador portado**, com paridade de qualidade; `/api/bolsa/equipe` e `equipe-propria`. *Feito:* `nucleo::otimizador` (idêntico ao JS em 80 pools), `nucleo::bolsa_equipe`, jobs com `202` num pool `rayon`, cancelamento quando o painel troca de boss.
+4. **`alvos-coleta`, lucro e faltas** no Postgres; o `/dicas` volta a aquecer o cálculo de equipe. *Feito:* wiki, listas, lucro e alvos idênticos ao JS; `nexus.falta_coleta`, `nexus.boss_wiki`, `nexus.equipe_sugestao`.
 5. **Modelo `Jogo`** e a tabela de tentativas, com a calibração pronta para receber dados.
 6. **Busca exata, equipe híbrida, orçamento e curva custo × poder.**
 7. **Benchmarks, carga e comparador estendido.**
