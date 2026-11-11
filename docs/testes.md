@@ -77,7 +77,22 @@ O otimizador é heurístico: duas execuções corretas podem achar equipes difer
 - todas as restrições têm que ser respeitadas;
 - em pelo menos 90% das fixtures, o custo tem que estar dentro de ±5% do custo do Node.
 
+## Benchmarks
+
+`cargo bench -p nucleo` (com `criterion`, sobre as fixtures dos testes). Na VPS, comparados com o mesmo cálculo no JS do legado:
+
+| Cálculo | Nexus | Legado (Node) |
+|---|---|---|
+| Duelo de uma carta contra o boss (40 s simulados) | 0,93 µs | — |
+| `equipeIdeal` (140 candidatas) | 0,47 ms | 5,8 ms |
+| Otimizador, 150 ofertas, 3 perfis | 13,6 ms | 43 ms |
+| Busca exata, 150 ofertas | 7 µs | — |
+
+A busca exata é rápida porque o teto por carta poda quase tudo: a equipe ótima costuma estar entre as cartas de maior dano individual.
+
 ## Carga
+
+`ferramentas/carga/equipes.js` (k6) mede as rotas de equipes e da bolsa. Com `OTIMIZADOR=1`, mantém cálculos de equipe rodando em paralelo e falha se o p95 das leituras passar de 50 ms. No legado, que é produção, a medição é leve (2 req/s), só para ter o p95 de referência.
 
 Com `k6`, nas duas rotas pesadas (`/api/bolsa/equipe` e `/api/equipes/plano`), primeiro contra o Node e depois contra o Nexus, na mesma máquina e com os mesmos dados.
 
