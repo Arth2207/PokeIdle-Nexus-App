@@ -26,6 +26,18 @@ const VOLATEIS: &[&str] = &["geradoEm", "ultimaCaptura"];
 /// Campos que dependem do instante exato da análise. O legado analisa com um `Date.now()`
 /// alguns segundos anterior ao `geradoEm` que publica; a diferença aparece na 6ª casa.
 const SENSIVEIS_AO_TEMPO: &[&str] = &["spd"];
+/// Estatísticas lidas ao vivo (ofertas e vendas mudam entre a leitura do legado e a do Nexus
+/// enquanto o relay está ativo): tolerância de 5%.
+const AO_VIVO: &[&str] = &[
+    "n",
+    "min",
+    "p25",
+    "med",
+    "p75",
+    "max",
+    "comparaveis",
+    "askMin",
+];
 const AMOSTRA: usize = 15;
 
 /// Igualdade numérica com tolerância relativa (as funções `exp`/`ln` do V8 e da libm podem
@@ -45,7 +57,10 @@ pub fn diferenca(a: &Value, b: &Value, caminho: &str) -> Option<String> {
             let tempo = SENSIVEIS_AO_TEMPO
                 .iter()
                 .any(|c| caminho.ends_with(&format!(".{c}")));
-            let ok = perto(x, y) || (tempo && (x - y).abs() <= 1e-4 * x.abs().max(y.abs()));
+            let vivo = AO_VIVO.iter().any(|c| caminho.ends_with(&format!(".{c}")));
+            let ok = perto(x, y)
+                || (tempo && (x - y).abs() <= 1e-4 * x.abs().max(y.abs()))
+                || (vivo && (x - y).abs() <= 0.05 * x.abs().max(y.abs()));
             (!ok).then(|| format!("{caminho}: {x} ≠ {y}"))
         }
         (Value::Array(x), Value::Array(y)) => {
@@ -146,9 +161,22 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
             .alvos(estado, None, None)
             .await
             .map_err(|e| e.to_string())?;
-        rel.entry("alvos-coleta")
-            .or_default()
-            .registrar("padrão", diferenca(&l, &n, ""));
+        // Equilibrada e Econômica dependem dos preços típicos, lidos em instantes diferentes
+        // nos dois lados; a Máxima (só dano) e a lista de bosses comparam exatamente.
+        let so_motor = |v: &Value| {
+            v.get("bosses")
+                .and_then(Value::as_array)
+                .map(|b| {
+                    b.iter()
+                        .map(|x| serde_json::json!({ "nome": x["nome"], "nivel": x["nivel"], "tipos": x["tipos"], "maxima": x["maxima"] }))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        rel.entry("alvos-coleta").or_default().registrar(
+            "padrão",
+            diferenca(&Value::Array(so_motor(&l)), &Value::Array(so_motor(&n)), ""),
+        );
 
         if !self.equipe_bolsa {
             return Ok(());
@@ -160,14 +188,33 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
             .await
             .map_err(|e| e.to_string())?;
         let ns = if n.get("erro").is_some() { 404 } else { 200 };
-        let diff = if status == ns {
-            diferenca(&l, &n, "")
-        } else {
-            Some(format!("status {status} ≠ {ns}"))
+        let colecao = |v: &Value| {
+            (
+                v.pointer("/conta/pokemons").cloned(),
+                v.pointer("/conta/trLv").cloned(),
+            )
         };
-        rel.entry("equipe-propria")
-            .or_default()
-            .registrar("padrão", diff);
+        if status == ns && colecao(&l) != colecao(&n) {
+            rel.entry("equipe-propria")
+                .or_default()
+                .exemplos
+                .push("coleção do Nexus defasada; comparação pulada nesta rodada".into());
+        } else {
+            let diff = if status == ns {
+                let sem_tempo = |mut v: Value| {
+                    if let Value::Object(o) = &mut v {
+                        o.remove("geradoEm");
+                    }
+                    v
+                };
+                diferenca(&sem_tempo(l), &sem_tempo((*n).clone()), "")
+            } else {
+                Some(format!("status {status} ≠ {ns}"))
+            };
+            rel.entry("equipe-propria")
+                .or_default()
+                .registrar("padrão", diff);
+        }
 
         // O legado responde 202 até terminar: espera até 2 minutos.
         let mut l = None;
@@ -219,7 +266,18 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
         let estado = eq.estado().await.map_err(|e| e.to_string())?;
         let n = resposta_bosses(&motor, &estado, None);
         // Mesmo estado no que importa para o motor: lista de bosses e nível de treinador.
-        let marca = |v: &Value| (v.get("bosses").cloned(), v.pointer("/conta/trLv").cloned());
+        let marca = |v: &Value| {
+            let lista: Vec<(Value, Value)> = v
+                .get("bosses")
+                .and_then(Value::as_array)
+                .map(|b| {
+                    b.iter()
+                        .map(|x| (x["key"].clone(), x["teamLevel"].clone()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            (lista, v.pointer("/conta/trLv").cloned())
+        };
         if marca(&l) != marca(&n) {
             let r = rel.entry("equipes.bosses").or_default();
             r.exemplos
@@ -562,14 +620,25 @@ pub fn linhas(rel: &Relatorio) -> Vec<persistencia::paridade::Linha> {
 /// Paridade por qualidade de `/api/bolsa/equipe`: mesmo boss e mesmas candidatas; em cada
 /// perfil, dano do Nexus ≥ 99% do Node, restrições respeitadas e custo dentro de ±5%.
 fn qualidade_equipe(l: &Value, n: &Value) -> Option<String> {
-    for campo in ["/boss/key", "/candidatas", "/ofertasAnalisadas"] {
-        if l.pointer(campo) != n.pointer(campo) {
-            return Some(format!(
-                "{campo}: {:?} ≠ {:?}",
-                l.pointer(campo),
-                n.pointer(campo)
-            ));
-        }
+    if l.pointer("/boss/key") != n.pointer("/boss/key") {
+        return Some(format!(
+            "boss: {:?} ≠ {:?}",
+            l.pointer("/boss/key"),
+            n.pointer("/boss/key")
+        ));
+    }
+    // O legado reaproveita um cálculo de até 5 minutos atrás; com o relay ativo, as ofertas
+    // mudam nesse meio tempo. Até 10% de diferença no conjunto, compara a qualidade.
+    let (a, b) = (
+        l.pointer("/candidatas")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0),
+        n.pointer("/candidatas")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0),
+    );
+    if (a - b).abs() > 0.1 * a.max(b) {
+        return Some(format!("candidatas: {a} ≠ {b} (mais de 10%)"));
     }
     let num = |v: &Value, p: &str| v.pointer(p).and_then(Value::as_f64);
     for perfil in ["eco", "eq", "max"] {
@@ -654,6 +723,15 @@ fn sem_campos_da_conta(mut v: Value) -> Value {
     if let Value::Object(o) = &mut v {
         o.remove("atualizadoEm");
         o.remove("minha");
+        // Dependem dos bosses vencidos da conta, que chegam com atraso pela importação.
+        o.remove("proximo");
+        if let Some(Value::Array(b)) = o.get_mut("bosses") {
+            for x in b.iter_mut() {
+                if let Value::Object(x) = x {
+                    x.remove("feito");
+                }
+            }
+        }
         if let Some(Value::Object(c)) = o.get_mut("conta") {
             c.remove("em");
             c.remove("pokemons");
