@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO nexus.api_token (nome, hash, escopos) VALUES ($1, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bytea",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "20014a46c2d725c66b095708efb86de53a08fd368c774c2d9ab7a48c4f96385d"
+}
