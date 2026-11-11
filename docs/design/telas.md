@@ -12,6 +12,69 @@ O painel atual tem 15 telas organizadas pela **origem dos dados**, não pela tar
 - O **Financeiro** só olha o saldo de ouro por dia. Não separa receita de custo, não mostra lucro por atividade e ignora o patrimônio em itens e criaturas.
 - Cada tela tem layout próprio, então não há padrão a aprender.
 
+## Normas de referência
+
+As telas seguem normas consagradas de BI. Quando houver dúvida, a norma decide, não o gosto.
+
+| Norma | O que aplicamos |
+|---|---|
+| **SMART** (KPIs) | todo KPI é específico, mensurável, atingível, relevante e tem prazo (janela de tempo explícita) |
+| **KPI × métrica** | KPI só existe se estiver ligado a um objetivo do usuário (ver *Objetivos e KPIs*). O resto é métrica de apoio e fica no detalhe, não na faixa de KPIs |
+| **Indicadores de tendência e de resultado** | cada objetivo tem um indicador de resultado (o que aconteceu, ex.: lucro) e um de tendência (o que vai acontecer, ex.: orbs/h), para dar tempo de reagir |
+| **Stephen Few**, *Information Dashboard Design* | cada tela declara seu tipo (estratégica, operacional ou analítica); o essencial cabe numa tela sem rolar; a regra dos 5 segundos: a resposta à pergunta da tela é lida em até 5 segundos |
+| **Edward Tufte** | razão dados-tinta alta: nada de decoração dentro de gráficos (sombras, gradientes, 3D, molduras); múltiplos pequenos para comparar muitas séries |
+| **IBCS** (International Business Communication Standards) | notação única de cenários e variações; tempo sempre no eixo horizontal, categorias no vertical; mesma escala em gráficos comparáveis |
+| **WCAG 2.2 AA** | contraste mínimo de 4,5:1 para texto (3:1 para elementos gráficos); nenhuma informação só por cor |
+
+**A cena 2.5D não é um gráfico.** A criatura em 3D vive nos cartões de destaque (Visão geral, Bestiário, Combate). Dentro de gráficos, KPIs e tabelas é proibido qualquer efeito de profundidade, sombra, brilho ou perspectiva.
+
+### Notação (IBCS)
+
+Usada igual em todas as telas:
+
+| Sigla | Cenário | Representação |
+|---|---|---|
+| **AT** | atual | sólido, cor de tinta |
+| **AN** | período anterior | cinza claro |
+| **MT** | meta | contorno, sem preenchimento |
+| **PV** | previsão | hachurado |
+
+Variações sempre como **Δ absoluto e Δ%**, com ▲ ou ▼ e cor semântica (verde quando melhora, coral quando piora). "Melhora" depende do KPI: custo subindo é piora.
+
+### Leitura
+
+A ordem visual segue o padrão em Z: o KPI mais importante no canto superior esquerdo, a visualização principal no centro, o detalhe embaixo. Ações ficam à direita do que as justifica.
+
+## Objetivos e KPIs
+
+Os KPIs saem destes objetivos. Um número que não serve a nenhum deles não é KPI.
+
+| Objetivo | KPI de resultado | KPI de tendência |
+|---|---|---|
+| Fazer o patrimônio crescer | Patrimônio (Δ no período) | Lucro líquido por dia (média móvel de 7 dias) |
+| Tirar o máximo de cada hora de jogo | Lucro líquido no período | Rendimento líquido (orbs/h já descontando consumo) |
+| Vencer bosses | Bosses vencidos no período | Chance de vitória da melhor equipe disponível |
+| Completar a coleção | Completude da coleção (%) | Espécies novas por semana |
+| Operar sem intervenção | Disponibilidade das automações (% do tempo rodando sem falha) | Falhas nas últimas 24 h |
+
+### Ficha de KPI
+
+Cada KPI tem uma ficha no código (no crate `contrato`, para servidor e app usarem a mesma definição) com:
+
+| Campo | Exemplo (Lucro líquido) |
+|---|---|
+| Nome e objetivo | Lucro líquido · "Tirar o máximo de cada hora de jogo" |
+| Fórmula | Σ receitas − Σ custos no período |
+| Unidade e moeda | orbs ou gold (nunca somados) |
+| Fonte | vendas, loot e compras capturados, mais o consumo de itens |
+| Frequência de atualização | a cada 5 minutos |
+| Janela padrão | 24 h, comparada às 24 h anteriores |
+| Meta | definida pelo usuário em Configurações |
+| Faixas | verde ≥ meta · amarelo ≥ 80% da meta · vermelho < 80% |
+| Sentido | maior é melhor |
+
+Sem meta definida, o KPI mostra só a comparação com o período anterior e nenhuma cor de faixa: cor sem meta não significa nada.
+
 ## Princípios
 
 ### Uma pergunta por tela
@@ -29,7 +92,7 @@ Toda tela segue a mesma ordem, de cima para baixo:
 
 ### Regras de KPI
 
-Cada KPI tem, obrigatoriamente:
+Além da ficha, na tela cada KPI mostra, obrigatoriamente:
 
 - **definição escrita** (o que é contado e como), disponível num ícone de ajuda;
 - **unidade** explícita (orbs, gold, kills/h, %);
@@ -91,6 +154,8 @@ Elementos globais, presentes em toda tela:
 
 ## Visão geral
 
+**Tipo (Few):** estratégica (estado geral e o que exige ação)
+
 **Pergunta:** está tudo bem, e o que precisa de mim agora?
 
 **KPIs**
@@ -99,8 +164,8 @@ Elementos globais, presentes em toda tela:
 |---|---|---|
 | Patrimônio | saldo + inventário avaliado pelo valor justo da Bolsa | variação em 7 dias; meta definida pelo usuário |
 | Lucro 24h | receitas − custos nas últimas 24 h (ver Finanças) | mesmo intervalo de ontem |
-| Rendimento | orbs/hora da caçada atual | média da própria hunt nos últimos 7 dias |
-| Automações | ativas / configuradas | indicadores por automação, com falha em destaque |
+| Rendimento líquido | orbs/h da caçada atual, descontado o consumo de itens | média da própria hunt nos últimos 7 dias |
+| Disponibilidade | % do tempo em que as automações rodaram sem falha nas últimas 24 h | meta (padrão 95%) |
 
 **Visualização principal:** o cartão "Escaneamento de campo" com a criatura ativa em 2.5D (saindo do card), HP, XP e a caçada atual.
 
@@ -114,6 +179,8 @@ Elementos globais, presentes em toda tela:
 
 ## Jogo
 
+**Tipo (Few):** operacional (monitoramento em tempo real)
+
 **Pergunta:** como estão as contas no jogo agora, e posso intervir?
 
 Hoje é o navegador com quatro abas. No app novo:
@@ -125,6 +192,8 @@ Hoje é o navegador com quatro abas. No app novo:
 - O coletor injetado em cada janela alimenta o servidor; um ícone mostra se a captura daquela janela está saudável.
 
 ## Caçada
+
+**Tipo (Few):** operacional (Sessão ao vivo) e analítica (Mapa de hunts, Shiny)
 
 **Pergunta:** onde caçar, e a caçada atual está rendendo o esperado?
 
@@ -146,6 +215,8 @@ Hoje é o navegador com quatro abas. No app novo:
 
 ## Combate
 
+**Tipo (Few):** analítica (explorar cenários e simular)
+
 **Pergunta:** como venço este boss, e o que me falta para isso?
 
 Quatro telas viram um fluxo:
@@ -164,6 +235,8 @@ Quatro telas viram um fluxo:
 As análises da tela `equipes` (escudo, cabo de guerra, espectro) são reavaliadas uma a uma na fase A3. As que respondem "por que esta equipe vence ou perde" entram na Simulação; as outras saem.
 
 ## Mercado
+
+**Tipo (Few):** operacional (Oportunidades, Inventário) e analítica (Pregão)
 
 **Pergunta:** o que compro, o que vendo e o que guardo?
 
@@ -184,6 +257,8 @@ Junta `vender`, `capturas`, `raros` e "meus itens":
 - Seleção em lote para vender ou guardar várias coisas de uma vez, com prévia do total.
 
 ## Finanças
+
+**Tipo (Few):** estratégica (resultado do período) com aprofundamento analítico
 
 **Pergunta:** quanto estou ganhando de verdade, com o quê, e o patrimônio está crescendo?
 
@@ -212,6 +287,8 @@ Substitui o Financeiro atual, que só mostrava o saldo de ouro.
 
 ## Bestiário
 
+**Tipo (Few):** analítica (consulta)
+
 **Pergunta:** o que esta criatura vale, onde ela rende e como eu a melhoro?
 
 ### Espécie
@@ -224,6 +301,8 @@ O "Escaneamento de campo" em tela cheia: a criatura em 2.5D, tipos, stats no ní
 - Medidor de completude da coleção, e filtros por tipo, raridade e região.
 
 ## Automação
+
+**Tipo (Few):** operacional
 
 **Pergunta:** o que o sistema está fazendo sozinho, e está fazendo bem?
 
