@@ -64,6 +64,7 @@ O resto (rotas, ETL, scoring) não é gargalo, mas migrar tudo resolve outro pro
 | [Testes](docs/testes.md) | Estratégia de testes e paridade |
 | [Glossário](docs/glossario.md) | Termos do jogo e do domínio |
 | [Telas do app](docs/design/telas.md) | Arquitetura de telas, KPIs e padrões de dashboard do app |
+| [Sistema visual](docs/design/sistema-visual.md) | Cores, tipografia, painéis, efeitos da criatura e tema noturno |
 | [Decisões (ADRs)](docs/adr/README.md) | Registro das decisões de arquitetura |
 
 ## Estrutura do repositório (alvo)
