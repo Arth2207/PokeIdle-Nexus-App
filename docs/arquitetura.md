@@ -75,7 +75,9 @@ Como resolvemos:
 | Resultado de combate | LRU, 400 entradas | herdado do legado |
 | Alvos de coleta | TTL de 3 h | herdado do legado |
 | Feedback da bolsa | LRU, 40 entradas, invalidado quando os tickers são recalculados | herdado do legado |
-| Tickers da bolsa | recalculados quando chegam ofertas novas | herdado do legado |
+| Mercado da bolsa (snapshot) | remontado em segundo plano a cada 3 min e trocado de uma vez; quem lê nunca espera | substitui o cache com TTL do legado |
+| Vendas da bolsa | em memória; cada ciclo lê só as últimas 12 h, recarga completa a cada 30 min | novo |
+| Valor justo das ofertas | calculado para todas as ofertas ativas junto com o snapshot | substitui o cache parcial do legado |
 
 Os caches ficam em memória no `nexus-api` (`moka`). Se o processo reiniciar, eles são reconstruídos sob demanda; nada depende deles para estar correto.
 

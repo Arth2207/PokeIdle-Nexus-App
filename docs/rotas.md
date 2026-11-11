@@ -28,6 +28,10 @@ Convenções do legado que mantemos:
 | GET | `/api/bolsa/equipe` | `boss`, `moeda`, `nick`, `idade` | Melhor equipe a comprar. Responde `202` com progresso enquanto calcula | painel |
 | GET | `/api/bolsa/equipe-propria` | `boss`, `nick` | Melhor equipe com os pokémon da própria conta | painel |
 
+No Nexus, as rotas de leitura (`GET`) exigem o escopo `leitura`, e as de escrita (`POST`) exigem `relay` ou `escrita`. As de escrita respondem `503` enquanto `NEXUS_ESCRITA_BOLSA` estiver desligada (veja [operação](operacao.md#escrita-da-bolsa)). Ticker inexistente ou id mal formado dá `404` com `{ "erro": "ticker não encontrado" }`, como no legado.
+
+`equipe`, `equipe-propria` e `alvos-coleta` ficam para a fase 2: dependem do motor de combate. Por isso o `GET /api/bolsa/dicas` do Nexus ainda não dispara o cálculo de equipe em segundo plano.
+
 Comportamentos que precisam ser preservados:
 
 - `POST /api/bolsa/ofertas` com `completo: true` desativa as ofertas que não apareceram nessa coleta.

@@ -7,7 +7,7 @@
 | Unidade | `cargo test` | Cálculos do `nucleo`: indicadores, combate, otimizador, lucro, estatísticas |
 | Propriedade | `proptest` | Casos de borda gerados automaticamente |
 | Integração | `testcontainers` | Repositórios e rotas contra um Postgres efêmero com TimescaleDB |
-| Paridade | ferramenta própria (`tests/paridade`) | Nexus contra Node, com requisições reais |
+| Paridade | comparador no `nexus-api` (`nexus-api paridade`) | Nexus contra Node, nas mesmas consultas e no mesmo instante |
 | Carga | `k6` | Latência e throughput nas rotas pesadas |
 
 ## Unidade e propriedade
@@ -22,7 +22,11 @@ O `nucleo` não faz I/O, então os testes de unidade são rápidos e determinís
 
 ## Integração
 
-Cada teste sobe um Postgres com TimescaleDB descartável, aplica todas as migrations e roda contra ele. Isso cobre:
+Os testes sobem um Postgres com TimescaleDB descartável (`timescale/timescaledb-ha:pg16`, com testcontainers), aplicam a baseline das tabelas do legado e as migrations do Nexus, e rodam contra ele. Precisam de Docker.
+
+**Baseline do legado.** As tabelas do schema `public` que o Nexus lê pertencem ao Node e já existem em produção. Para os testes, a estrutura delas fica em `migrations-teste/` (gerada com `pg_dump --schema-only`). Essa pasta é aplicada como SQL simples, só pelos testes. O binário embute apenas `migrations/` (`sqlx::migrate!`), então a baseline nunca roda em produção.
+
+Hoje os testes de integração cobrem a bolsa (`crates/persistencia/tests/integracao.rs`): ingestão idempotente, coleta completa restrita ao próprio escopo, resumo de itens sem duplicar, limpeza de ofertas vencidas, inventário e a leitura completa até um ticker montado. A lista abaixo é o objetivo para as próximas fases:
 
 - **Migrations:** `sqlx migrate run` funciona num banco vazio.
 - **Idempotência:** ingerir o mesmo lote duas vezes deixa o banco no mesmo estado.
@@ -35,17 +39,20 @@ Cada teste sobe um Postgres com TimescaleDB descartável, aplica todas as migrat
 
 É o teste que decide se uma rota pode ir para produção.
 
-### Fixtures
+### Como as respostas são obtidas
 
-Requisições reais capturadas do tráfego do Node em produção, sem alterar o Node. Cada fixture guarda a requisição, a resposta do Node e o estado do banco usado (um dump das tabelas envolvidas, ou um intervalo de tempo).
+O comparador chama o Node com GETs comuns e monta a resposta do Nexus para os mesmos parâmetros, no mesmo instante em que o Node montou a dele. O motivo de não usar tráfego capturado está em [migração](migracao.md#como-as-respostas-são-comparadas).
+
+Para partes que não aparecem nas rotas o tempo todo, há conferências dedicadas. O precificador, por exemplo, foi validado avaliando as mesmas 200 fichas reais nos dois lados (`nexus-api avaliar-fichas`).
 
 ### Comparação normalizada
 
 As duas respostas são normalizadas antes de comparar:
 
 - chaves de objeto ordenadas;
-- floats comparados com tolerância relativa de `1e-6`, ou outra configurada por campo;
-- campos voláteis ignorados: `geradoEm`, `ts`, ids gerados e `progresso`;
+- floats comparados com tolerância relativa de `1e-6`, ou outra configurada por campo (`spd` usa `1e-4`, porque depende do instante exato em que o Node analisou);
+- campos ausentes e `null` são equivalentes (o `JSON.stringify` omite `undefined`);
+- campos voláteis ignorados: `geradoEm`, `ultimaCaptura`;
 - listas cuja ordem não importa são ordenadas por uma chave estável antes de comparar.
 
 O resultado é um relatório por rota com a porcentagem de fixtures idênticas e o diff das que divergiram.

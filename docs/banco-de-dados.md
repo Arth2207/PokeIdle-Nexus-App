@@ -49,6 +49,18 @@ Preço mínimo por item e moeda, por instante. PK `(ts, item_id, moeda)`; a grav
 
 Catálogo de itens do jogo (id, nome, categoria, raro, preço no NPC, ícone). Cerca de 420 linhas. Quase todas as vendas de item chegam sem `item_id`, só com a descrição (`"3 × Rare Candy"`), e o ticker é achado pelo nome neste catálogo. A coluna `ordem` guarda a ordem da fonte, porque há nomes repetidos e vale o último, como no legado. Carga e atualização em [operação](operacao.md#catálogo-de-itens).
 
+### Precificador e inventário (schema `nexus`)
+
+| Tabela | Conteúdo | Origem no legado |
+|---|---|---|
+| `nexus.especie` | Catálogo de espécies: status base, tipos, golpes, evoluções, megas. Cerca de 1.400 linhas | `engine/precificador/catalogo/especies*.js` |
+| `nexus.venda_base` | Vendas antigas de pokémon já decompostas pelo precificador (preço base, adicionais, PvE, família). Cerca de 25 mil linhas | `engine/data/precos.json` |
+| `nexus.item_preco_base` | Cotação diária de itens em orbs, da mesma base | `precos.json` |
+| `nexus.parametro` | Pequenos valores: pesos da confiança, viés do precificador, carimbo do inventário | `precos.json`, `.bolsa-meus-itens.json` |
+| `nexus.meus_itens` | Inventário de itens (item → quantidade) | `.bolsa-meus-itens.json` |
+
+Carga e atualização em [operação](operacao.md#dados-da-bolsa).
+
 ## Hypertables (TimescaleDB)
 
 | Tabela | Tamanho | Chunks |
@@ -102,7 +114,7 @@ A tabela `dim_hunt` tem hoje só 94 hunts, com os campos de nível e espécies v
 
 - Gerenciadas com `sqlx-cli` em `migrations/`.
 - **Até o cutover final, as migrations são somente aditivas**: tabelas novas no schema `nexus`, índices novos, triggers de notificação. Nada é alterado ou removido no schema `public`, porque o Node ainda depende dele.
-- A primeira migration é um baseline gerado a partir do schema atual, para que um banco vazio suba idêntico ao de produção nos testes.
+- As tabelas do `public` que o Nexus usa têm uma baseline em `migrations-teste/`, só para os testes de integração. Ela nunca é embutida no binário. Veja [testes](testes.md#integração).
 
 ## O que entra no Postgres
 

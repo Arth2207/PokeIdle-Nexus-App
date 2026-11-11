@@ -75,6 +75,8 @@ sudo -u nexus-deploy docker compose ps          # coluna STATUS mostra (healthy)
 
 As métricas ficam no Prometheus (job `nexus-api`) e os alertas no grupo `nexus-api`. Os blocos de configuração estão versionados em `deploy/monitoring/`.
 
+Métricas da bolsa: `nexus_bolsa_montagem_duracao_segundos`, `nexus_bolsa_tickers`, `nexus_bolsa_vendas_janela`, `nexus_bolsa_vendas_lidas_total`, `nexus_bolsa_ofertas_avaliadas`, `nexus_bolsa_gerado_em_segundos` e `nexus_bolsa_montagem_falhas_total`. As regras `NexusParidadeBaixa`, `NexusParidadeParada` e `NexusBolsaMontagemFalhando` estão no arquivo de alertas, mas ainda precisam ser carregadas no Prometheus.
+
 ## Atualizar a infraestrutura
 
 Mudanças em `compose.yml`, `nginx.conf` ou `deploy.sh` não chegam pelo CI: elas são instaladas a partir do repositório.
@@ -119,16 +121,40 @@ GRANT SELECT ON public.fato_venda_mercado, public.fato_oferta_mercado,
 
 Conferir: `SELECT table_name, privilege_type FROM information_schema.role_table_grants WHERE grantee = 'nexus_app' AND table_schema = 'public';`
 
-### Catálogo de itens
+### Dados da bolsa
 
-A bolsa resolve o id de um item pelo nome usando `nexus.item_catalogo`. Para carregar ou atualizar a partir do `items-catalogo.json` do legado (substitui o catálogo inteiro numa transação):
+Parte dos dados que a bolsa usa vive em arquivos no sistema legado. O subcomando `importar` lê um arquivo do stdin e substitui o conteúdo da tabela correspondente no schema `nexus`, numa transação:
+
+| Comando | Arquivo de origem | Tabela |
+|---|---|---|
+| `importar itens` | `items-catalogo.json` | `nexus.item_catalogo` |
+| `importar especies` | catálogo `PI_ESPECIES` exportado como JSON | `nexus.especie` |
+| `importar base` | `precos.json` (vendas, itens, pesos e viés) | `nexus.venda_base`, `nexus.item_preco_base`, `nexus.parametro` |
+| `importar meus-itens` | `.bolsa-meus-itens.json` | `nexus.meus_itens` |
 
 ```bash
 cd /opt/nexus-deploy
-sudo -u nexus-deploy docker compose exec -T nexus-api-blue /nexus-api catalogo importar < items-catalogo.json
+sudo -u nexus-deploy docker compose exec -T nexus-api-blue /nexus-api importar itens < items-catalogo.json
 ```
 
-Com o catálogo vazio, os itens sem `item_id` viram tickers por nome (`i:n:<nome>:<moeda>`) e deixam de bater com o legado.
+O catálogo de espécies é um arquivo JS; para gerar o JSON, basta carregar os dois arquivos do catálogo e serializar `PI_ESPECIES` (o legado já roda Node, então um `node -e` resolve). O catálogo de itens muda quando o jogo adiciona itens; o de espécies, quando adiciona espécies. Enquanto o Nexus não busca esses catálogos sozinho, reimporte quando o jogo mudar. Com o catálogo de itens vazio, os itens sem `item_id` viram tickers por nome (`i:n:<nome>:<moeda>`) e deixam de bater com o legado.
+
+### Escrita da bolsa
+
+As rotas `POST /api/bolsa/ofertas`, `resumo-itens` e `meus-itens` e a limpeza periódica de ofertas gravam em tabelas que, até o cutover da fase 1, são do legado. Por isso ficam desligadas: respondem `503` enquanto `NEXUS_ESCRITA_BOLSA` não for `true`. Ligar só no cutover, junto com a troca do relay e do painel para o Nexus.
+
+### Comparador de paridade
+
+O serviço `nexus-paridade` do Compose roda `nexus-api paridade-continua`. A cada 10 minutos ele compara as rotas de leitura da bolsa com o legado e grava o resultado em `nexus.paridade`. A API publica a última rodada de cada rota em `/metrics` (`nexus_paridade_razao`, `nexus_paridade_comparados`, `nexus_paridade_idade_segundos`).
+
+```bash
+# Última rodada, com exemplos das diferenças
+psql -c "SELECT DISTINCT ON (rota) rota, comparados, iguais, so_legado, so_nexus, exemplos FROM nexus.paridade ORDER BY rota, em DESC"
+# Uma rodada avulsa, com relatório no terminal
+sudo -u nexus-deploy docker compose run --rm nexus-paridade paridade http://127.0.0.1:8181
+```
+
+O serviço usa a rede do host porque o firewall não deixa a rede do Docker chegar na porta do legado. Ele não abre nenhuma porta e só faz GETs.
 
 ## Primeira instalação
 

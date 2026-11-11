@@ -4,15 +4,26 @@
 
 O sistema Node continua funcionando sem nenhuma alteração até a última fase. O Nexus sobe ao lado dele e assume as responsabilidades uma fase de cada vez. Cada fase passa por três etapas:
 
-1. **Shadow.** O Nexus recebe uma cópia do tráfego real, mas quem responde ao cliente ainda é o Node. As respostas dos dois são comparadas.
+1. **Shadow.** O Nexus calcula as mesmas respostas que o Node, mas quem responde ao cliente ainda é o Node. As respostas dos dois são comparadas.
 2. **Cutover.** Quando a paridade está confirmada, o Nginx passa a mandar as rotas daquela fase para o Nexus.
 3. **Observação.** O processo Node daquela fase fica ligado, mas sem receber tráfego, por pelo menos 7 dias. Se algo der errado, o rollback é só voltar a rota no Nginx.
 
-### Como o tráfego é copiado
+### Como as respostas são comparadas
 
-O Nginx usa `mirror` para duplicar as requisições de leitura para o Nexus e descarta a resposta dele. O Nexus grava cada par (requisição, resposta) e um comparador gera o relatório de diferenças.
+O plano original era o Nginx espelhar o tráfego (`mirror`). Na prática o tráfego da bolsa não passa pelo Nginx do Nexus: o painel chama o motor local, que repassa para o Node. Espelhar exigiria mexer nesse caminho, e o Node não pode ser tocado.
 
-Rotas de escrita **não** são espelhadas, porque gravariam em dobro. Elas são validadas com as fixtures capturadas, rodando contra um banco de teste (veja [testes](testes.md)).
+Também avaliamos capturar requisições com `tcpdump` e reexecutá-las depois. Descartamos porque a resposta depende do momento: reexecutar mais tarde compara com dados que já mudaram e gera diferenças falsas. Além disso, o painel faz poucas requisições (cerca de 0,1 por segundo) e cobriria só os tickers que alguém abriu.
+
+A solução adotada é a **comparação ativa**. Um comparador dentro do próprio `nexus-api` chama o Node com GETs comuns e monta a resposta do Nexus para os mesmos parâmetros:
+
+- o mercado do Nexus é montado no mesmo instante (`geradoEm`) que o Node usou, para os dois olharem os mesmos dados;
+- a cada rodada entram todos os tickers do `/mercado` e uma amostra rotativa para as rotas por id (`ticker`, `balao`, `serie`);
+- a comparação normaliza o JSON: ordem de chaves e campos `undefined` não contam, os números têm tolerância relativa de `1e-6`, e os campos voláteis (`geradoEm`, `ultimaCaptura`) ficam de fora;
+- o resultado vira métricas no Prometheus (`nexus_paridade_total{rota,resultado}` e `nexus_paridade_razao{rota}`) e uma linha de log por rota, com exemplos das diferenças.
+
+Os handlers HTTP e o comparador chamam as mesmas funções, então o que se compara é exatamente o que a API responde. O comparador liga com `NEXUS_PARIDADE_URL` e também roda sob demanda: `nexus-api paridade <url>`.
+
+Rotas de escrita não são comparadas em produção, porque gravariam em dobro. Elas são validadas nos testes de integração, contra um banco de teste (veja [testes](testes.md)).
 
 ### Banco compartilhado
 
@@ -37,9 +48,44 @@ Workspace, configuração, erros, logs, `/health`, `/metrics`, autenticação po
 
 ### Fase 1: Bolsa (3 a 4 semanas)
 
-Carregamento de vendas e ofertas, cálculo de tickers e indicadores (médias, RSI, Bollinger, MACD, VWAP), sinais de compra e venda, e todas as rotas `/api/bolsa/*`, exceto as de equipe.
+Carregamento de vendas e ofertas, precificador de pokémon, cálculo de tickers e indicadores (médias, RSI, Bollinger, MACD, VWAP), sinais, veredito e valor justo, e todas as rotas `/api/bolsa/*`, exceto as de equipe e de alvos de coleta, que dependem do motor de combate (fase 2).
 
 **Pronto quando:** 3 dias de shadow sem diferenças fora da tolerância; ingestão de ofertas idempotente (enviar o mesmo lote duas vezes resulta no mesmo estado).
+
+#### Estado
+
+Implementada. Na primeira comparação com o Node, todas as rotas de leitura saíram idênticas: 467 de 467 tickers no `/mercado`, a amostra de `ticker`, `balao` e `serie`, o `feedback`, as listas do `dicas` e os 23 itens do `meus-itens`. O precificador também foi conferido à parte: 200 fichas reais avaliadas pelos dois lados, com o mesmo valor justo, faixa e confiança.
+
+As rotas de ofertas (`/ofertas` e as oportunidades do `/dicas`) ainda não tinham dado para comparar ao vivo, porque nenhuma oferta estava ativa no período. Elas usam o mesmo avaliador já conferido e entram na comparação automaticamente quando o relay voltar a enviar ofertas.
+
+#### O que o Nexus faz a mais
+
+- **Mercado sempre pronto.** Uma task remonta o mercado a cada 3 minutos e troca o snapshot de uma vez; nenhuma requisição espera a montagem. No Node, a primeira requisição depois de vencer o cache espera, com o event loop travado.
+- **Carga incremental.** As vendas ficam em memória; cada ciclo lê só as das últimas 12 horas (pelo índice de `em`), com recarga completa a cada 30 minutos. O Node relê 30 dias de vendas a cada ciclo.
+- **Todas as ofertas avaliadas.** O Node só mostra ofertas de pokémon cujo valor justo já estava em cache (calculado por outro processo). O Nexus avalia todas em segundo plano, junto com a montagem do mercado. Por isso o `/ofertas` do Nexus pode trazer mais ofertas de pokémon que o do Node; a comparação considera as que existem nos dois.
+- **Respostas menores.** Compressão gzip/br e ETag nas leituras: o `/mercado` cai de cerca de 540 KB para 130 KB, e uma nova consulta sem mudança recebe `304`.
+- **Métricas.** Tempo de montagem, número de tickers, vendas lidas por ciclo e paridade por rota.
+- **Dados do legado no Postgres.** O catálogo de espécies, a base antiga do precificador e o inventário saem de arquivos JS/JSON e vão para o schema `nexus` ([ADR 0006](adr/0006-consolidar-estado-no-postgres.md)).
+
+#### Correções em relação ao legado
+
+Ficam desligadas de propósito no que afeta a comparação, ou só aparecem nas rotas de escrita, que não rodam em produção antes do cutover:
+
+| Legado | Nexus |
+|---|---|
+| `POST /ofertas` com `completo: true` desativa todas as ofertas não vistas no lote, de qualquer tipo e moeda | desativa só as dos pares (tipo, moeda) presentes no lote |
+| Uma oferta com preço, id ou quantidade fracionários faz o `INSERT` falhar e o lote inteiro se perde | só a oferta inválida é descartada (quantidade fracionária é arredondada para baixo) |
+| `meus-itens` gravado em arquivo JSON, sem escrita atômica | tabela `nexus.meus_itens`, gravada numa transação |
+| Vendas no mesmo milissegundo saem em ordem arbitrária | ordem estável por `em` e `id` |
+| Pokémon vendido sem espécie vira o ticker `p:null:...` | a venda é ignorada |
+| `ticker` de item identificado só pelo nome falha ao buscar ofertas (`item_id = NaN`) | devolve a lista de ofertas vazia |
+
+#### Antes do cutover
+
+1. 3 dias de comparação sem diferenças fora da tolerância, inclusive nas rotas de ofertas.
+2. Atualizar o catálogo de itens e o de espécies, se o jogo tiver mudado (`nexus-api importar`).
+3. Ligar `NEXUS_ESCRITA_BOLSA=true` no Nexus e, na mesma janela, apontar o relay e o painel para o Nexus.
+4. Parar de chamar as rotas da bolsa no Node; o processo fica de pé por 7 dias, para rollback.
 
 ### Fase 2: Combate e otimizador (3 a 4 semanas)
 

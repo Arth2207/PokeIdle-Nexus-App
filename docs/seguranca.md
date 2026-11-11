@@ -37,7 +37,9 @@ O que o Nginx aplica:
 - Rate limit por IP (proteção grossa) e timeouts de leitura e escrita.
 - Log de acesso em JSON, sem o token.
 
-O rate limit fino, por token e por rota, fica no `nexus-api` (tower), porque só a aplicação sabe quem é o cliente.
+O rate limit fino, por token, fica no `nexus-api`, porque só a aplicação sabe quem é o cliente. É um balde de fichas por token: `NEXUS_LIMITE_RPS` fichas por segundo (padrão 10), com rajada de `NEXUS_LIMITE_RAJADA` (padrão 40). Acima disso a resposta é `429` com `Retry-After: 1`.
+
+Cada grupo de rotas exige um escopo: leituras pedem `leitura`; ingestão pede `relay` ou `escrita`; `admin` passa em todas. Token válido sem o escopo certo recebe `403`. O corpo das requisições é limitado a 2 MB, e a 10 MB nas rotas de ingestão.
 
 ## CORS
 
@@ -48,6 +50,8 @@ O rate limit fino, por token e por rota, fica no `nexus-api` (tower), porque só
 | `/health`, `/metrics` | Nenhuma |
 
 O legado respondia `Access-Control-Allow-Origin: *` para tudo.
+
+As origens do painel vêm de `NEXUS_CORS_ORIGENS` (separadas por vírgula). Sem nenhuma configurada, o Nexus não manda cabeçalho CORS. O CORS fica por fora da checagem de token, porque o preflight do navegador não manda token.
 
 ## Segredos
 
