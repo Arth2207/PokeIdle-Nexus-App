@@ -9,9 +9,9 @@ O Nexus substitui todos esses processos por dois binários Rust que compartilham
 | Fase | Escopo | Situação |
 |---|---|---|
 | 0 | Fundação (config, erros, logs, health, métricas, auth, Docker, CI) | concluída |
-| 1 | Bolsa | — |
-| 2 | Motor de combate e otimizador de equipe | — |
-| 3 | Ingestão, fila de comandos e WebSocket | — |
+| 1 | Bolsa | em produção, em shadow (comparando com o legado) |
+| 2 | Motor de combate e otimizador de equipe | em produção, em shadow ([plano](docs/fase-2-combate.md)) |
+| 3 | Ingestão, fila de comandos e WebSocket | planejada ([plano](docs/fase-3-ingestao.md)) |
 | 4 | Motor de automação | — |
 | 5 | ETL e dossiê | — |
 | 6 | Scoring e rotinas de IA | — |

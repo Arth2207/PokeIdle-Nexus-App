@@ -95,7 +95,7 @@ Motor de combate, otimizador de equipe com `rayon`, `/api/bolsa/equipe`, `/api/b
 
 ### Fase 3: Ingestão, comandos e WebSocket (2 a 3 semanas)
 
-Rotas de ingestão, raros, shiny, fila de comandos e o servidor WebSocket. O relay do PC passa a usar token e WebSocket.
+Rotas de ingestão, raros, shiny, fila de comandos e o servidor WebSocket. O relay do PC passa a usar token e WebSocket, e a enviar as lutas de boss para calibrar o modelo de combate. O plano está em [fase 3: ingestão](fase-3-ingestao.md).
 
 **Pronto quando:** os testes de reconexão e backpressure passam; 7 dias sem comando perdido nem duplicado.
 
