@@ -65,6 +65,8 @@ services:
       NEXUS_DATABASE_URL_FILE: /run/secrets/database_url
       NEXUS_PARIDADE_URL: http://127.0.0.1:8181
       NEXUS_PARIDADE_CICLO_S: "600"
+      # Compara também /api/bolsa/equipe e /equipe-propria (dispara o cálculo do legado).
+      NEXUS_PARIDADE_EQUIPE: "true"
     secrets:
       - database_url
     volumes:
