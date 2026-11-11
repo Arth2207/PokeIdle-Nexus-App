@@ -118,8 +118,8 @@ fn winsor(l: &[f64]) -> Winsor {
     let mu = js::quantil(&s0, 0.5).unwrap_or(f64::NAN);
     let q25 = js::quantil(&s0, 0.25).unwrap_or(f64::NAN);
     let s = MIN_ESCALA.max((mu - q25) / 0.6745);
-    let hi = mu + (3.0 * s).max(3f64.ln());
-    let lo = mu - (4.0 * s).max(5f64.ln());
+    let hi = mu + (3.0 * s).max(js::ln(3.0));
+    let lo = mu - (4.0 * s).max(js::ln(5.0));
     let lw: Vec<f64> = l.iter().map(|&x| x.min(hi).max(lo)).collect();
     let n = l.iter().filter(|&&x| x > hi || x < lo).count();
     Winsor {
@@ -200,14 +200,14 @@ pub fn analisar(vendas: &[Venda], agora: i64) -> Option<Analise> {
     if w.len() < MIN_VENDAS {
         return None;
     }
-    let wz = winsor(&w.iter().map(|v| v.unidade.ln()).collect::<Vec<_>>());
+    let wz = winsor(&w.iter().map(|v| js::ln(v.unidade)).collect::<Vec<_>>());
     let it: Vec<Item> = w
         .iter()
         .zip(&wz.lw)
         .map(|(v, l)| Item {
             em: v.em,
             bruto: v.unidade,
-            p: l.exp(),
+            p: js::exp(*l),
         })
         .collect();
     let primeiro = it.first()?;
@@ -285,7 +285,7 @@ pub fn analisar(vendas: &[Venda], agora: i64) -> Option<Analise> {
                 1.0
             })
         .sqrt();
-    let z = base_v.map(|b| ((ultimo / b).ln() / se).clamp(-9.0, 9.0));
+    let z = base_v.map(|b| (js::ln(ultimo / b) / se).clamp(-9.0, 9.0));
     let var24h = (k24 >= 3 && p24.len() >= 5)
         .then(|| med(r24.iter().copied()) / med(p24.iter().copied()) - 1.0);
     let var7d = (w7.len() >= 3 && antes7.len() >= MIN_ANTES)
@@ -299,10 +299,14 @@ pub fn analisar(vendas: &[Venda], agora: i64) -> Option<Analise> {
     };
     let pontos: Vec<(f64, f64)> = dc[dc.len().saturating_sub(10)..]
         .iter()
-        .map(|c| (c.dia as f64, c.m.ln()))
+        .map(|c| (c.dia as f64, js::ln(c.m)))
         .collect();
     let (inclinacao, tend_z, tend_ok) = tendencia_robusta(&pontos);
-    let tendencia = if tend_ok { inclinacao.exp() - 1.0 } else { 0.0 };
+    let tendencia = if tend_ok {
+        js::exp(inclinacao) - 1.0
+    } else {
+        0.0
+    };
 
     let spd = w.len() as f64 / (JANELA_DIAS as f64).min(1f64.max(span_dias));
     let liquidez = if spd >= LIQ_ALTA {

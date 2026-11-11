@@ -97,8 +97,8 @@ pub struct LinhaMotor {
 impl LinhaMotor {
     pub fn ponto_ajuste(&self) -> PontoAjuste {
         PontoAjuste {
-            log_pve: self.pve.ln(),
-            log_nivel: self.nivel.ln(),
+            log_pve: js::ln(self.pve),
+            log_nivel: js::ln(self.nivel),
             nota: self.nota,
             log_base: self.log_base,
         }
@@ -143,7 +143,7 @@ pub fn preparar(central: &Central, vendas: &[VendaFicha], cotacoes: &Cotacoes) -
                 em: s.em,
                 preco: s.preco,
                 base,
-                log_base: base.ln(),
+                log_base: js::ln(base),
                 adicionais,
                 mega: d
                     .adicionais
@@ -230,17 +230,18 @@ pub fn normalizar(linhas: &[LinhaMotor]) -> Vec<VendaNormalizada> {
             let notas: Vec<f64> = l.iter().filter_map(|r| r.nota).collect();
             let referencia = ajuste.map(|_| {
                 (
-                    js::mediana_meio(l.iter().map(|r| r.pve.ln())).unwrap_or(f64::NAN),
-                    js::mediana_meio(l.iter().map(|r| r.nivel.ln())).unwrap_or(f64::NAN),
+                    js::mediana_meio(l.iter().map(|r| js::ln(r.pve))).unwrap_or(f64::NAN),
+                    js::mediana_meio(l.iter().map(|r| js::ln(r.nivel))).unwrap_or(f64::NAN),
                     js::mediana_meio(notas.iter().copied()),
                 )
             });
             l.iter().map(move |r| {
                 let unidade = match (ajuste, referencia) {
                     (Some(a), Some((pve, nivel, nota))) => {
-                        let adj = (a.avaliar(pve, nivel, nota) + r.log_base
-                            - a.avaliar(r.pve.ln(), r.nivel.ln(), r.nota))
-                        .exp();
+                        let adj = js::exp(
+                            a.avaliar(pve, nivel, nota) + r.log_base
+                                - a.avaliar(js::ln(r.pve), js::ln(r.nivel), r.nota),
+                        );
                         if adj.is_finite() && adj > 0.0 {
                             adj
                         } else {
@@ -258,8 +259,8 @@ pub fn normalizar(linhas: &[LinhaMotor]) -> Vec<VendaNormalizada> {
                     shiny: r.shiny,
                     pve: r.pve,
                     referencia: referencia.map(|(pve, nivel, nota)| Referencia {
-                        nivel: js::round(nivel.exp()),
-                        pve: js::round(pve.exp()),
+                        nivel: js::round(js::exp(nivel)),
+                        pve: js::round(js::exp(pve)),
                         nota,
                     }),
                 }

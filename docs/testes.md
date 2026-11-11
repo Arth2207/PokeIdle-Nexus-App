@@ -61,7 +61,7 @@ O resultado é um relatório por rota com a porcentagem de fixtures idênticas e
 
 O modelo de combate `Legado` é comparado com fixtures geradas pelo próprio código do legado: `ferramentas/fixtures/combate-legado.cjs` carrega o motor JS (só leitura) e grava em `crates/nucleo/tests/fixtures/combate-legado.json` a efetividade de tipos, os atributos de combatentes sorteados, o dano de cada golpe, os bosses, fichas reais e sintéticas, duelos contra os bosses e a penalidade de equipe. Os floats têm que sair **idênticos bit a bit**.
 
-Para isso o `nucleo` usa `js::pow`, um porte do `Math.pow` do V8 do Node 20 (o `pow` do fdlibm com os ajustes do V8). O `powf` da libc e o crate `libm` erram o último bit em cerca de 1 caso em 10, e o resultado ainda mudaria entre a glibc da VPS e a musl da imagem. O gerador também grava 3.000 potências para conferir esse porte.
+Para isso o `nucleo` usa `js::pow`, um porte do `Math.pow` do V8 do Node 20 (o `pow` do fdlibm com os ajustes do V8). O `powf` da libc e o crate `libm` erram o último bit em cerca de 1 caso em 10, e o resultado ainda mudaria entre a glibc da VPS e a musl da imagem. O gerador também grava 3.000 potências para conferir esse porte. Pelo mesmo motivo, `Math.log` e `Math.exp` têm portes em `js::ln` e `js::exp` (o `ln` da libc difere do V8 em cerca de 8% dos casos), conferidos com 20.000 valores de `ferramentas/fixtures/js-math.cjs`. Toda fórmula copiada do legado usa as versões do `js`, inclusive o precificador e as estatísticas da bolsa.
 
 Para regerar: `node ferramentas/fixtures/combate-legado.cjs <raiz do legado> > crates/nucleo/tests/fixtures/combate-legado.json`. O gerador usa uma semente fixa, então a saída só muda se o legado mudar.
 

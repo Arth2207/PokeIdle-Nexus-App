@@ -182,7 +182,7 @@ pub fn indicadores(a: &Analise) -> Indicadores {
     let retornos: Vec<f64> = serie
         .windows(2)
         .filter(|w| w[1] > 0.0 && w[0] > 0.0)
-        .map(|w| (w[1] / w[0]).ln())
+        .map(|w| js::ln(w[1] / w[0]))
         .collect();
     let vol = if retornos.len() >= 3 {
         desvio(&retornos).and_then(|d| arred(d, 4))

@@ -27,7 +27,7 @@ impl Cfg {
 pub const PESOS_CONFIANCA: [f64; 5] = [-2.64, 0.66, 0.68, 1.53, 0.85];
 /// Viés padrão (log de 1,09): o mercado vende um pouco abaixo do anunciado.
 pub fn vies_padrao() -> f64 {
-    1.09f64.ln()
+    js::ln(1.09)
 }
 
 const CHAVES: [&str; 4] = ["proximidade", "certeza", "consistencia", "ampliacao"];
@@ -45,7 +45,7 @@ pub fn confianca(partes: [f64; 4], pesos: &[f64; 5]) -> Confianca {
         .iter()
         .enumerate()
         .fold(pesos[0], |s, (i, v)| s + pesos[i + 1] * v);
-    let chance = 1.0 / (1.0 + (-z).exp());
+    let chance = 1.0 / (1.0 + js::exp(-z));
     // Maior perda primeiro; no empate, a primeira chave (ordenação estável).
     let lowest = (0..4)
         .map(|i| (CHAVES[i], pesos[i + 1] * (1.0 - partes[i])))
@@ -93,7 +93,7 @@ impl Indice {
         let mut ordenados: Vec<(f64, usize)> = mesmos
             .iter()
             .enumerate()
-            .map(|(i, r)| (r.pve.ln(), i))
+            .map(|(i, r)| (js::ln(r.pve), i))
             .collect();
         ordenados.sort_by(|a, b| a.0.total_cmp(&b.0));
         let max_em = mesmos
@@ -195,9 +195,9 @@ pub fn vizinhos(
         .iter()
         .fold(f64::NEG_INFINITY, |m, c| m.max(*c))
         * Cfg::PESO_REFINADA.max(1.0)
-        * 0.5f64.powf((em - indice.max_em) / meia_vida).max(1.0);
-    let raio = Cfg::SIGMA_PVE * (2.0 * (peso_max / Cfg::PESO_MINIMO).ln()).max(0.0).sqrt();
-    let lp = alvo.pve.ln();
+        * js::pow(0.5, (em - indice.max_em) / meia_vida).max(1.0);
+    let raio = Cfg::SIGMA_PVE * (2.0 * js::ln(peso_max / Cfg::PESO_MINIMO)).max(0.0).sqrt();
+    let lp = js::ln(alvo.pve);
     let limite = |x: f64| indice.ordenados.partition_point(|(v, _)| *v < x);
     let (ini, fim) = (limite(lp - raio - 1e-12), limite(lp + raio + 1e-12));
     let mut posicoes: Vec<usize> = indice.ordenados[ini..fim.max(ini)]
@@ -207,7 +207,7 @@ pub fn vizinhos(
     posicoes.sort_unstable();
 
     let peso_nota = |r: &LinhaMotor| match (r.nota, alvo.nota) {
-        (Some(a), Some(b)) => (-(((a - b) / Cfg::SIGMA_NOTA).powi(2)) / 2.0).exp(),
+        (Some(a), Some(b)) => js::exp(-(((a - b) / Cfg::SIGMA_NOTA).powi(2)) / 2.0),
         _ => 1.0,
     };
     let mut pontos: Vec<Ponto> = posicoes
@@ -217,15 +217,15 @@ pub fn vizinhos(
             let camada = camada_de(r);
             let w = (if r.refinada { Cfg::PESO_REFINADA } else { 1.0 })
                 * Cfg::CAMADAS[camada]
-                * (-(((r.nivel / alvo.nivel).ln() / Cfg::SIGMA_NIVEL).powi(2)) / 2.0).exp()
-                * (-(((r.pve / alvo.pve).ln() / Cfg::SIGMA_PVE).powi(2)) / 2.0).exp()
+                * js::exp(-((js::ln(r.nivel / alvo.nivel) / Cfg::SIGMA_NIVEL).powi(2)) / 2.0)
+                * js::exp(-((js::ln(r.pve / alvo.pve) / Cfg::SIGMA_PVE).powi(2)) / 2.0)
                 * peso_nota(r)
-                * 0.5f64.powf((em - r.em as f64) / meia_vida);
+                * js::pow(0.5, (em - r.em as f64) / meia_vida);
             let mut saida = Vec::new();
             if w.is_nan() || w < Cfg::PESO_MINIMO {
                 return saida;
             }
-            let esperado = ajuste.avaliar(r.pve.ln(), r.nivel.ln(), r.nota);
+            let esperado = ajuste.avaliar(js::ln(r.pve), js::ln(r.nivel), r.nota);
             if !r.incerta {
                 saida.push(Ponto {
                     v: r.log_base - esperado,
@@ -251,7 +251,7 @@ pub fn vizinhos(
                 incerta: true,
             });
             saida.push(Ponto {
-                v: simples.ln() - esperado,
+                v: js::ln(simples) - esperado,
                 w: w * up,
                 camada,
                 incerta: true,
@@ -275,8 +275,8 @@ pub fn vizinhos(
     let meio = quantil_ponderado(&pontos, 0.5);
     let lo = quantil_ponderado(&pontos, 0.25) - meio;
     let hi = quantil_ponderado(&pontos, 0.75) - meio;
-    let centro = ajuste.avaliar(alvo.pve.ln(), alvo.nivel.ln(), alvo.nota) + meio - vies;
-    let preco = |x: f64| js::round(x.exp() + adicionais).max(1.0);
+    let centro = ajuste.avaliar(js::ln(alvo.pve), js::ln(alvo.nivel), alvo.nota) + meio - vies;
+    let preco = |x: f64| js::round(js::exp(x) + adicionais).max(1.0);
     let soma =
         |f: &dyn Fn(&Ponto) -> bool| pontos.iter().filter(|p| f(p)).fold(0.0, |s, p| s + p.w);
     let total = soma(&|_| true);
@@ -288,7 +288,7 @@ pub fn vizinhos(
     let partes = [
         neff / (neff + 5.0),
         soma(&|p| !p.incerta) / total,
-        (-(hi - lo)).exp(),
+        js::exp(-(hi - lo)),
         soma(&|p| p.camada == 0) / total,
     ];
     Some(Estimativa {

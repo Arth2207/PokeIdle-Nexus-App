@@ -123,7 +123,7 @@ pub fn poder_pve(p: &Atributos, e: &Especie) -> Option<f64> {
         js::round(
             (e.base[i] + 2.0 * f64::from(p.ivs[i]))
                 * (nivel / 100.0)
-                * p.qualidade.powf(expoente)
+                * js::pow(p.qualidade, expoente)
                 * multiplicador,
         )
     });

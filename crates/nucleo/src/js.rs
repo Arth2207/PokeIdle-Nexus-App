@@ -518,6 +518,188 @@ pub fn pow(x: f64, y: f64) -> f64 {
     s * z
 }
 
+fn palavras(v: f64) -> (i32, u32) {
+    ((v.to_bits() >> 32) as u32 as i32, v.to_bits() as u32)
+}
+
+fn com_palavras(alto: i32, baixo: u32) -> f64 {
+    f64::from_bits((u64::from(alto as u32) << 32) | u64::from(baixo))
+}
+
+/// `Math.log` do V8 (Node 20): o `log` do fdlibm de `base/ieee754.cc`. Pelo mesmo motivo do
+/// [`pow`]: a libc pode errar o último bit em relação ao JS.
+#[allow(clippy::many_single_char_names, clippy::excessive_precision)]
+pub fn ln(x: f64) -> f64 {
+    const LN2_HI: f64 = 6.931_471_803_691_238_164_90e-1;
+    const LN2_LO: f64 = 1.908_214_929_270_587_700_02e-10;
+    const TWO54: f64 = 1.801_439_850_948_198_400_00e16;
+    const LG1: f64 = 6.666_666_666_666_735_130e-1;
+    const LG2: f64 = 3.999_999_999_940_941_908e-1;
+    const LG3: f64 = 2.857_142_874_366_239_149e-1;
+    const LG4: f64 = 2.222_219_843_214_978_396e-1;
+    const LG5: f64 = 1.818_357_216_161_805_012e-1;
+    const LG6: f64 = 1.531_383_769_920_937_332e-1;
+    const LG7: f64 = 1.479_819_860_511_658_591e-1;
+
+    let mut x = x;
+    let (mut hx, lx) = palavras(x);
+    let mut k: i32 = 0;
+    if hx < 0x0010_0000 {
+        if ((hx & 0x7FFF_FFFF) as u32 | lx) == 0 {
+            return f64::NEG_INFINITY;
+        }
+        if hx < 0 {
+            return f64::NAN;
+        }
+        k -= 54;
+        x *= TWO54;
+        hx = palavras(x).0;
+    }
+    if hx >= 0x7FF0_0000 {
+        return x + x;
+    }
+    k += (hx >> 20) - 1023;
+    hx &= 0x000F_FFFF;
+    let i = (hx + 0x95F64) & 0x10_0000;
+    x = com_palavras(hx | (i ^ 0x3FF0_0000), palavras(x).1);
+    k += i >> 20;
+    let f = x - 1.0;
+    let dk = f64::from(k);
+    if (0x000F_FFFF & (2 + hx)) < 3 {
+        if f == 0.0 {
+            return if k == 0 {
+                0.0
+            } else {
+                dk * LN2_HI + dk * LN2_LO
+            };
+        }
+        let r = f * f * (0.5 - 0.333_333_333_333_333_33 * f);
+        return if k == 0 {
+            f - r
+        } else {
+            dk * LN2_HI - ((r - dk * LN2_LO) - f)
+        };
+    }
+    let s = f / (2.0 + f);
+    let z = s * s;
+    let mut i = hx - 0x6147A;
+    let w = z * z;
+    let j = 0x6B851 - hx;
+    let t1 = w * (LG2 + w * (LG4 + w * LG6));
+    let t2 = z * (LG1 + w * (LG3 + w * (LG5 + w * LG7)));
+    i |= j;
+    let r = t2 + t1;
+    if i > 0 {
+        let hfsq = 0.5 * f * f;
+        if k == 0 {
+            f - (hfsq - s * (hfsq + r))
+        } else {
+            dk * LN2_HI - ((hfsq - (s * (hfsq + r) + dk * LN2_LO)) - f)
+        }
+    } else if k == 0 {
+        f - s * (f - r)
+    } else {
+        dk * LN2_HI - ((s * (f - r) - dk * LN2_LO) - f)
+    }
+}
+
+/// `Math.exp` do V8 (Node 20): o `exp` do fdlibm de `base/ieee754.cc`, inclusive o caso
+/// especial `exp(1) = E`.
+#[allow(
+    clippy::many_single_char_names,
+    clippy::excessive_precision,
+    clippy::approx_constant
+)]
+pub fn exp(x: f64) -> f64 {
+    const HALF: [f64; 2] = [0.5, -0.5];
+    const O_THRESHOLD: f64 = 7.097_827_128_933_839_730_96e2;
+    const U_THRESHOLD: f64 = -7.451_332_191_019_411_084_20e2;
+    const LN2_HI: [f64; 2] = [
+        6.931_471_803_691_238_164_90e-1,
+        -6.931_471_803_691_238_164_90e-1,
+    ];
+    const LN2_LO: [f64; 2] = [
+        1.908_214_929_270_587_700_02e-10,
+        -1.908_214_929_270_587_700_02e-10,
+    ];
+    const INVLN2: f64 = 1.442_695_040_888_963_387_00;
+    const P1: f64 = 1.666_666_666_666_660_190_37e-1;
+    const P2: f64 = -2.777_777_777_701_559_338_42e-3;
+    const P3: f64 = 6.613_756_321_437_934_361_17e-5;
+    const P4: f64 = -1.653_390_220_546_525_153_90e-6;
+    const P5: f64 = 4.138_136_797_057_238_460_39e-8;
+    const E: f64 = 2.718_281_828_459_045;
+    const HUGE: f64 = 1.0e300;
+    const TWOM1000: f64 = 9.332_636_185_032_188_789_90e-302;
+    const TWO1023: f64 = 8.988_465_674_311_579_539e307;
+
+    let mut x = x;
+    let alto = (x.to_bits() >> 32) as u32;
+    let xsb = ((alto >> 31) & 1) as usize;
+    let hx = alto & 0x7FFF_FFFF;
+    if hx >= 0x4086_2E42 {
+        if hx >= 0x7FF0_0000 {
+            let lx = x.to_bits() as u32;
+            if ((hx & 0xF_FFFF) | lx) != 0 {
+                return x + x;
+            }
+            return if xsb == 0 { x } else { 0.0 };
+        }
+        if x > O_THRESHOLD {
+            return HUGE * HUGE;
+        }
+        if x < U_THRESHOLD {
+            return TWOM1000 * TWOM1000;
+        }
+    }
+    let (mut hi, mut lo, mut k) = (0.0, 0.0, 0i32);
+    if hx > 0x3FD6_2E42 {
+        if hx < 0x3FF0_A2B2 {
+            if x == 1.0 {
+                return E;
+            }
+            hi = x - LN2_HI[xsb];
+            lo = LN2_LO[xsb];
+            k = 1 - 2 * xsb as i32;
+        } else {
+            // `static_cast<int>` trunca em direção a zero, como o `as` do Rust.
+            k = (INVLN2 * x + HALF[xsb]) as i32;
+            let t = f64::from(k);
+            hi = x - t * LN2_HI[0];
+            lo = t * LN2_LO[0];
+        }
+        x = hi - lo;
+    } else if hx < 0x3E30_0000 {
+        if HUGE + x > 1.0 {
+            return 1.0 + x;
+        }
+    } else {
+        k = 0;
+    }
+    let t = x * x;
+    let twopk = if k >= -1021 {
+        com_palavras(0x3FF0_0000_i32.wrapping_add(((k as u32) << 20) as i32), 0)
+    } else {
+        com_palavras(
+            0x3FF0_0000_i32.wrapping_add((((k + 1000) as u32) << 20) as i32),
+            0,
+        )
+    };
+    let c = x - t * (P1 + t * (P2 + t * (P3 + t * (P4 + t * P5))));
+    if k == 0 {
+        return 1.0 - ((x * c) / (c - 2.0) - x);
+    }
+    let y = 1.0 - ((lo - (x * c) / (2.0 - c)) - hi);
+    if k >= -1021 {
+        if k == 1024 {
+            return y * 2.0 * TWO1023;
+        }
+        y * twopk
+    } else {
+        y * twopk * TWOM1000
+    }
+}
+
 #[cfg(test)]
 mod testes {
     use proptest::prelude::*;

@@ -7,6 +7,7 @@ use nucleo::bolsa::repo::{
     OfertaBruta, RepoMercado,
 };
 use nucleo::bolsa::venda::VendaBruta;
+use nucleo::js;
 use nucleo::precificador::cotacao::PrecoItemDia;
 use nucleo::precificador::especie::{Especie, Golpe};
 use nucleo::precificador::motor::LinhaMotor;
@@ -175,7 +176,7 @@ impl RepoMercado for PgRepoMercado {
             em: l.em,
             preco: l.preco as f64,
             base: l.base,
-            log_base: l.base.ln(),
+            log_base: js::ln(l.base),
             adicionais: l.adicionais,
             mega: l.mega,
             pve: l.pve,
