@@ -6,5 +6,6 @@
 //! banco e com resultados reproduzíveis.
 
 pub mod bolsa;
+pub mod combate;
 pub mod js;
 pub mod precificador;
