@@ -138,7 +138,7 @@ cd /opt/nexus-deploy
 sudo -u nexus-deploy docker compose exec -T nexus-api-blue /nexus-api importar itens < items-catalogo.json
 ```
 
-O catálogo de espécies é um arquivo JS; para gerar o JSON, basta carregar os dois arquivos do catálogo e serializar `PI_ESPECIES` (o legado já roda Node, então um `node -e` resolve). O catálogo de itens muda quando o jogo adiciona itens; o de espécies, quando adiciona espécies. Enquanto o Nexus não busca esses catálogos sozinho, reimporte quando o jogo mudar. Com o catálogo de itens vazio, os itens sem `item_id` viram tickers por nome (`i:n:<nome>:<moeda>`) e deixam de bater com o legado.
+O catálogo de espécies é um arquivo JS; para gerar o JSON, basta carregar os dois arquivos do catálogo e serializar `PI_ESPECIES` (o legado já roda Node, então um `node -e` resolve). O `deploy/sincronizar-catalogos.sh`, instalado pelo `instalar.sh` com um cron a cada 10 minutos (`/etc/cron.d/nexus-catalogos`, log em `journalctl -t nexus-catalogos`), faz isso sozinho: compara o sha256 de cada arquivo com o da última importação e só reimporta o que mudou, pela API ativa. Ele roda como root porque os arquivos do legado não são legíveis pelo `nexus-deploy`, pula a rodada se houver um deploy em andamento e converte o catálogo de espécies com o Node do legado (sem Node na máquina, esse catálogo fica de fora). A API relê os catálogos a cada 30 minutos. Com o catálogo de itens vazio, os itens sem `item_id` viram tickers por nome (`i:n:<nome>:<moeda>`) e deixam de bater com o legado.
 
 ### Escrita da bolsa
 

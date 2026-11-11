@@ -65,4 +65,12 @@ printf '%s\n' \
   > /etc/cron.d/nexus-tls
 chmod 644 /etc/cron.d/nexus-tls
 
+# Catálogos que ainda vivem em arquivos do legado: reimporta quando mudam.
+install -o root -g root -m 755 "$RAIZ/deploy/sincronizar-catalogos.sh" "$BASE/sincronizar-catalogos.sh"
+printf '%s\n' \
+  '# Reimporta no schema nexus os catálogos do legado que mudaram.' \
+  "*/10 * * * * root $BASE/sincronizar-catalogos.sh 2>&1 | logger -t nexus-catalogos" \
+  > /etc/cron.d/nexus-catalogos
+chmod 644 /etc/cron.d/nexus-catalogos
+
 echo "instalação concluída em $BASE"
