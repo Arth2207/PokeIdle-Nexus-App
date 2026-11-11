@@ -8,11 +8,12 @@ use std::collections::HashMap;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::{Extension, Json};
 use contrato::Erro;
 use nucleo::equipes;
 use serde_json::Value;
 
+use crate::auth::Cliente;
 use crate::bolsa::agora_ms;
 use crate::equipes::ErroServico;
 use crate::estado::Estado;
@@ -33,6 +34,21 @@ fn erro(status: u16, msg: &str) -> Response {
     (s, Json(Erro::novo(msg))).into_response()
 }
 
+/// O nick permitido para o token (o da conta dele, se estiver preso a uma).
+fn nick_de(
+    cliente: Option<&Extension<Cliente>>,
+    pedido: Option<&str>,
+) -> Result<Option<String>, ()> {
+    match cliente {
+        Some(Extension(c)) => c.nick_permitido(pedido),
+        None => Ok(pedido.filter(|n| !n.is_empty()).map(str::to_owned)),
+    }
+}
+
+fn proibido() -> Response {
+    erro(403, "este token só acessa a própria conta")
+}
+
 /// Busca motor e estado, ou devolve 503.
 macro_rules! dados {
     ($estado:expr) => {{
@@ -47,10 +63,18 @@ macro_rules! dados {
     }};
 }
 
-pub async fn bosses(State(estado): State<Estado>, Query(p): Params) -> Response {
+pub async fn bosses(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Query(p): Params,
+) -> Response {
+    let nick = match nick_de(cliente.as_ref(), p.get("nick").map(String::as_str)) {
+        Ok(n) => n,
+        Err(()) => return proibido(),
+    };
     let (motor, est) = dados!(estado);
     let r = tokio::task::spawn_blocking(move || {
-        equipes::resposta_bosses(&motor, &est, p.get("nick").map(String::as_str))
+        equipes::resposta_bosses(&motor, &est, nick.as_deref())
     })
     .await;
     match r {
@@ -59,11 +83,19 @@ pub async fn bosses(State(estado): State<Estado>, Query(p): Params) -> Response 
     }
 }
 
-pub async fn plano(State(estado): State<Estado>, Query(p): Params) -> Response {
+pub async fn plano(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Query(p): Params,
+) -> Response {
+    let nick = match nick_de(cliente.as_ref(), p.get("nick").map(String::as_str)) {
+        Ok(n) => n,
+        Err(()) => return proibido(),
+    };
     let (motor, est) = dados!(estado);
     let r = tokio::task::spawn_blocking(move || {
         let g = |k: &str| p.get(k).map(String::as_str);
-        equipes::resposta_plano(&motor, &est, g("nick"), g("boss"), g("perfil"))
+        equipes::resposta_plano(&motor, &est, nick.as_deref(), g("boss"), g("perfil"))
     })
     .await;
     match r {
@@ -75,7 +107,14 @@ pub async fn plano(State(estado): State<Estado>, Query(p): Params) -> Response {
 
 /// `POST /api/equipes/ingest`: só com `NEXUS_ESCRITA_EQUIPES=true`. Até o cutover, quem
 /// recebe o relay é o legado, e o estado chega aqui pela importação.
-pub async fn ingest(State(estado): State<Estado>, Json(corpo): Json<Value>) -> Response {
+pub async fn ingest(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Json(corpo): Json<Value>,
+) -> Response {
+    if nick_de(cliente.as_ref(), corpo.get("nick").and_then(Value::as_str)).is_err() {
+        return proibido();
+    }
     if !estado.escrita_equipes {
         return erro(
             503,
@@ -103,7 +142,15 @@ use crate::equipes::bolsa::{Pedido, Situacao};
 
 /// `GET /api/bolsa/equipe`: responde direto quando o cálculo termina em até 1,5 s; senão
 /// `202` com o resultado anterior e o progresso, como no legado.
-pub async fn equipe_bolsa(State(estado): State<Estado>, Query(p): Params) -> Response {
+pub async fn equipe_bolsa(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Query(p): Params,
+) -> Response {
+    let nick = match nick_de(cliente.as_ref(), p.get("nick").map(String::as_str)) {
+        Ok(n) => n,
+        Err(()) => return proibido(),
+    };
     let g = |k: &str| p.get(k).filter(|v| !v.is_empty()).cloned();
     let idade = nucleo::js::mais(p.get("idade").map(|v| Value::from(v.as_str())).as_ref());
     let idade = if idade == 0.0 || idade.is_nan() {
@@ -118,7 +165,7 @@ pub async fn equipe_bolsa(State(estado): State<Estado>, Query(p): Params) -> Res
         } else {
             "orb".into()
         },
-        nick: g("nick"),
+        nick: nick.clone(),
         idade_min: idade.clamp(5.0, 1440.0 * 7.0),
         n: 5,
         orcamento: p
@@ -154,13 +201,17 @@ pub async fn equipe_bolsa(State(estado): State<Estado>, Query(p): Params) -> Res
 }
 
 /// `GET /api/bolsa/equipe-propria`.
-pub async fn equipe_propria(State(estado): State<Estado>, Query(p): Params) -> Response {
+pub async fn equipe_propria(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Query(p): Params,
+) -> Response {
+    let nick = match nick_de(cliente.as_ref(), p.get("nick").map(String::as_str)) {
+        Ok(n) => n,
+        Err(()) => return proibido(),
+    };
     let g = |k: &str| p.get(k).cloned();
-    match estado
-        .equipe_bolsa
-        .propria(&estado, g("boss"), g("nick"))
-        .await
-    {
+    match estado.equipe_bolsa.propria(&estado, g("boss"), nick).await {
         Ok(d) => {
             let status = if d.get("erro").is_some() {
                 StatusCode::NOT_FOUND
@@ -177,8 +228,15 @@ pub async fn equipe_propria(State(estado): State<Estado>, Query(p): Params) -> R
 }
 
 /// `GET /api/bolsa/alvos-coleta`.
-pub async fn alvos_coleta(State(estado): State<Estado>, Query(p): Params) -> Response {
-    let nick = p.get("nick").filter(|v| !v.is_empty()).cloned();
+pub async fn alvos_coleta(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Query(p): Params,
+) -> Response {
+    let nick = match nick_de(cliente.as_ref(), p.get("nick").map(String::as_str)) {
+        Ok(n) => n,
+        Err(()) => return proibido(),
+    };
     match estado
         .equipe_bolsa
         .alvos(&estado, nick, p.get("max").cloned())
@@ -194,7 +252,15 @@ pub async fn alvos_coleta(State(estado): State<Estado>, Query(p): Params) -> Res
 
 /// `GET /api/bolsa/equipe-hibrida` (rota nova): a equipe com os pokémon da conta, comprando
 /// só as vagas que faltam.
-pub async fn equipe_hibrida(State(estado): State<Estado>, Query(p): Params) -> Response {
+pub async fn equipe_hibrida(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Query(p): Params,
+) -> Response {
+    let nick = match nick_de(cliente.as_ref(), p.get("nick").map(String::as_str)) {
+        Ok(n) => n,
+        Err(()) => return proibido(),
+    };
     let g = |k: &str| p.get(k).filter(|v| !v.is_empty()).cloned();
     let moeda = if p.get("moeda").map(String::as_str) == Some("gold") {
         "gold"
@@ -203,7 +269,7 @@ pub async fn equipe_hibrida(State(estado): State<Estado>, Query(p): Params) -> R
     };
     match estado
         .equipe_bolsa
-        .hibrida(&estado, g("boss"), g("nick"), moeda.into())
+        .hibrida(&estado, g("boss"), nick, moeda.into())
         .await
     {
         Ok(v) => {

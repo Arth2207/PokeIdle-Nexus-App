@@ -69,6 +69,21 @@ pub struct ErroEscopo(String);
 pub struct Cliente {
     pub nome: String,
     pub escopos: Vec<Escopo>,
+    /// Conta do jogo a que o token está preso (`nexus.api_token.conta`).
+    pub conta: Option<String>,
+}
+
+impl Cliente {
+    /// O nick que a requisição pode usar nas rotas de equipes: o da conta do token, ou o
+    /// pedido, se o token não está preso a nenhuma. `Err` quando pede outra conta.
+    pub fn nick_permitido(&self, pedido: Option<&str>) -> Result<Option<String>, ()> {
+        match (&self.conta, pedido.filter(|n| !n.is_empty())) {
+            (None, p) => Ok(p.map(str::to_owned)),
+            (Some(c), None) => Ok(Some(c.clone())),
+            (Some(c), Some(p)) if c.eq_ignore_ascii_case(p) => Ok(Some(c.clone())),
+            (Some(_), Some(_)) => Err(()),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -86,6 +101,7 @@ pub async fn criar_token(
     db: &PgPool,
     nome: &str,
     escopos: &[Escopo],
+    conta: Option<&str>,
 ) -> Result<String, ErroCriarToken> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes)?;
@@ -102,7 +118,16 @@ pub async fn criar_token(
     .await;
 
     match resultado {
-        Ok(_) => Ok(token),
+        Ok(_) => {
+            if let Some(c) = conta {
+                sqlx::query("UPDATE nexus.api_token SET conta = $1 WHERE nome = $2")
+                    .bind(c.to_lowercase())
+                    .bind(nome)
+                    .execute(db)
+                    .await?;
+            }
+            Ok(token)
+        }
         Err(sqlx::Error::Database(erro)) if erro.is_unique_violation() => {
             Err(ErroCriarToken::NomeRepetido(nome.to_owned()))
         }
@@ -182,11 +207,54 @@ async fn buscar_cliente(db: &PgPool, hash: &[u8; 32]) -> Result<Option<Cliente>,
     .fetch_optional(db)
     .await?;
 
-    Ok(linha.map(|l| Cliente {
+    let Some(l) = linha else { return Ok(None) };
+    // A coluna `conta` chegou depois (migration aditiva): lida à parte, e sem ela o token
+    // continua valendo para todas as contas.
+    let conta: Option<String> =
+        sqlx::query_scalar("SELECT conta FROM nexus.api_token WHERE hash = $1")
+            .bind(&hash[..])
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten()
+            .flatten();
+    Ok(Some(Cliente {
         nome: l.nome,
         // A tabela tem CHECK nos valores, então o filter_map nunca descarta nada na prática.
         escopos: l.escopos.iter().filter_map(|e| e.parse().ok()).collect(),
+        conta,
     }))
+}
+
+#[cfg(test)]
+mod testes_conta {
+    use super::*;
+
+    fn cliente(conta: Option<&str>) -> Cliente {
+        Cliente {
+            nome: "t".into(),
+            escopos: vec![Escopo::Leitura],
+            conta: conta.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn token_preso_a_conta_so_ve_a_propria() {
+        assert_eq!(
+            cliente(None).nick_permitido(Some("a")),
+            Ok(Some("a".into()))
+        );
+        assert_eq!(cliente(None).nick_permitido(None), Ok(None));
+        assert_eq!(
+            cliente(Some("a")).nick_permitido(None),
+            Ok(Some("a".into()))
+        );
+        assert_eq!(
+            cliente(Some("a")).nick_permitido(Some("A")),
+            Ok(Some("a".into()))
+        );
+        assert_eq!(cliente(Some("a")).nick_permitido(Some("b")), Err(()));
+    }
 }
 
 fn nao_autorizado(mensagem: &'static str) -> Response {
@@ -250,6 +318,7 @@ mod testes {
             .layer(axum::Extension(Cliente {
                 nome: "teste".into(),
                 escopos,
+                conta: None,
             }));
         let req = Request::builder()
             .method("POST")

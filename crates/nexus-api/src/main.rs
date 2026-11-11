@@ -3,7 +3,7 @@
 //! Uso:
 //!   nexus-api                                  sobe o servidor
 //!   nexus-api migrar                           aplica as migrations pendentes
-//!   nexus-api token criar <nome> <escopos>     cria um token (escopos separados por vírgula)
+//!   nexus-api token criar <nome> <escopos> [conta]  cria um token (escopos separados por vírgula; com conta, só enxerga essa conta)
 //!   nexus-api importar itens < itens.json      catálogo de itens (items-catalogo.json do legado)
 //!   nexus-api importar especies < esp.json     catálogo de espécies (PI_ESPECIES em JSON)
 //!   nexus-api importar base < base.json        base do precificador (vendas antigas, cotações)
@@ -44,7 +44,7 @@ use crate::auth::Escopo;
 use crate::configuracao::Configuracao;
 use crate::estado::Estado;
 
-const USO: &str = "uso: nexus-api [migrar | token criar <nome> <escopos> | \
+const USO: &str = "uso: nexus-api [migrar | token criar <nome> <escopos> [conta] | \
 importar itens|especies|base|meus-itens|pokedex|equipes|wiki|faltas|welcome | paridade [url] | healthcheck]";
 
 #[tokio::main]
@@ -59,7 +59,10 @@ async fn main() -> anyhow::Result<()> {
     match args.as_slice() {
         [] => servir(cfg).await,
         ["migrar"] => migrar(&cfg).await,
-        ["token", "criar", nome, escopos] => criar_token(&cfg, nome, escopos).await,
+        ["token", "criar", nome, escopos] => criar_token(&cfg, nome, escopos, None).await,
+        ["token", "criar", nome, escopos, conta] => {
+            criar_token(&cfg, nome, escopos, Some(conta)).await
+        }
         ["importar", tipo] => importar(&cfg, tipo).await,
         ["avaliar-fichas", agora] => avaliar_fichas(&cfg, agora).await,
         ["paridade-continua"] => paridade_continua(cfg).await,
@@ -151,14 +154,19 @@ async fn migrar(cfg: &Configuracao) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn criar_token(cfg: &Configuracao, nome: &str, escopos: &str) -> anyhow::Result<()> {
+async fn criar_token(
+    cfg: &Configuracao,
+    nome: &str,
+    escopos: &str,
+    conta: Option<&str>,
+) -> anyhow::Result<()> {
     let escopos = escopos
         .split(',')
         .map(|e| e.trim().parse::<Escopo>())
         .collect::<Result<Vec<_>, _>>()?;
 
     let estado = Estado::novo(cfg).context("NEXUS_DATABASE_URL inválida")?;
-    let token = auth::criar_token(&estado.db, nome, &escopos).await?;
+    let token = auth::criar_token(&estado.db, nome, &escopos, conta).await?;
 
     println!("token criado para {nome:?} com escopos {escopos:?}");
     println!("guarde agora, ele não será mostrado de novo:\n\n{token}\n");
