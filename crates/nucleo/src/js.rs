@@ -700,6 +700,49 @@ pub fn exp(x: f64) -> f64 {
     }
 }
 
+/// Número como o `JSON.stringify` grava: inteiros sem ".0", e `NaN`/`Infinity` viram `null`.
+pub fn json_num(x: f64) -> serde_json::Value {
+    if !x.is_finite() {
+        serde_json::Value::Null
+    } else if x.fract() == 0.0 && x.abs() < 9_007_199_254_740_992.0 {
+        serde_json::Value::from(x as i64)
+    } else {
+        serde_json::Value::from(x)
+    }
+}
+
+/// `String(v)` do JS. `None` é o `undefined`.
+pub fn texto(v: Option<&serde_json::Value>) -> String {
+    use serde_json::Value;
+    match v {
+        None => "undefined".into(),
+        Some(Value::Null) => "null".into(),
+        Some(Value::Bool(b)) => b.to_string(),
+        Some(Value::Number(n)) => numero(n.as_f64().unwrap_or(f64::NAN)),
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|x| match x {
+                Value::Null => String::new(),
+                outro => texto(Some(outro)),
+            })
+            .collect::<Vec<_>>()
+            .join(","),
+        Some(Value::Object(_)) => "[object Object]".into(),
+    }
+}
+
+/// `a ?? b`: o primeiro que não for `null` nem `undefined`.
+pub fn nulo_ou<'a>(
+    a: Option<&'a serde_json::Value>,
+    b: Option<&'a serde_json::Value>,
+) -> Option<&'a serde_json::Value> {
+    match a {
+        None | Some(serde_json::Value::Null) => b,
+        outro => outro,
+    }
+}
+
 #[cfg(test)]
 mod testes {
     use proptest::prelude::*;

@@ -7,5 +7,6 @@
 
 pub mod bolsa;
 pub mod combate;
+pub mod equipes;
 pub mod js;
 pub mod precificador;
