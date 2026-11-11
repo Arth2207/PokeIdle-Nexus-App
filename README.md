@@ -63,6 +63,7 @@ O resto (rotas, ETL, scoring) não é gargalo, mas migrar tudo resolve outro pro
 | [Operação](docs/operacao.md) | Deploy, rollback, tokens, logs: os comandos do dia a dia |
 | [Testes](docs/testes.md) | Estratégia de testes e paridade |
 | [Glossário](docs/glossario.md) | Termos do jogo e do domínio |
+| [Telas do app](docs/design/telas.md) | Arquitetura de telas, KPIs e padrões de dashboard do app |
 | [Decisões (ADRs)](docs/adr/README.md) | Registro das decisões de arquitetura |
 
 ## Estrutura do repositório (alvo)
