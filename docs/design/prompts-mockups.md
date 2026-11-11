@@ -175,7 +175,7 @@ LAYOUT: navegação interna vertical à esquerda (Contas, Metas dos KPIs, Tokens
 ```
 Gere a MESMA tela "Visão geral" (layout, textos, números e criatura idênticos), agora no TEMA NOTURNO.
 
-FUNDO: a mesma paisagem, à noite: céu azul-profundo com estrelas e uma lua grande e suave, a cidade-jardim ao fundo com janelas acesas em luz quente, plantas e cogumelos bioluminescentes em verde-limão e ciano suave, vagalumes discretos perto do riacho, reflexo da lua na água. Atmosfera calma e mágica, não sombria.
+FUNDO: EXATAMENTE a mesma paisagem da versão diurna, com a mesma composição (as mesmas árvores, o riacho, as montanhas e a cidade-jardim nas mesmas posições), só que à noite: céu azul-profundo com estrelas e uma lua grande e suave, a cidade-jardim ao fundo com janelas acesas em luz quente, plantas e cogumelos bioluminescentes em verde-limão e ciano suave, vagalumes discretos perto do riacho, reflexo da lua na água. Atmosfera calma e mágica, não sombria.
 
 PAINÉIS: vidro fumê escuro (#0E1116 a ~70% de opacidade, desfoque forte), borda de 1px branca a 10%, sem sombra pesada. Texto principal off-white #EEF0F3, secundário #9AA3AE.
 
@@ -217,7 +217,7 @@ IMAGEM 9 · FINANÇAS (bioma: campos dourados com moinhos modernos). Filtros: To
 
 IMAGEM 10 · BESTIÁRIO › ESPÉCIE (bioma: bosque úmido com samambaias gigantes). Folhális grande em 2.5D saindo do painel, anel de escaneamento, linhas de medição (ATQ 4.820, DEF 3.190, VEL 2.340, CRIT 24,6%), controle deslizante "Nv. 72". Direita: nome, REG 0317, tipos, escada evolutiva com 3 estágios, "Onde rende" em barras ordenadas, "Valor de mercado 21.300 ▲+6,8%", veredito "Seu exemplar está no top 12% · guardar e evoluir no Nv. 80". Base: tabela de golpes e retratos dos bosses em que é útil com a chance de vitória.
 
-IMAGEM 11 · VISÃO GERAL NO TEMA NOTURNO. A mesma tela da imagem 1, idêntica em layout e dados, à noite: céu azul-profundo com estrelas e lua suave, janelas da cidade-jardim acesas em luz quente, plantas e cogumelos bioluminescentes em verde-limão e ciano, vagalumes perto do riacho, lua refletida na água; calmo e mágico, não sombrio. Painéis em vidro fumê escuro (#0E1116 ~70%, desfoque forte, borda branca a 10%), texto off-white #EEF0F3 e secundário #9AA3AE. Mesmo verde-limão com brilho levíssimo; melhora #3DDC97, piora #FF6B57. A raposa com as folhas levemente bioluminescentes. Gráficos continuam planos.
+IMAGEM 11 · VISÃO GERAL NO TEMA NOTURNO. A mesma tela da imagem 1, idêntica em layout e dados, com EXATAMENTE a mesma paisagem de fundo (mesma composição: mesmas árvores, riacho, montanhas e cidade-jardim nas mesmas posições), só que à noite: céu azul-profundo com estrelas e lua suave, janelas da cidade-jardim acesas em luz quente, plantas e cogumelos bioluminescentes em verde-limão e ciano, vagalumes perto do riacho, lua refletida na água; calmo e mágico, não sombrio. Painéis em vidro fumê escuro (#0E1116 ~70%, desfoque forte, borda branca a 10%), texto off-white #EEF0F3 e secundário #9AA3AE. Mesmo verde-limão com brilho levíssimo; melhora #3DDC97, piora #FF6B57. A raposa com as folhas levemente bioluminescentes. Gráficos continuam planos.
 ```
 
 As telas de Automação e Configurações ficam fora do prompt único por serem de menor risco visual; os prompts individuais (8 e 9) estão acima.
