@@ -13,6 +13,7 @@
 //!   nexus-api importar wiki < wiki.txt         bosses da wiki do jogo (POKEIDLE-wiki.txt)
 //!   nexus-api importar faltas < faltas.json    faltas de coleta (.bolsa-faltas.json do legado)
 //!   nexus-api importar welcome < payload.json  constantes do servidor (tabela de tipos etc.)
+//!   nexus-api pokedex-divergencias             diagnóstico: pokédex do motor × catálogo do precificador
 //!   nexus-api paridade [url]                   uma rodada de comparação com o legado
 //!   nexus-api paridade-continua                comparador em loop, gravando em nexus.paridade
 //!   nexus-api avaliar-fichas <agora_ms>        diagnóstico: valor justo de fichas (stdin)
@@ -64,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
             criar_token(&cfg, nome, escopos, Some(conta)).await
         }
         ["importar", tipo] => importar(&cfg, tipo).await,
+        ["pokedex-divergencias"] => pokedex_divergencias(&cfg).await,
         ["avaliar-fichas", agora] => avaliar_fichas(&cfg, agora).await,
         ["paridade-continua"] => paridade_continua(cfg).await,
         ["paridade"] => paridade(&cfg, None).await,
@@ -456,5 +458,77 @@ async fn healthcheck(cfg: &Configuracao) -> anyhow::Result<()> {
         "healthcheck: resposta {:?}",
         String::from_utf8_lossy(&inicio)
     );
+    Ok(())
+}
+
+/// Compara as duas pokédex do sistema: a do motor de combate (`nexus.pokedex_motor`) e o
+/// catálogo do precificador (`nexus.especie`). Só lê.
+async fn pokedex_divergencias(cfg: &Configuracao) -> anyhow::Result<()> {
+    use std::collections::BTreeMap;
+    let db = Estado::novo(cfg).context("NEXUS_DATABASE_URL inválida")?.db;
+    let motor = persistencia::equipes::carregar_pokedex(&db).await?;
+    let precificador: serde_json::Value = sqlx::query_scalar(
+        "SELECT coalesce(jsonb_agg(jsonb_build_object('id', id, 'nome', nome, 'tipos', tipos, 'base', base)), '[]') FROM nexus.especie",
+    )
+    .fetch_one(&db)
+    .await?;
+    let por_id = |v: &serde_json::Value, id: &str| -> BTreeMap<i64, serde_json::Value> {
+        v.as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| Some((x.get(id)?.as_i64()?, x.clone())))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let (m, p) = (por_id(&motor, "d"), por_id(&precificador, "id"));
+    let so_motor: Vec<String> = m
+        .iter()
+        .filter(|(k, _)| !p.contains_key(k))
+        .map(|(k, v)| format!("{k} {}", v["n"]))
+        .collect();
+    let so_prec: Vec<String> = p
+        .iter()
+        .filter(|(k, _)| !m.contains_key(k))
+        .map(|(k, v)| format!("{k} {}", v["nome"]))
+        .collect();
+    let mut nome = Vec::new();
+    let mut tipos = Vec::new();
+    let mut base = Vec::new();
+    for (k, a) in &m {
+        let Some(b) = p.get(k) else { continue };
+        if a["n"].as_str().map(str::to_lowercase) != b["nome"].as_str().map(str::to_lowercase) {
+            nome.push(format!("{k}: {} × {}", a["n"], b["nome"]));
+        }
+        if a["t"] != b["tipos"] {
+            tipos.push(format!("{k} {}: {} × {}", a["n"], a["t"], b["tipos"]));
+        }
+        let num = |v: &serde_json::Value| {
+            v.as_array().map(|x| {
+                x.iter()
+                    .filter_map(serde_json::Value::as_f64)
+                    .collect::<Vec<_>>()
+            })
+        };
+        if num(&a["s"]) != num(&b["base"]) {
+            base.push(format!("{k} {}: {} × {}", a["n"], a["s"], b["base"]));
+        }
+    }
+    let mostra = |titulo: &str, l: &[String]| {
+        println!("{titulo}: {}", l.len());
+        for x in l.iter().take(15) {
+            println!("  {x}");
+        }
+    };
+    println!(
+        "motor: {} espécies, precificador: {} espécies",
+        m.len(),
+        p.len()
+    );
+    mostra("só no motor", &so_motor);
+    mostra("só no precificador", &so_prec);
+    mostra("nome diferente", &nome);
+    mostra("tipos diferentes", &tipos);
+    mostra("status base diferentes", &base);
     Ok(())
 }

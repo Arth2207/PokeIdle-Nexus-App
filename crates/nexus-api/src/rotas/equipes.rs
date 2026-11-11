@@ -283,3 +283,90 @@ pub async fn equipe_hibrida(
         Err(e) => erro(500, &e.to_string()),
     }
 }
+
+/// `POST /api/boss/tentativa` (rota nova): grava uma tentativa de boss para calibrar o
+/// modelo do jogo. Só com `NEXUS_ESCRITA_EQUIPES=true`; quem envia é o relay (fase 3).
+///
+/// Corpo: `{ nick, boss, nivelBoss?, tiposBoss?, venceu, duracaoS, equipe: [fichas],
+/// danoCausado?, danoRecebido?, eventos?, em? }`.
+pub async fn tentativa(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Json(c): Json<Value>,
+) -> Response {
+    if !estado.escrita_equipes {
+        return erro(
+            503,
+            "escrita de equipes desligada neste servidor (NEXUS_ESCRITA_EQUIPES)",
+        );
+    }
+    let Ok(nick) = nick_de(cliente.as_ref(), c.get("nick").and_then(Value::as_str)) else {
+        return proibido();
+    };
+    let Some(boss) = c
+        .get("boss")
+        .and_then(Value::as_str)
+        .map(equipes::norm)
+        .filter(|b| !b.is_empty())
+    else {
+        return erro(400, "boss obrigatório");
+    };
+    let Some(fichas) = c
+        .get("equipe")
+        .and_then(Value::as_array)
+        .filter(|e| (1..=5).contains(&e.len()) && e.iter().all(Value::is_object))
+    else {
+        return erro(400, "equipe precisa de 1 a 5 fichas");
+    };
+    let Some(venceu) = c.get("venceu").and_then(Value::as_bool) else {
+        return erro(400, "venceu obrigatório");
+    };
+    let duracao = c
+        .get("duracaoS")
+        .and_then(Value::as_f64)
+        .filter(|d| d.is_finite() && *d > 0.0);
+    let Some(duracao) = duracao else {
+        return erro(400, "duracaoS precisa ser positiva");
+    };
+    // Nível e tipos do boss: os enviados, ou os da lista viva.
+    let (motor, est) = dados!(estado);
+    let da_lista = motor
+        .lista_bosses(&est.bosses)
+        .into_iter()
+        .find(|b| b.key == boss);
+    let nivel = c
+        .get("nivelBoss")
+        .and_then(Value::as_f64)
+        .or(da_lista.as_ref().map(|b| b.team_level));
+    let Some(nivel) = nivel.filter(|n| *n > 0.0) else {
+        return erro(400, "nivelBoss desconhecido para este boss");
+    };
+    let tipos: Vec<String> = match c.get("tiposBoss").and_then(Value::as_array) {
+        Some(t) => t
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_uppercase)
+            .collect(),
+        None => da_lista.map(|b| b.tipos).unwrap_or_default(),
+    };
+    let linha = persistencia::equipes::LinhaTentativa {
+        em: c.get("em").and_then(Value::as_i64).unwrap_or_else(agora_ms),
+        conta: nick,
+        boss,
+        nivel_boss: nivel,
+        tipos_boss: tipos,
+        venceu,
+        duracao_s: duracao,
+        equipe: Value::Array(fichas.clone()),
+        dano_causado: c.get("danoCausado").and_then(Value::as_f64),
+        dano_recebido: c.get("danoRecebido").and_then(Value::as_f64),
+        eventos: c.get("eventos").cloned().filter(|v| !v.is_null()),
+    };
+    match persistencia::equipes::registrar_tentativa(&estado.db, &linha).await {
+        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => {
+            tracing::warn!(erro = %e, "tentativa de boss");
+            erro(503, "banco indisponível")
+        }
+    }
+}

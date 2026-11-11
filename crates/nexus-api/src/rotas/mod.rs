@@ -56,6 +56,7 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/bolsa/resumo-itens", post(bolsa::gravar_resumo))
         .route("/api/bolsa/meus-itens", post(bolsa::gravar_meus_itens))
         .route("/api/equipes/ingest", post(equipes::ingest))
+        .route("/api/boss/tentativa", post(equipes::tentativa))
         .route_layer(middleware::from_fn(|req, next| {
             auth::exigir_escopo(INGESTAO, req, next)
         }))
