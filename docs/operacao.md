@@ -144,7 +144,7 @@ cd /opt/nexus-deploy
 sudo -u nexus-deploy docker compose exec -T nexus-api-blue /nexus-api importar itens < items-catalogo.json
 ```
 
-O catálogo de espécies é um arquivo JS; para gerar o JSON, basta carregar os dois arquivos do catálogo e serializar `PI_ESPECIES` (o legado já roda Node, então um `node -e` resolve). O `deploy/sincronizar-catalogos.sh`, instalado pelo `instalar.sh` com um cron a cada 10 minutos (`/etc/cron.d/nexus-catalogos`, log em `journalctl -t nexus-catalogos`), faz isso sozinho: compara o sha256 de cada arquivo com o da última importação e só reimporta o que mudou, pela API ativa. Ele roda como root porque os arquivos do legado não são legíveis pelo `nexus-deploy`, pula a rodada se houver um deploy em andamento e converte o catálogo de espécies com o Node do legado (sem Node na máquina, esse catálogo fica de fora). A API relê os catálogos a cada 30 minutos. Com o catálogo de itens vazio, os itens sem `item_id` viram tickers por nome (`i:n:<nome>:<moeda>`) e deixam de bater com o legado.
+O catálogo de espécies é um arquivo JS; para gerar o JSON, basta carregar os dois arquivos do catálogo e serializar `PI_ESPECIES` (o legado já roda Node, então um `node -e` resolve). O `deploy/sincronizar-catalogos.sh`, instalado pelo `instalar.sh` com um cron a cada 10 minutos (`/etc/cron.d/nexus-catalogos`, log em `journalctl -t nexus-catalogos`), faz isso sozinho: compara o sha256 de cada arquivo com o da última importação e só reimporta o que mudou, pela API ativa. Ele roda como root porque os arquivos do legado não são legíveis pelo `nexus-deploy`, pula a rodada se houver um deploy em andamento e converte o catálogo de espécies com o Node do legado (sem Node na máquina, esse catálogo fica de fora). A API relê os catálogos da bolsa e a pokédex a cada 30 minutos, e o estado de equipes a cada 30 segundos. Com o catálogo de itens vazio, os itens sem `item_id` viram tickers por nome (`i:n:<nome>:<moeda>`) e deixam de bater com o legado.
 
 ### Escrita da bolsa
 
@@ -158,7 +158,7 @@ As rotas `POST /api/bolsa/ofertas`, `resumo-itens` e `meus-itens` e a limpeza pe
 
 `NEXUS_MELHORIAS=true` liga o que diverge do legado de propósito ([ADR 0010](adr/0010-paridade-primeiro-melhorias-depois.md)): seleção exata nos perfis de equipe, chance de vitória, ordem de compra, preços típicos corrigidos e a tabela de tipos do servidor. Só no cutover da fase 2.
 
-`nexus-api token criar <nome> <escopos> <conta>` cria um token preso a uma conta: nas rotas de equipes ele só enxerga essa conta (pedir outra dá `403`). `nexus-api pokedex-divergencias` compara as duas pokédex do sistema.
+`nexus-api token criar <nome> <escopos> [conta]`, com a conta, cria um token preso a ela: nas rotas de equipes ele só enxerga essa conta (pedir outra dá `403`). `nexus-api pokedex-divergencias` compara as duas pokédex do sistema.
 
 ### Modelos de combate
 

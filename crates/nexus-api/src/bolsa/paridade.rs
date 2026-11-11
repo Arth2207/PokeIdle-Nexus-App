@@ -59,7 +59,13 @@ pub fn diferenca(a: &Value, b: &Value, caminho: &str) -> Option<String> {
             let tempo = SENSIVEIS_AO_TEMPO
                 .iter()
                 .any(|c| caminho.ends_with(&format!(".{c}")));
-            let vivo = AO_VIVO.iter().any(|c| caminho.ends_with(&format!(".{c}")));
+            // Só nas estatísticas de ofertas e vendas (ofStat, hist) e nos campos derivados delas.
+            let vivo = AO_VIVO.iter().any(|c| caminho.ends_with(&format!(".{c}")))
+                && (caminho.contains(".ofStat.")
+                    || caminho.contains(".hist.")
+                    || [".comparaveis", ".askMin", ".chance"]
+                        .iter()
+                        .any(|c| caminho.ends_with(c)));
             let ok = perto(x, y)
                 || (tempo && (x - y).abs() <= 1e-4 * x.abs().max(y.abs()))
                 || (vivo && (x - y).abs() <= 0.05 * x.abs().max(y.abs()));

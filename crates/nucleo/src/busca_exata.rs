@@ -74,6 +74,8 @@ struct Estado<'a> {
     nos: u64,
     melhor: Option<(Vec<usize>, f64)>,
     teto_restante: f64,
+    /// `baratos[r]`: soma dos `r` menores preços entre as cartas (piso de custo).
+    baratos: Vec<f64>,
 }
 
 impl Estado<'_> {
@@ -85,7 +87,11 @@ impl Estado<'_> {
         if pick.iter().filter(|&&y| self.c[y].sp == cx.sp).count() >= 2 {
             return false;
         }
-        self.orcamento.is_none_or(|b| gasto + cx.unit <= b + EPS)
+        // Depois desta carta faltam `n − len − 1` vagas: elas custam no mínimo as mais baratas.
+        let resto = self.n.saturating_sub(pick.len() + 1);
+        let piso = self.baratos.get(resto).copied().unwrap_or(f64::INFINITY);
+        self.orcamento
+            .is_none_or(|b| gasto + cx.unit + piso <= b + EPS)
     }
 
     /// Soma dos `r` maiores limites a partir da posição `k` da ordem (relaxação: ignora as
@@ -155,8 +161,19 @@ pub fn melhor_equipe(
             .then(c[a].id.cmp(&c[b].id))
     });
     let ub: Vec<f64> = ordem.iter().map(|&i| dano(&c[i], 1.0)).collect();
+    let mut precos: Vec<f64> = ordem.iter().map(|&i| c[i].unit).collect();
+    precos.sort_by(f64::total_cmp);
+    let baratos: Vec<f64> = (0..=n).map(|r| precos.iter().take(r).sum()).collect();
+    // A equipe de partida só vale se for uma equipe válida (índices, ids e espécies).
     let melhor = partida.filter(|p| {
-        p.len() == n
+        let ok_indices = p.iter().all(|&i| i < c.len());
+        ok_indices
+            && p.len() == n
+            && p.iter()
+                .enumerate()
+                .all(|(k, &i)| p[..k].iter().all(|&j| c[j].id != c[i].id))
+            && p.iter()
+                .all(|&i| p.iter().filter(|&&j| c[j].sp == c[i].sp).count() <= 2)
             && orcamento.is_none_or(|b| p.iter().map(|&i| c[i].unit).sum::<f64>() <= b + EPS)
     });
     let mut e = Estado {
@@ -170,6 +187,7 @@ pub fn melhor_equipe(
         nos: 0,
         melhor: melhor.map(|p| (p.to_vec(), dano_equipe(c, p, n, nivel_boss))),
         teto_restante: 0.0,
+        baratos,
     };
     let mut pick = Vec::with_capacity(n);
     e.dfs(0, &mut pick, 0.0, 0.0);
@@ -203,6 +221,9 @@ pub fn curva_custo_poder(
     pontos: usize,
     limite_nos: u64,
 ) -> Vec<PontoCurva> {
+    if n == 0 {
+        return Vec::new();
+    }
     let mut precos: Vec<f64> = c
         .iter()
         .map(|x| x.unit)

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT nome, escopos\n        FROM nexus.api_token\n        WHERE hash = $1\n          AND revogado_em IS NULL\n          AND (expira_em IS NULL OR expira_em > now())\n        ",
+  "query": "\n        SELECT nome, escopos, conta\n        FROM nexus.api_token\n        WHERE hash = $1\n          AND revogado_em IS NULL\n          AND (expira_em IS NULL OR expira_em > now())\n        ",
   "describe": {
     "columns": [
       {
@@ -24,6 +24,17 @@
             "name": "escopos"
           }
         }
+      },
+      {
+        "ordinal": 2,
+        "name": "conta",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "api_token",
+            "name": "conta"
+          }
+        }
       }
     ],
     "parameters": {
@@ -33,8 +44,9 @@
     },
     "nullable": [
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "11a86f1e0603bbcdf86c6961f293117b9e44d2acfa780e40a9759ab5ab30675b"
+  "hash": "2dd8dbdc78b93386c83dcae06c7207e62f93bb01580a998f44f4d6287cf99ee7"
 }

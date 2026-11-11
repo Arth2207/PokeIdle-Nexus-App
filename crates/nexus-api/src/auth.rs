@@ -108,26 +108,21 @@ pub async fn criar_token(
     let token = format!("{PREFIXO}{}", hex::encode(bytes));
 
     let escopos: Vec<String> = escopos.iter().map(|e| e.como_str().to_owned()).collect();
+    let conta = conta
+        .map(|c| c.trim().to_lowercase())
+        .filter(|c| !c.is_empty());
     let resultado = sqlx::query!(
-        "INSERT INTO nexus.api_token (nome, hash, escopos) VALUES ($1, $2, $3)",
+        "INSERT INTO nexus.api_token (nome, hash, escopos, conta) VALUES ($1, $2, $3, $4)",
         nome,
         &hash_token(&token)[..],
         &escopos,
+        conta,
     )
     .execute(db)
     .await;
 
     match resultado {
-        Ok(_) => {
-            if let Some(c) = conta {
-                sqlx::query("UPDATE nexus.api_token SET conta = $1 WHERE nome = $2")
-                    .bind(c.to_lowercase())
-                    .bind(nome)
-                    .execute(db)
-                    .await?;
-            }
-            Ok(token)
-        }
+        Ok(_) => Ok(token),
         Err(sqlx::Error::Database(erro)) if erro.is_unique_violation() => {
             Err(ErroCriarToken::NomeRepetido(nome.to_owned()))
         }
@@ -196,7 +191,7 @@ fn hash_token(token: &str) -> [u8; 32] {
 async fn buscar_cliente(db: &PgPool, hash: &[u8; 32]) -> Result<Option<Cliente>, sqlx::Error> {
     let linha = sqlx::query!(
         r#"
-        SELECT nome, escopos
+        SELECT nome, escopos, conta
         FROM nexus.api_token
         WHERE hash = $1
           AND revogado_em IS NULL
@@ -208,21 +203,11 @@ async fn buscar_cliente(db: &PgPool, hash: &[u8; 32]) -> Result<Option<Cliente>,
     .await?;
 
     let Some(l) = linha else { return Ok(None) };
-    // A coluna `conta` chegou depois (migration aditiva): lida à parte, e sem ela o token
-    // continua valendo para todas as contas.
-    let conta: Option<String> =
-        sqlx::query_scalar("SELECT conta FROM nexus.api_token WHERE hash = $1")
-            .bind(&hash[..])
-            .fetch_optional(db)
-            .await
-            .ok()
-            .flatten()
-            .flatten();
     Ok(Some(Cliente {
         nome: l.nome,
         // A tabela tem CHECK nos valores, então o filter_map nunca descarta nada na prática.
         escopos: l.escopos.iter().filter_map(|e| e.parse().ok()).collect(),
-        conta,
+        conta: l.conta,
     }))
 }
 

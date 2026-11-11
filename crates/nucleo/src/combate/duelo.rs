@@ -94,6 +94,13 @@ pub fn duelo(
     dt: f64,
     k: &Constantes,
 ) -> Duelo {
+    if dt.is_nan() || dt <= 0.0 {
+        // Passo inválido: o laço não terminaria.
+        return Duelo {
+            dps_causado: 0.0,
+            dps_recebido: 0.0,
+        };
+    }
     let mut eu = Lado::novo(me, foe, k);
     let mut ele = Lado::novo(foe, me, k);
     let (mut causado, mut recebido, mut t) = (0.0, 0.0, 0.0);

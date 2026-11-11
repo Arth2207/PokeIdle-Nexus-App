@@ -47,7 +47,8 @@ use crate::configuracao::Configuracao;
 use crate::estado::Estado;
 
 const USO: &str = "uso: nexus-api [migrar | token criar <nome> <escopos> [conta] | \
-importar itens|especies|base|meus-itens|pokedex|equipes|wiki|faltas|welcome|raros | paridade [url] | healthcheck]";
+importar itens|especies|base|meus-itens|pokedex|equipes|wiki|faltas|welcome|raros | paridade [url] | \
+paridade-continua | avaliar-fichas <agora_ms> | pokedex-divergencias | healthcheck]";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -169,6 +170,10 @@ async fn criar_token(
         .collect::<Result<Vec<_>, _>>()?;
 
     let estado = Estado::novo(cfg).context("NEXUS_DATABASE_URL inválida")?;
+    ensure!(
+        conta.is_none_or(|c| !c.trim().is_empty()),
+        "conta vazia: omita a conta para um token sem conta"
+    );
     let token = auth::criar_token(&estado.db, nome, &escopos, conta).await?;
 
     println!("token criado para {nome:?} com escopos {escopos:?}");
@@ -272,8 +277,12 @@ async fn importar(cfg: &Configuracao, tipo: &str) -> anyhow::Result<()> {
             println!("pokédex do motor importada: {n} espécies");
         }
         "equipes" => {
+            // Com a escrita de equipes ligada, o Nexus é a fonte: a importação apagaria o
+            // que o relay gravou aqui.
+            ensure!(!cfg.escrita_equipes, "NEXUS_ESCRITA_EQUIPES ligada: o estado de equipes já é do Nexus; nada foi alterado");
             let e: nucleo::equipes::EstadoEquipes =
                 serde_json::from_str(&texto).context("JSON inválido")?;
+            ensure!(!(e.contas.is_empty() && e.bosses.is_empty()), "estado vazio; nada foi alterado");
             let n = persistencia::equipes::importar_estado(&db, &e).await?;
             println!(
                 "estado de equipes importado: {} bosses, {n} contas",
@@ -330,6 +339,7 @@ async fn importar(cfg: &Configuracao, tipo: &str) -> anyhow::Result<()> {
             println!("nomes de itens raros importados: {n}");
         }
         "faltas" => {
+            ensure!(!cfg.escrita_equipes, "NEXUS_ESCRITA_EQUIPES ligada: as faltas já são do Nexus; nada foi alterado");
             let m: serde_json::Map<String, serde_json::Value> =
                 serde_json::from_str(&texto).context("JSON inválido")?;
             let f = nucleo::bolsa_equipe::Faltas(m);

@@ -141,6 +141,14 @@ impl ServicoEquipes {
         Ok(e)
     }
 
+    /// O estado lido agora do banco (sem o cache de 30 s), para quem vai alterá-lo.
+    pub async fn estado_fresco(&self) -> Result<Arc<EstadoEquipes>, ErroServico> {
+        let mut c = self.estado.lock().await;
+        let e = Arc::new(persistencia::equipes::carregar_estado(&self.db).await?);
+        *c = Some((Instant::now(), e.clone()));
+        Ok(e)
+    }
+
     /// Grava um ingest e troca o estado em memória.
     pub async fn gravar(&self, e: EstadoEquipes, nick: &str) -> Result<(), ErroServico> {
         persistencia::equipes::gravar_ingest(&self.db, &e, nick).await?;

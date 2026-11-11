@@ -32,6 +32,10 @@ const RECARGA_WIKI: Duration = Duration::from_secs(30 * 60);
 const RECARGA_PRECOS: Duration = Duration::from_secs(30 * 60);
 const VALIDADE_PROPRIA: Duration = Duration::from_secs(60);
 const MAX_JOBS: usize = 40;
+/// Cálculos de equipe rodando ao mesmo tempo, no máximo.
+const MAX_ATIVOS: usize = 8;
+/// Um cálculo que passa disso é dado como falho.
+const LIMITE_CALCULO: Duration = Duration::from_secs(180);
 /// Janela das vendas nos preços típicos do modo de melhorias (60 dias).
 const JANELA_PRECOS_MS: i64 = 60 * 86_400_000;
 
@@ -133,6 +137,10 @@ impl Job {
             .estado
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.cancelar.is_cancelled() || e.erro.is_some() {
+            // Cancelado ou com erro: o próximo pedido igual calcula de novo.
+            return e.fim.is_none() && !self.cancelar.is_cancelled();
+        }
         e.fim.is_none_or(|f| f.elapsed() < VALIDADE_JOB)
     }
 
@@ -173,6 +181,10 @@ pub enum ErroEquipeBolsa {
     Repo(String),
     #[error("o cálculo foi cancelado")]
     Cancelado,
+    #[error("o cálculo passou do tempo limite")]
+    Tempo,
+    #[error("servidor ocupado com outros cálculos de equipe; tente de novo em instantes")]
+    Ocupado,
     #[error("o cálculo falhou")]
     Pool,
 }
@@ -250,8 +262,9 @@ impl ServicoEquipeBolsa {
         {
             Ok(m) => Arc::new(m),
             Err(e) => {
+                // Sem cache: a próxima chamada tenta de novo.
                 tracing::warn!(erro = %e, "preços típicos indisponíveis");
-                Arc::new(HashMap::new())
+                return Arc::new(HashMap::new());
             }
         };
         if c.len() >= 12 {
@@ -262,7 +275,10 @@ impl ServicoEquipeBolsa {
     }
 
     /// O job do pedido: o vigente, ou um novo.
-    pub fn trabalho(self: &Arc<Self>, estado: &Estado, p: Pedido) -> Arc<Job> {
+    pub fn trabalho(self: &Arc<Self>, estado: &Estado, mut p: Pedido) -> Arc<Job> {
+        // Idade e orçamento arredondados: variações mínimas viram o mesmo job.
+        p.idade_min = p.idade_min.round();
+        p.orcamento = p.orcamento.map(f64::round);
         let chave = p.chave();
         let mut jobs = self
             .jobs
@@ -278,6 +294,21 @@ impl ServicoEquipeBolsa {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             e.data.clone().or_else(|| e.anterior.clone())
         });
+        let ativos = jobs
+            .values()
+            .filter(|j| j.estado.lock().map(|e| e.fim.is_none()).unwrap_or(false))
+            .count();
+        if ativos >= MAX_ATIVOS {
+            // Não guarda: o próximo pedido tenta de novo.
+            let ocupado = Arc::new(Job {
+                grupo: p.grupo(),
+                estado: StdMutex::new(EstadoJob::default()),
+                pronto: Notify::new(),
+                cancelar: CancellationToken::new(),
+            });
+            ocupado.concluir(Err(ErroEquipeBolsa::Ocupado.to_string()));
+            return ocupado;
+        }
         // O painel trocou de boss: o cálculo antigo do mesmo painel deixa de interessar.
         let grupo = p.grupo();
         for (k, j) in jobs.iter() {
@@ -314,7 +345,12 @@ impl ServicoEquipeBolsa {
         let (servico, estado, j) = (self.clone(), estado.clone(), job.clone());
         tokio::spawn(async move {
             let inicio = Instant::now();
-            let r = servico.calcular(&estado, &p, &j).await;
+            let r = match tokio::time::timeout(LIMITE_CALCULO, servico.calcular(&estado, &p, &j))
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => Err(ErroEquipeBolsa::Tempo),
+            };
             metrics::histogram!("nexus_equipe_calculo_segundos")
                 .record(inicio.elapsed().as_secs_f64());
             if let Err(e) = &r {
@@ -398,6 +434,13 @@ impl ServicoEquipeBolsa {
                 estado.melhorias,
             )
             .await;
+        // Com a escrita ligada, segura o lock desde a leitura: dois cálculos ao mesmo tempo não
+        // apagam as faltas um do outro.
+        let _vez = if estado.escrita_equipes {
+            Some(self.faltas.lock().await)
+        } else {
+            None
+        };
         let mut faltas = persistencia::bolsa_equipe::carregar_faltas(&estado.db).await?;
         if cancelado() {
             return Err(ErroEquipeBolsa::Cancelado);
@@ -451,7 +494,6 @@ impl ServicoEquipeBolsa {
             .await?;
         if estado.escrita_equipes {
             if faltas != faltas_antes {
-                let _vez = self.faltas.lock().await;
                 persistencia::bolsa_equipe::gravar_faltas(&estado.db, &faltas).await?;
             }
             if let Some(s) = sugestao(&resposta, &boss.key, l, &p.moeda, agora) {
@@ -591,11 +633,19 @@ impl ServicoEquipeBolsa {
             .precos(&estado.db, "orb", lo, hi, estado.melhorias)
             .await;
         let agora = agora_ms();
-        let mut faltas = persistencia::bolsa_equipe::carregar_faltas(&estado.db).await?;
-        if faltas.limpar(agora) && estado.escrita_equipes {
-            let _vez = self.faltas.lock().await;
-            persistencia::bolsa_equipe::gravar_faltas(&estado.db, &faltas).await?;
-        }
+        let mut faltas = {
+            let _vez = if estado.escrita_equipes {
+                Some(self.faltas.lock().await)
+            } else {
+                None
+            };
+            let mut f = persistencia::bolsa_equipe::carregar_faltas(&estado.db).await?;
+            if f.limpar(agora) && estado.escrita_equipes {
+                persistencia::bolsa_equipe::gravar_faltas(&estado.db, &f).await?;
+            }
+            f
+        };
+        faltas.limpar(agora);
         let (fl, ativas, sig) = faltas.para_rota(agora);
         let versao = agora / 1_800_000;
         let chave = format!(

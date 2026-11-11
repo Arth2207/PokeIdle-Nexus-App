@@ -29,7 +29,7 @@ case "$cor" in
 esac
 
 importar() { # <tipo> <arquivo>
-  sudo -u nexus-deploy docker compose -f "$BASE/compose.yml" --project-directory "$BASE" \
+  timeout 300 sudo -u nexus-deploy docker compose -f "$BASE/compose.yml" --project-directory "$BASE" \
     exec -T "nexus-api-$cor" /nexus-api importar "$1" < "$2"
 }
 
@@ -70,8 +70,9 @@ if [ -r "$catalogo/especies.js" ] && command -v node > /dev/null; then
     node -e '
       for (const f of process.argv.slice(1)) { try { require(f); } catch (e) { if (e.code !== "MODULE_NOT_FOUND") throw e; } }
       process.stdout.write(JSON.stringify(globalThis.PI_ESPECIES));
-    ' "$catalogo/especies.js" "$catalogo/especies-extra.js" > "$tmp"
-    sincronizar especies "$tmp" "$hash"
+    ' "$catalogo/especies.js" "$catalogo/especies-extra.js" > "$tmp" \
+      && sincronizar especies "$tmp" "$hash" \
+      || { log "falha ao converter o catálogo de espécies"; falhou=1; }
   fi
 fi
 

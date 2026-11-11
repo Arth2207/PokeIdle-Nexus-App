@@ -108,9 +108,6 @@ Com `k6`, nas duas rotas pesadas (`/api/bolsa/equipe` e `/api/equipes/plano`), p
 
 São medidos p50, p95, p99 e throughput máximo antes de a latência degradar. O resultado entra neste documento como a justificativa objetiva da migração.
 
-| Rota | Node p50 | Node p95 | Nexus p50 | Nexus p95 |
-|---|---|---|---|---|
-| `/api/bolsa/equipe` | — | — | — | — |
-| `/api/equipes/plano` | — | — | — | — |
+O resultado medido está na tabela de carga logo abaixo.
 
 Também é medido se as rotas leves continuam rápidas enquanto o otimizador está rodando, o que valida o isolamento entre tokio e rayon.

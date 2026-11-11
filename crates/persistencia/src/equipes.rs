@@ -164,7 +164,9 @@ pub async fn carregar_tentativas(
     limite: i64,
 ) -> Result<Vec<LinhaTentativa>, sqlx::Error> {
     sqlx::query(
-        "SELECT em, conta, boss, nivel_boss, tipos_boss, venceu, duracao_s, equipe, dano_causado, dano_recebido, eventos
+        // Sem `eventos` (podem ser grandes e a calibração não usa).
+        "SELECT em, conta, boss, nivel_boss, tipos_boss, venceu, duracao_s, equipe, dano_causado, dano_recebido,
+                NULL::jsonb AS eventos
          FROM nexus.boss_tentativa ORDER BY em DESC LIMIT $1",
     )
     .bind(limite)

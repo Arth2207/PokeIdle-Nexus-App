@@ -72,7 +72,7 @@ As duas rodam juntas: a resposta mostra a do modelo ativo, e as métricas regist
 
 ### 2. Calibração com lutas reais
 
-- Gravar cada tentativa de boss: equipe (fichas completas), níveis, boss, resultado, duração e os eventos `batalha` (dano por golpe, HP do alvo). A tabela `fato_boss_tentativa` já existe e está vazia; a captura entra pela ingestão da fase 3, mas a tabela e o cálculo nascem aqui.
+- Gravar cada tentativa de boss: equipe (fichas completas), níveis, boss, resultado, duração e os eventos `batalha` (dano por golpe, HP do alvo). A tabela foi criada nesta fase (`nexus.boss_tentativa`; a `fato_boss_tentativa` do levantamento não existe no banco) e está vazia; a captura entra pela ingestão da fase 3, mas a tabela e o cálculo nascem aqui.
 - Com algumas dezenas de lutas, ajustar os parâmetros do boss (HP, multiplicador de dano, penalidade) por mínimos quadrados sobre o dano observado e o tempo de luta.
 - Validar a fórmula de dano das cartas com os ataques de hunt, assim que a amostra passar a guardar a ficha do atacante.
 - Trocar o "score" por **chance de vitória**, com a variação de dano do jogo (0,85 a 1,0) e um gerador determinístico, como no duelo oficial: mesma entrada, mesma resposta.
@@ -103,11 +103,11 @@ As duas rodam juntas: a resposta mostra a do modelo ativo, e as métricas regist
 
 | Arquivo do legado | Tabela |
 |---|---|
-| `equipes-estado.json` (bosses vivos, nível do treinador, coleção por conta) | `nexus.estado_equipes`, `nexus.colecao_pokemon` |
+| `equipes-estado.json` (bosses vivos, nível do treinador, coleção por conta) | `nexus.equipes_estado`, `nexus.equipes_conta` |
 | `.bolsa-faltas.json` (compartilhado entre processos) | `nexus.falta_coleta`, com escrita atômica |
 | `.bolsa-equipes-cache.json` | desnecessário: o resultado é recalculado em segundo plano |
 | `equipe-sugestoes.jsonl` | `nexus.equipe_sugestao` (base da calibração e do scoring da fase 6) |
-| `POKEIDLE-wiki.txt` (bosses da wiki) | `nexus.boss`, alimentada pela lista viva do jogo (relay); a wiki e o módulo público ficam como reserva |
+| `POKEIDLE-wiki.txt` (bosses da wiki) | `nexus.boss_wiki` (a lista viva do jogo continua em `nexus.equipes_estado`) |
 
 ## Testes
 

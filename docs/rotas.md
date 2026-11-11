@@ -102,4 +102,4 @@ O detalhamento dessas rotas entra neste documento quando a fase 4 começar.
 | GET | `/health/live` | O processo está de pé |
 | GET | `/health/ready` | O processo consegue falar com o banco |
 | GET | `/metrics` | Métricas Prometheus (acessível só pela rede interna) |
-| GET | `/ws` | Upgrade para WebSocket |
+| GET | `/ws` | Upgrade para WebSocket (fase 3, ainda não existe) |

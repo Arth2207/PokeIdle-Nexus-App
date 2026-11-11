@@ -20,6 +20,9 @@ use crate::estado::Estado;
 
 type Params = Query<HashMap<String, String>>;
 
+/// Tamanho máximo dos eventos `batalha` de uma tentativa de boss.
+const LIMITE_EVENTOS: usize = 2 * 1024 * 1024;
+
 fn indisponivel(e: &ErroServico) -> Response {
     tracing::warn!(erro = %e, "equipes indisponíveis");
     (
@@ -122,11 +125,21 @@ pub async fn ingest(
         );
     }
     let _vez = estado.equipes.gravacao.lock().await;
-    let atual = match estado.equipes.estado().await {
+    let atual = match estado.equipes.estado_fresco().await {
         Ok(e) => e,
         Err(e) => return indisponivel(&e),
     };
     let mut novo = (*atual).clone();
+    // A lista de bosses é global: um token preso a uma conta não a substitui.
+    let mut corpo = corpo;
+    if cliente
+        .as_ref()
+        .is_some_and(|Extension(c)| c.conta.is_some())
+    {
+        if let Value::Object(o) = &mut corpo {
+            o.remove("bosses");
+        }
+    }
     match novo.ingerir(&corpo, agora_ms()) {
         Ok((nick, resumo)) => match estado.equipes.gravar(novo, &nick).await {
             Ok(()) => Json(resumo).into_response(),
@@ -183,6 +196,7 @@ pub async fn equipe_bolsa(
             };
             (status, Json((*d).clone())).into_response()
         }
+        Situacao::Erro(e) if e.starts_with("servidor ocupado") => erro(503, &e),
         Situacao::Erro(e) => erro(500, &e),
         Situacao::Carregando {
             anterior,
@@ -334,10 +348,11 @@ pub async fn tentativa(
         .lista_bosses(&est.bosses)
         .into_iter()
         .find(|b| b.key == boss);
-    let nivel = c
-        .get("nivelBoss")
-        .and_then(Value::as_f64)
-        .or(da_lista.as_ref().map(|b| b.team_level));
+    // Boss conhecido: vale o nível da lista do jogo (o enviado só conta fora da lista).
+    let nivel = da_lista
+        .as_ref()
+        .map(|b| b.team_level)
+        .or(c.get("nivelBoss").and_then(Value::as_f64));
     let Some(nivel) = nivel.filter(|n| *n > 0.0) else {
         return erro(400, "nivelBoss desconhecido para este boss");
     };
@@ -350,7 +365,11 @@ pub async fn tentativa(
         None => da_lista.map(|b| b.tipos).unwrap_or_default(),
     };
     let linha = persistencia::equipes::LinhaTentativa {
-        em: c.get("em").and_then(Value::as_i64).unwrap_or_else(agora_ms),
+        // Instante no futuro não passa na frente das tentativas reais.
+        em: c
+            .get("em")
+            .and_then(Value::as_i64)
+            .map_or_else(agora_ms, |e| e.min(agora_ms())),
         conta: nick,
         boss,
         nivel_boss: nivel,
@@ -362,6 +381,13 @@ pub async fn tentativa(
         dano_recebido: c.get("danoRecebido").and_then(Value::as_f64),
         eventos: c.get("eventos").cloned().filter(|v| !v.is_null()),
     };
+    if linha
+        .eventos
+        .as_ref()
+        .is_some_and(|e| e.to_string().len() > LIMITE_EVENTOS)
+    {
+        return erro(413, "eventos acima de 2 MB");
+    }
     match persistencia::equipes::registrar_tentativa(&estado.db, &linha).await {
         Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
         Err(e) => {

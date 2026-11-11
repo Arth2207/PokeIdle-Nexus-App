@@ -618,6 +618,21 @@ fn empacotar(
     }
 }
 
+/// Seleção sem nenhuma equipe (nível do boss inválido).
+fn selecao_vazia(c: &[Candidato]) -> Selecao {
+    let vazio = || empacotar(c, 1.0, 1.0, None, None, None, Vec::new());
+    Selecao {
+        eco: vazio(),
+        eq: vazio(),
+        max: vazio(),
+        avisos: vec!["Nível do boss inválido.".into()],
+        elegiveis: 0,
+        excluidas_preco: 0,
+        sem_avaliacao: c.len(),
+        impossivel: true,
+    }
+}
+
 /// Resultado do `resolver` de um perfil.
 struct Resolvido<'a> {
     sel: Equipe,
@@ -632,7 +647,17 @@ struct Resolvido<'a> {
 #[allow(clippy::too_many_lines)]
 pub fn selecionar(c: &[Candidato], op: &Opcoes) -> Selecao {
     let (n, l, referencia) = (op.n, op.nivel_boss, op.referencia);
+    // Cartas com número não finito ficam de fora: NaN nas chaves de ordenação quebraria o
+    // `sort` (e não há equipe útil com elas).
+    if !(l.is_finite() && l > 0.0) {
+        return selecao_vazia(c);
+    }
     let pool_todos: Vec<usize> = (0..c.len())
+        .filter(|&i| {
+            [c[i].lvl, c[i].hp, c[i].dps_out, c[i].dps_in]
+                .iter()
+                .all(|v| v.is_finite())
+        })
         .filter(|&i| c[i].unit.is_finite() && c[i].unit > 0.0)
         .collect();
     let pool_justo: Vec<usize> = pool_todos
@@ -938,23 +963,40 @@ pub fn selecionar(c: &[Candidato], op: &Opcoes) -> Selecao {
 /// exata por branch-and-bound). As cartas vão em ordem crescente de preço: um ramo é podado
 /// quando nem as próximas cartas mais baratas cabem abaixo do melhor custo, ou quando nem o
 /// teto de dano alcança a meta.
-fn minimo_custo(b: &Busca<'_>, alvo_d: f64, limite_nos: u64) -> Option<Equipe> {
+fn minimo_custo(b: &Busca<'_>, alvo_d: f64, limite_nos: u64) -> (Option<Equipe>, bool) {
     let c = b.c;
+    let n = b.n;
     let mut ordem = b.pool.clone();
     ordem.sort_by(|&x, &y| c[x].unit.total_cmp(&c[y].unit).then(c[x].id.cmp(&c[y].id)));
-    let custos: Vec<f64> = ordem.iter().map(|&i| c[i].unit).collect();
-    let mut ub: Vec<f64> = ordem.iter().map(|&i| dano(&c[i], 1.0)).collect();
-    ub.sort_by(|x, y| y.total_cmp(x));
-    let topo: Vec<f64> = (0..=b.n).map(|r| ub.iter().take(r).sum()).collect();
+    // Piso de custo: soma das `r` próximas cartas mais baratas (contíguas, pela ordem).
+    let mut acumulado = vec![0.0; ordem.len() + 1];
+    for (k, &i) in ordem.iter().enumerate() {
+        acumulado[k + 1] = acumulado[k] + c[i].unit;
+    }
+    // Teto de dano: os `r` maiores `dano(·, 1)` entre as cartas a partir da posição `k`.
+    let mut topo_suf = vec![vec![0.0; n + 1]; ordem.len() + 1];
+    let mut maiores: Vec<f64> = Vec::with_capacity(n + 1);
+    for k in (0..ordem.len()).rev() {
+        let v = dano(&c[ordem[k]], 1.0);
+        let pos = maiores.iter().position(|&x| v > x).unwrap_or(maiores.len());
+        maiores.insert(pos, v);
+        maiores.truncate(n);
+        let mut soma = 0.0;
+        for (r, alvo) in topo_suf[k].iter_mut().enumerate().skip(1) {
+            soma += maiores.get(r - 1).copied().unwrap_or(0.0);
+            *alvo = soma;
+        }
+    }
 
     struct Ctx<'a, 'b> {
         b: &'a Busca<'b>,
         ordem: Vec<usize>,
-        custos: Vec<f64>,
-        topo: Vec<f64>,
+        acumulado: Vec<f64>,
+        topo_suf: Vec<Vec<f64>>,
         alvo: f64,
         nos: u64,
         limite: u64,
+        esgotado: bool,
         melhor: Option<Equipe>,
     }
     fn dfs(x: &mut Ctx<'_, '_>, k0: usize, pick: &mut Vec<usize>, gasto: f64, forca: f64) {
@@ -962,28 +1004,30 @@ fn minimo_custo(b: &Busca<'_>, alvo_d: f64, limite_nos: u64) -> Option<Equipe> {
         let r = b.n - pick.len();
         if r == 0 {
             let m = b.metrics(pick);
-            if b.valid(pick)
-                && m.d + EPS >= x.alvo
-                && b.viavel(&m)
-                && x.melhor.as_ref().is_none_or(|e| m.total < e.total - EPS)
-            {
+            // Mesmo custo: fica a de mais dano, como na heurística.
+            let melhora = x.melhor.as_ref().is_none_or(|e| {
+                m.total < e.total - EPS || ((m.total - e.total).abs() <= EPS && m.d > e.d + EPS)
+            });
+            if melhora && b.valid(pick) && m.d + EPS >= x.alvo && b.viavel(&m) {
                 x.melhor = Some(m);
             }
             return;
         }
         let m_min = js::pow(3.0, (b.n as f64 - forca - r as f64).max(0.0));
         let parcial: f64 = pick.iter().map(|&i| dano(&b.c[i], m_min)).sum();
-        if parcial + x.topo[r] + EPS < x.alvo {
-            return;
-        }
         for k in k0..x.ordem.len() {
-            let piso: f64 = x.custos.iter().skip(k).take(r).sum();
-            if x.custos.len() - k < r
-                || x.melhor
-                    .as_ref()
-                    .is_some_and(|e| gasto + piso >= e.total - EPS)
-                || x.nos >= x.limite
+            if x.ordem.len() - k < r || parcial + x.topo_suf[k][r] + EPS < x.alvo {
+                break;
+            }
+            let piso = x.acumulado[k + r] - x.acumulado[k];
+            if x.melhor
+                .as_ref()
+                .is_some_and(|e| gasto + piso > e.total + EPS)
             {
+                break;
+            }
+            if x.nos >= x.limite {
+                x.esgotado = true;
                 break;
             }
             let i = x.ordem[k];
@@ -1006,16 +1050,17 @@ fn minimo_custo(b: &Busca<'_>, alvo_d: f64, limite_nos: u64) -> Option<Equipe> {
     let mut x = Ctx {
         b,
         ordem,
-        custos,
-        topo,
+        acumulado,
+        topo_suf,
         alvo: alvo_d,
         nos: 0,
         limite: limite_nos,
+        esgotado: false,
         melhor: None,
     };
     let mut pick = Vec::with_capacity(b.n);
     dfs(&mut x, 0, &mut pick, 0.0, 0.0);
-    x.melhor
+    (x.melhor, x.esgotado)
 }
 
 /// `selecionar` com busca exata nos três perfis (modo `NEXUS_MELHORIAS`): a Econômica e a
@@ -1025,7 +1070,17 @@ fn minimo_custo(b: &Busca<'_>, alvo_d: f64, limite_nos: u64) -> Option<Equipe> {
 #[allow(clippy::too_many_lines, clippy::type_complexity)]
 pub fn selecionar_exato(c: &[Candidato], op: &Opcoes, limite_nos: u64) -> Selecao {
     let (n, l, referencia) = (op.n, op.nivel_boss, op.referencia);
+    // Cartas com número não finito ficam de fora: NaN nas chaves de ordenação quebraria o
+    // `sort` (e não há equipe útil com elas).
+    if !(l.is_finite() && l > 0.0) {
+        return selecao_vazia(c);
+    }
     let pool_todos: Vec<usize> = (0..c.len())
+        .filter(|&i| {
+            [c[i].lvl, c[i].hp, c[i].dps_out, c[i].dps_in]
+                .iter()
+                .all(|v| v.is_finite())
+        })
         .filter(|&i| c[i].unit.is_finite() && c[i].unit > 0.0)
         .collect();
     let pool_justo: Vec<usize> = pool_todos
@@ -1075,55 +1130,94 @@ pub fn selecionar_exato(c: &[Candidato], op: &Opcoes, limite_nos: u64) -> Seleca
             .copied()
             .filter(|&i| c[i].lvl <= TETO_NIVEL * l + 1e-6)
             .collect();
-        let degraus: [(&[usize], Regra, Vec<&'static str>, Option<f64>); 4] = [
+        let completa = Regra {
+            mult: teto,
+            heroi: true,
+            estresse: true,
+        };
+        let tentar = |pool: Vec<usize>, reg: Regra| {
+            let b = busca(pool, reg);
+            let (e, esgotado) = minimo_custo(&b, alvo * referencia, limite_nos);
+            (e, esgotado, b)
+        };
+        // Teto de nível: 2,5×; se não fecha, o menor teto (pelos níveis do pool) que fecha,
+        // até 40× ou o maior nível. Mais cartas só aumentam o que é viável, então dá para
+        // achar o menor teto por busca binária.
+        let lvl_max = base.iter().fold(0.0, |m, &i| js_max(m, c[i].lvl));
+        let t_max = TETO_SEGURANCA.min(js_max(TETO_NIVEL, lvl_max / l));
+        let ate = |t: f64| -> Vec<usize> {
+            base.iter()
+                .copied()
+                .filter(|&i| c[i].lvl <= t * l + 1e-6)
+                .collect()
+        };
+        if no_teto.len() >= n {
+            let (e, esgotado, b) = tentar(no_teto.clone(), completa);
+            if let Some(e) = e {
+                return Some((e, b, vec![], Some(TETO_NIVEL)));
+            }
+            if esgotado {
+                return None;
+            }
+        }
+        let mut tetos: Vec<f64> = base
+            .iter()
+            .map(|&i| (c[i].lvl / l * 10.0 - EPS).ceil() / 10.0)
+            .filter(|t| *t > TETO_NIVEL && *t <= t_max + EPS)
+            .collect();
+        tetos.sort_by(f64::total_cmp);
+        tetos.dedup();
+        if let Some(&maior) = tetos.last() {
+            let (e, esgotado, _) = tentar(ate(maior), completa);
+            if esgotado {
+                return None;
+            }
+            if e.is_some() {
+                let (mut lo, mut hi) = (0usize, tetos.len() - 1);
+                while lo < hi {
+                    let meio = (lo + hi) / 2;
+                    let pool = ate(tetos[meio]);
+                    if pool.len() >= n && tentar(pool, completa).0.is_some() {
+                        hi = meio;
+                    } else {
+                        lo = meio + 1;
+                    }
+                }
+                let (e, _, b) = tentar(ate(tetos[lo]), completa);
+                if let Some(e) = e {
+                    return Some((e, b, vec![], Some(tetos[lo])));
+                }
+            }
+        }
+        // Sem teto de nível, relaxando estresse e depois herói.
+        for (reg, rel) in [
+            (completa, vec![]),
             (
-                &no_teto,
-                Regra {
-                    mult: teto,
-                    heroi: true,
-                    estresse: true,
-                },
-                vec![],
-                Some(TETO_NIVEL),
-            ),
-            (
-                &base,
-                Regra {
-                    mult: teto,
-                    heroi: true,
-                    estresse: true,
-                },
-                vec![],
-                None,
-            ),
-            (
-                &base,
                 Regra {
                     mult: teto,
                     heroi: true,
                     estresse: false,
                 },
                 vec!["estresse"],
-                None,
             ),
             (
-                &base,
                 Regra {
                     mult: teto,
                     heroi: false,
                     estresse: false,
                 },
                 vec!["estresse", "herói"],
-                None,
             ),
-        ];
-        for (pool, reg, rel, teto_usado) in degraus {
-            if pool.len() < n {
-                continue;
+        ] {
+            if base.len() < n {
+                break;
             }
-            let b = busca(pool.to_vec(), reg);
-            if let Some(e) = minimo_custo(&b, alvo * referencia, limite_nos) {
-                return Some((e, b, rel, teto_usado));
+            let (e, esgotado, b) = tentar(base.clone(), reg);
+            if let Some(e) = e {
+                return Some((e, b, rel, None));
+            }
+            if esgotado {
+                return None;
             }
         }
         None
@@ -1187,12 +1281,23 @@ pub fn selecionar_exato(c: &[Candidato], op: &Opcoes, limite_nos: u64) -> Seleca
                 rel.join(", ")
             ));
         }
-        if teto_usado.is_none() {
-            avisos.push(format!(
+        match teto_usado {
+            None => avisos.push(format!(
                 "{}: sem teto de nível (nenhuma equipe viável até {}× o nível do boss).",
                 perfil.nome(),
-                js::numero(TETO_NIVEL)
-            ));
+                js::numero(TETO_SEGURANCA)
+            )),
+            Some(t) if *t > TETO_NIVEL + EPS => avisos.push(format!(
+                "{}: teto de nível subiu para {}×{}",
+                perfil.nome(),
+                js::to_fixed(*t, 1),
+                if *t > TETO_AVISO {
+                    " — mercado sem opções na faixa."
+                } else {
+                    "."
+                }
+            )),
+            Some(_) => {}
         }
         // Planos B e C: a melhor equipe sem cada titular, as duas mais baratas e distintas.
         let mut vistos = HashSet::from([chave(c, &e.pick)]);
@@ -1206,7 +1311,7 @@ pub fn selecionar_exato(c: &[Candidato], op: &Opcoes, limite_nos: u64) -> Seleca
                     .copied()
                     .filter(|&x| c[x].id != c[tit].id)
                     .collect();
-                minimo_custo(&busca(pool, b.reg), alvo * referencia, limite_nos)
+                minimo_custo(&busca(pool, b.reg), alvo * referencia, limite_nos).0
             })
             .filter(|x| vistos.insert(chave(c, &x.pick)))
             .collect();

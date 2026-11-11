@@ -511,6 +511,9 @@ pub struct EstadoEquipes {
     pub contas: Vec<(String, Value)>,
 }
 
+/// Contas no estado de equipes, no máximo (cada uma guarda até 6000 fichas).
+const MAX_CONTAS: usize = 200;
+
 const CAMPOS_FICHA: [&str; 19] = [
     "id",
     "speciesId",
@@ -641,6 +644,7 @@ impl EstadoEquipes {
         }
         let i = match self.contas.iter().position(|(n, _)| *n == nick) {
             Some(i) => i,
+            None if self.contas.len() >= MAX_CONTAS => return Err("limite de contas atingido"),
             None => {
                 self.contas.push((nick.clone(), Value::Object(Map::new())));
                 self.contas.len() - 1

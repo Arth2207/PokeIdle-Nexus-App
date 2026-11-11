@@ -47,7 +47,7 @@ Preço mínimo por item e moeda, por instante. PK `(ts, item_id, moeda)`; a grav
 
 ### `nexus.item_catalogo`
 
-Catálogo de itens do jogo (id, nome, categoria, raro, preço no NPC, ícone). Cerca de 420 linhas. Quase todas as vendas de item chegam sem `item_id`, só com a descrição (`"3 × Rare Candy"`), e o ticker é achado pelo nome neste catálogo. A coluna `ordem` guarda a ordem da fonte, porque há nomes repetidos e vale o último, como no legado. Carga e atualização em [operação](operacao.md#catálogo-de-itens).
+Catálogo de itens do jogo (id, nome, categoria, raro, preço no NPC, ícone). Cerca de 420 linhas. Quase todas as vendas de item chegam sem `item_id`, só com a descrição (`"3 × Rare Candy"`), e o ticker é achado pelo nome neste catálogo. A coluna `ordem` guarda a ordem da fonte, porque há nomes repetidos e vale o último, como no legado. Carga e atualização em [operação](operacao.md#dados-da-bolsa).
 
 ### Precificador e inventário (schema `nexus`)
 
