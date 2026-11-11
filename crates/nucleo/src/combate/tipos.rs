@@ -52,6 +52,11 @@ impl Tipo {
         Tipo::Fairy,
     ];
 
+    /// Posição em [`Tipo::TODOS`].
+    pub fn indice(self) -> usize {
+        self as usize
+    }
+
     pub fn nome(self) -> &'static str {
         match self {
             Tipo::Normal => "NORMAL",
@@ -166,6 +171,9 @@ pub struct Constantes {
     pub dano_selvagem: f64,
     /// Na hunt, a efetividade bruta (chave) vira outra (valor).
     pub ampliacao_hunt: Vec<(f64, f64)>,
+    /// Tabela de tipos do servidor (`welcome.tabelaTipos`), `[golpe][defesa]`. `None` usa a
+    /// tabela clássica do legado. A do jogo não tem resistência ao próprio tipo.
+    pub tabela: Option<Box<[[f64; 18]; 18]>>,
 }
 
 impl Constantes {
@@ -182,12 +190,41 @@ impl Constantes {
                 (2.0, 2.5),
                 (4.0, 5.5),
             ],
+            tabela: None,
+        }
+    }
+
+    /// As constantes da wiki com a tabela de tipos do servidor, lida do `tabelaTipos` do
+    /// `welcome` (`{"FIRE": {"GRASS": 2, ...}}`; o que falta vale 1).
+    pub fn com_tabela_do_servidor(json: &serde_json::Value) -> Option<Self> {
+        let obj = json.as_object()?;
+        let mut t = [[1.0; 18]; 18];
+        for (golpe, linha) in obj {
+            let g: Tipo = golpe.parse().ok()?;
+            for (defesa, v) in linha.as_object()? {
+                let d: Tipo = defesa.parse().ok()?;
+                t[g.indice()][d.indice()] = v.as_f64()?;
+            }
+        }
+        Some(Constantes {
+            tabela: Some(Box::new(t)),
+            ..Constantes::wiki()
+        })
+    }
+
+    /// Efetividade bruta pela tabela em uso.
+    pub fn efetividade_bruta(&self, golpe: Tipo, defesa: &[Tipo]) -> f64 {
+        match &self.tabela {
+            Some(t) => defesa
+                .iter()
+                .fold(1.0, |m, &d| m * t[golpe.indice()][d.indice()]),
+            None => efetividade_bruta(golpe, defesa),
         }
     }
 
     /// Efetividade ampliada da hunt (`effHunt`): valores fora da tabela passam iguais.
     pub fn efetividade_hunt(&self, golpe: Tipo, defesa: &[Tipo]) -> f64 {
-        let bruta = efetividade_bruta(golpe, defesa);
+        let bruta = self.efetividade_bruta(golpe, defesa);
         self.ampliacao_hunt
             .iter()
             .find(|(k, _)| *k == bruta)
@@ -198,5 +235,28 @@ impl Constantes {
 impl Default for Constantes {
     fn default() -> Self {
         Constantes::wiki()
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn tabela_do_servidor_sem_resistencia_ao_proprio_tipo() {
+        let k = Constantes::com_tabela_do_servidor(
+            &serde_json::json!({ "FIRE": { "GRASS": 2, "WATER": 0.5 } }),
+        )
+        .unwrap();
+        assert_eq!(k.efetividade_bruta(Tipo::Fire, &[Tipo::Fire]), 1.0);
+        assert_eq!(
+            Constantes::wiki().efetividade_bruta(Tipo::Fire, &[Tipo::Fire]),
+            0.5
+        );
+        assert_eq!(
+            k.efetividade_bruta(Tipo::Fire, &[Tipo::Grass, Tipo::Water]),
+            1.0
+        );
+        assert_eq!(k.efetividade_hunt(Tipo::Fire, &[Tipo::Grass]), 2.5);
     }
 }

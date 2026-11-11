@@ -74,4 +74,14 @@ if [ -r "$catalogo/especies.js" ] && command -v node > /dev/null; then
   fi
 fi
 
+# Constantes do servidor: o último `welcome` gravado pelo coletor do legado (SQLite, só leitura).
+mapa="$LEGADO/data/mapa.db"
+if [ -r "$mapa" ] && command -v sqlite3 > /dev/null; then
+  tmp_w=$(mktemp)
+  if sqlite3 -readonly "$mapa" "SELECT payload FROM welcome_dump ORDER BY id DESC LIMIT 1" > "$tmp_w" 2>/dev/null && [ -s "$tmp_w" ]; then
+    sincronizar welcome "$tmp_w" "$(sha256sum < "$tmp_w" | cut -d' ' -f1)"
+  fi
+  rm -f "$tmp_w"
+fi
+
 exit "$falhou"

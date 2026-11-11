@@ -49,6 +49,18 @@ impl ModeloAtivo {
     }
 }
 
+/// Chave em `nexus.parametro` das constantes do servidor (do `welcome`).
+pub const CHAVE_CONSTANTES_SERVIDOR: &str = "servidor.constantes";
+
+/// Constantes com a tabela de tipos do servidor, se já foi importada.
+pub async fn constantes_do_servidor(db: &PgPool) -> Option<nucleo::combate::tipos::Constantes> {
+    let v = persistencia::equipes::ler_parametro(db, CHAVE_CONSTANTES_SERVIDOR)
+        .await
+        .ok()
+        .flatten()?;
+    nucleo::combate::tipos::Constantes::com_tabela_do_servidor(v.get("tabelaTipos")?)
+}
+
 /// Parâmetros do modelo do jogo gravados pela calibração (ou os neutros).
 pub async fn parametros_jogo(db: &PgPool) -> ParametrosBoss {
     let v = persistencia::equipes::ler_parametro(db, CHAVE_PARAMETROS_JOGO)
@@ -72,6 +84,8 @@ pub async fn parametros_jogo(db: &PgPool) -> ParametrosBoss {
 pub struct ServicoEquipes {
     db: PgPool,
     pub ativo: ModeloAtivo,
+    /// `NEXUS_MELHORIAS`: o modelo usa a tabela de tipos do servidor.
+    pub melhorias: bool,
     motor: Cache<MotorEquipes>,
     estado: Cache<EstadoEquipes>,
     /// Serializa os ingests (ler, aplicar, gravar).
@@ -79,10 +93,11 @@ pub struct ServicoEquipes {
 }
 
 impl ServicoEquipes {
-    pub fn novo(db: PgPool, ativo: ModeloAtivo) -> Self {
+    pub fn novo(db: PgPool, ativo: ModeloAtivo, melhorias: bool) -> Self {
         ServicoEquipes {
             db,
             ativo,
+            melhorias,
             motor: Mutex::new(None),
             estado: Mutex::new(None),
             gravacao: Mutex::new(()),
@@ -102,9 +117,14 @@ impl ServicoEquipes {
         if dex.especies().is_empty() {
             return Err(ErroServico::PokedexVazia);
         }
-        let modelo: Arc<dyn ModeloCombate> = match self.ativo {
-            ModeloAtivo::Legado => Arc::new(Legado::novo()),
-            ModeloAtivo::Jogo => Arc::new(Jogo::novo(parametros_jogo(&self.db).await)),
+        let servidor = constantes_do_servidor(&self.db).await;
+        let modelo: Arc<dyn ModeloCombate> = match (self.ativo, servidor) {
+            (ModeloAtivo::Legado, Some(k)) if self.melhorias => Arc::new(Legado::com_constantes(k)),
+            (ModeloAtivo::Legado, _) => Arc::new(Legado::novo()),
+            (ModeloAtivo::Jogo, Some(k)) => {
+                Arc::new(Jogo::com_constantes(parametros_jogo(&self.db).await, k))
+            }
+            (ModeloAtivo::Jogo, None) => Arc::new(Jogo::novo(parametros_jogo(&self.db).await)),
         };
         let m = Arc::new(MotorEquipes::com_modelo(dex, modelo));
         *c = Some((Instant::now(), m.clone()));
@@ -179,13 +199,18 @@ async fn rodada_modelos(estado: &crate::estado::Estado) -> Result<(), String> {
         })
         .collect();
     let dex = motor.dex.clone();
+    let servidor = constantes_do_servidor(&estado.db).await;
     let (calibrado, divergencias) = estado
         .equipe_bolsa
         .no_pool(move || {
             let calibrado = calibrar(&dex, &tentativas);
             let p = calibrado.as_ref().map(|c| c.parametros).unwrap_or_default();
             let legado = MotorEquipes::com_modelo(dex.clone(), Arc::new(Legado::novo()));
-            let jogo = MotorEquipes::com_modelo(dex, Arc::new(Jogo::novo(p)));
+            let jogo: Arc<dyn ModeloCombate> = match servidor {
+                Some(k) => Arc::new(Jogo::com_constantes(p, k)),
+                None => Arc::new(Jogo::novo(p)),
+            };
+            let jogo = MotorEquipes::com_modelo(dex, jogo);
             let lista = legado.lista_bosses(&est.bosses);
             (
                 calibrado,

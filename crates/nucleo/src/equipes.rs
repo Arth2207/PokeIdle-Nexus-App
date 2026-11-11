@@ -15,7 +15,7 @@ use crate::combate::combatente::{self, Combatente, Perfil};
 use crate::combate::duelo::{Avaliacao, TAMANHO_EQUIPE};
 use crate::combate::especie::{EspecieCombate, Pokedex};
 use crate::combate::modelo::{Boss, Legado, ModeloCombate};
-use crate::combate::tipos::{efetividade_bruta, Tipo};
+use crate::combate::tipos::Tipo;
 use crate::js;
 
 const POKEAPI: &str = "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/";
@@ -331,7 +331,7 @@ impl MotorEquipes {
                 let se = sp
                     .golpes
                     .iter()
-                    .filter(|g| g.poder > 0.0 && efetividade_bruta(g.tipo, &tipos) > 1.0)
+                    .filter(|g| g.poder > 0.0 && k.efetividade_bruta(g.tipo, &tipos) > 1.0)
                     .count();
                 (sp, se, sp.base.iter().sum::<f64>())
             })

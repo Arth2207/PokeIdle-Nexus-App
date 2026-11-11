@@ -62,6 +62,11 @@ impl Legado {
             constantes: Constantes::wiki(),
         }
     }
+
+    /// O modelo legado com outras constantes (ex.: a tabela de tipos do servidor).
+    pub fn com_constantes(constantes: Constantes) -> Self {
+        Legado { constantes }
+    }
 }
 
 impl ModeloCombate for Legado {

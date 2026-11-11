@@ -12,6 +12,7 @@
 //!   nexus-api importar equipes < estado.json   estado de equipes (equipes-estado.json do legado)
 //!   nexus-api importar wiki < wiki.txt         bosses da wiki do jogo (POKEIDLE-wiki.txt)
 //!   nexus-api importar faltas < faltas.json    faltas de coleta (.bolsa-faltas.json do legado)
+//!   nexus-api importar welcome < payload.json  constantes do servidor (tabela de tipos etc.)
 //!   nexus-api paridade [url]                   uma rodada de comparação com o legado
 //!   nexus-api paridade-continua                comparador em loop, gravando em nexus.paridade
 //!   nexus-api avaliar-fichas <agora_ms>        diagnóstico: valor justo de fichas (stdin)
@@ -44,7 +45,7 @@ use crate::configuracao::Configuracao;
 use crate::estado::Estado;
 
 const USO: &str = "uso: nexus-api [migrar | token criar <nome> <escopos> | \
-importar itens|especies|base|meus-itens|pokedex|equipes|wiki|faltas | paridade [url] | healthcheck]";
+importar itens|especies|base|meus-itens|pokedex|equipes|wiki|faltas|welcome | paridade [url] | healthcheck]";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -274,6 +275,33 @@ async fn importar(cfg: &Configuracao, tipo: &str) -> anyhow::Result<()> {
             let n = persistencia::bolsa_equipe::importar_wiki(&db, &lista).await?;
             println!("bosses da wiki importados: {n}");
         }
+        "welcome" => {
+            // O payload do `welcome` (como o coletor grava); as constantes ficam num bloco
+            // interno que tem `tabelaTipos`.
+            let v: serde_json::Value = serde_json::from_str(&texto).context("JSON inválido")?;
+            fn acha(v: &serde_json::Value) -> Option<&serde_json::Value> {
+                if v.get("tabelaTipos").is_some() {
+                    return Some(v);
+                }
+                match v {
+                    serde_json::Value::Object(m) => m.values().find_map(acha),
+                    serde_json::Value::Array(a) => a.iter().find_map(acha),
+                    _ => None,
+                }
+            }
+            let bloco = acha(&v).context("o welcome não tem tabelaTipos")?;
+            ensure!(
+                nucleo::combate::tipos::Constantes::com_tabela_do_servidor(&bloco["tabelaTipos"]).is_some(),
+                "tabelaTipos com tipo desconhecido; nada foi alterado"
+            );
+            let k = serde_json::json!({
+                "tabelaTipos": bloco["tabelaTipos"], "ampliacaoHunt": bloco.get("ampliacaoHunt"),
+                "multHpSelvagem": bloco.get("multHpSelvagem"), "multDanoSelvagem": bloco.get("multDanoSelvagem"),
+                "maxEquipe": bloco.get("maxEquipe"), "potencias": bloco.get("potencias"),
+            });
+            persistencia::equipes::gravar_parametro(&db, equipes::CHAVE_CONSTANTES_SERVIDOR, &k).await?;
+            println!("constantes do servidor importadas");
+        }
         "faltas" => {
             let m: serde_json::Map<String, serde_json::Value> =
                 serde_json::from_str(&texto).context("JSON inválido")?;
@@ -282,7 +310,7 @@ async fn importar(cfg: &Configuracao, tipo: &str) -> anyhow::Result<()> {
             println!("faltas de coleta importadas: {}", f.0.len());
         }
         outro => bail!(
-            "não sei importar {outro:?} (use itens, especies, base, meus-itens, pokedex, equipes, wiki ou faltas)"
+            "não sei importar {outro:?} (use itens, especies, base, meus-itens, pokedex, equipes, wiki, faltas ou welcome)"
         ),
     }
     Ok(())

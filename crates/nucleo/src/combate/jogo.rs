@@ -50,6 +50,14 @@ impl Jogo {
             parametros,
         }
     }
+
+    /// Com as constantes do servidor (a tabela de tipos do `welcome`).
+    pub fn com_constantes(parametros: ParametrosBoss, constantes: Constantes) -> Self {
+        Jogo {
+            constantes,
+            parametros,
+        }
+    }
 }
 
 impl ModeloCombate for Jogo {

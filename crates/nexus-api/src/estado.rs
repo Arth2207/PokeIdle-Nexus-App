@@ -47,6 +47,7 @@ impl Estado {
             equipes: Arc::new(ServicoEquipes::novo(
                 db.clone(),
                 ModeloAtivo::de_texto(&cfg.modelo),
+                cfg.melhorias,
             )),
             equipe_bolsa: Arc::new(ServicoEquipeBolsa::novo(cfg.cpu_threads)),
             limitador: Arc::new(Limitador::novo(cfg.limite_rps, cfg.limite_rajada)),
@@ -59,7 +60,7 @@ impl Estado {
     pub fn com_pool(db: PgPool) -> Self {
         let bolsa = Arc::new(ServicoBolsa::novo(PgRepoMercado::novo(db.clone())));
         Self {
-            equipes: Arc::new(ServicoEquipes::novo(db.clone(), ModeloAtivo::Legado)),
+            equipes: Arc::new(ServicoEquipes::novo(db.clone(), ModeloAtivo::Legado, false)),
             equipe_bolsa: Arc::new(ServicoEquipeBolsa::novo(1)),
             escrita_equipes: false,
             melhorias: false,
