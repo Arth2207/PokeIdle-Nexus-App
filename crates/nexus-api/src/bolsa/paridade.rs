@@ -39,6 +39,8 @@ const AO_VIVO: &[&str] = &[
     "askMin",
 ];
 const AMOSTRA: usize = 15;
+/// Validade do cache do mercado no legado (`TTL` do `bolsa.js`).
+const CACHE_MERCADO_LEGADO_MS: i64 = 3 * 60_000;
 
 /// Igualdade numérica com tolerância relativa (as funções `exp`/`ln` do V8 e da libm podem
 /// divergir no último bit).
@@ -343,7 +345,19 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
     /// Uma rodada de comparação.
     pub async fn rodada(&self) -> Result<Relatorio, String> {
         let mut rel = Relatorio::new();
-        let (_, mercado_legado) = self.legado("/api/bolsa/mercado").await?;
+        let (_, mut mercado_legado) = self.legado("/api/bolsa/mercado").await?;
+        // O legado guarda o mercado por 3 minutos e só remonta quando chega um pedido depois
+        // disso. Com o relay ativo, as ofertas mudam nesse intervalo: espera o cache vencer e
+        // pede de novo, para os dois lados montarem com os mesmos dados (diferença de segundos).
+        let idade = mercado_legado
+            .get("geradoEm")
+            .and_then(Value::as_i64)
+            .map_or(0, |g| super::agora_ms() - g);
+        if idade > 10_000 {
+            let espera = (CACHE_MERCADO_LEGADO_MS - idade).max(0) + 1_500;
+            tokio::time::sleep(Duration::from_millis(u64::try_from(espera).unwrap_or(0))).await;
+            mercado_legado = self.legado("/api/bolsa/mercado").await?.1;
+        }
         let gerado_em = mercado_legado
             .get("geradoEm")
             .and_then(Value::as_i64)
