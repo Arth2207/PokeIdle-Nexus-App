@@ -8,7 +8,7 @@ O Nexus substitui todos esses processos por dois binários Rust que compartilham
 
 | Fase | Escopo | Situação |
 |---|---|---|
-| 0 | Fundação (config, erros, logs, health, métricas, auth, Docker, CI) | concluída, aguardando o primeiro deploy |
+| 0 | Fundação (config, erros, logs, health, métricas, auth, Docker, CI) | concluída |
 | 1 | Bolsa | — |
 | 2 | Motor de combate e otimizador de equipe | — |
 | 3 | Ingestão, fila de comandos e WebSocket | — |

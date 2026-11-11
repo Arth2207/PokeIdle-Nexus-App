@@ -33,6 +33,8 @@ Workspace, configuração, erros, logs, `/health`, `/metrics`, autenticação po
 
 **Pronto quando:** o CI gera uma imagem com menos de 50 MB; o deploy blue/green funciona; `/health/ready` fica vermelho quando o banco é parado e volta sozinho quando o banco volta.
 
+**Resultado (2026-11-11):** imagem de 11,4 MB; a API em repouso usa menos de 1 MB de RAM; na troca blue → green, 219 requisições seguidas durante o deploy deram 219 respostas 200. O comportamento sem banco é coberto por testes automatizados (o banco de produção não foi parado).
+
 ### Fase 1: Bolsa (3 a 4 semanas)
 
 Carregamento de vendas e ofertas, cálculo de tickers e indicadores (médias, RSI, Bollinger, MACD, VWAP), sinais de compra e venda, e todas as rotas `/api/bolsa/*`, exceto as de equipe.
