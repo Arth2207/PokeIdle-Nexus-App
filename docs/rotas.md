@@ -89,6 +89,13 @@ O detalhamento dessas rotas entra neste documento quando a fase 4 começar.
 
 ## Rotas novas no Nexus
 
+| Método | Rota | Parâmetros | Resposta |
+|---|---|---|---|
+| GET | `/api/bolsa/equipe-hibrida` | `boss`, `nick`, `moeda` | A equipe com os pokémon da conta, comprando só as vagas que faltam: slots com `origem` (`conta` ou `compra`), `custoCompra`, `custoComprarTudo` e `economia` |
+
+`GET /api/bolsa/equipe` ganhou campos novos (o contrato antigo continua igual): `exata` (a melhor equipe por dano pela busca exata, comparada com a da heurística, com `provado` e `distancia` até o ótimo), `curva` (fronteira custo × poder de equipes completas) e, com `orcamento=<gemas>`, `orcamento` (a melhor equipe até esse valor).
+
+
 | Método | Rota | Função |
 |---|---|---|
 | GET | `/health/live` | O processo está de pé |

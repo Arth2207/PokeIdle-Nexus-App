@@ -72,6 +72,7 @@ pub async fn dicas(State(estado): State<Estado>, Query(p): Query<Params>) -> Res
                 nick: None,
                 idade_min: 90.0,
                 n: 5,
+                orcamento: None,
             },
         );
     }

@@ -7,6 +7,7 @@
 
 pub mod bolsa;
 pub mod bolsa_equipe;
+pub mod busca_exata;
 pub mod combate;
 pub mod equipes;
 pub mod js;

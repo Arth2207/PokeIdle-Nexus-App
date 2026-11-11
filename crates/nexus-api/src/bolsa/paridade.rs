@@ -192,6 +192,7 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
             nick: None,
             idade_min: 90.0,
             n: 5,
+            orcamento: None,
         };
         let job = estado.equipe_bolsa.trabalho(estado, pedido);
         let n = match job.esperar(Duration::from_secs(120)).await {

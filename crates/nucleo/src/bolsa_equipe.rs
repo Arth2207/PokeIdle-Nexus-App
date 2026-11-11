@@ -924,7 +924,12 @@ pub struct EntradaBolsa<'a> {
     pub listas: Option<[Vec<AlvoEspecie>; 3]>,
     pub preco_de: PrecoDe<'a>,
     pub agora: i64,
+    /// `orcamento=<gemas>`: a melhor equipe até esse valor (busca exata).
+    pub orcamento: Option<f64>,
 }
+
+/// Limite de nós da busca exata por chamada.
+pub const LIMITE_NOS_EXATA: u64 = 400_000;
 
 fn limites(teto: Option<f64>) -> Value {
     json!({
@@ -1234,7 +1239,72 @@ pub fn equipe_bolsa(e: &EntradaBolsa<'_>, faltas: &mut Faltas) -> Result<Value, 
                 .collect()
         })
         .unwrap_or_default();
+    // Busca exata no mesmo pool da Máxima (ofertas no preço justo ou abaixo), partindo da
+    // equipe da heurística: nunca perde para ela e diz a distância até o ótimo.
+    let pool_justo: Vec<usize> = (0..cands.len())
+        .filter(|&i| {
+            let x = &cands[i];
+            e.moeda != "orb" || (x.justo.is_finite() && x.justo > 0.0 && x.unit <= x.justo)
+        })
+        .collect();
+    let sub: Vec<Candidato> = pool_justo.iter().map(|&i| cands[i].clone()).collect();
+    let heur = res.perfis[2].r.equipe.as_ref();
+    let partida: Option<Vec<usize>> = heur.map(|h| {
+        h.pick
+            .iter()
+            .filter_map(|i| pool_justo.iter().position(|j| j == i))
+            .collect()
+    });
+    let exata = crate::busca_exata::melhor_equipe(&sub, e.n, boss.team_level, None, partida.as_deref(), LIMITE_NOS_EXATA).map(|x| {
+        let ids: Vec<&str> = x.pick.iter().map(|&i| sub[i].id.as_str()).collect();
+        let d_heur = heur.map_or(0.0, |h| h.d);
+        json!({
+            "ids": ids, "D": js::json_num(x.d), "poder": js::json_num(x.d / ref_d), "total": js::json_num(x.total),
+            "provado": x.provado, "distancia": js::json_num(x.distancia()), "nos": x.nos,
+            "heuristica": { "D": js::json_num(d_heur), "poder": js::json_num(d_heur / ref_d) },
+            "ganho": js::json_num(if d_heur > 0.0 { x.d / d_heur - 1.0 } else { 0.0 }),
+        })
+    });
+    let equipe_json = |pick: &[usize]| -> Vec<Value> {
+        let d_total = crate::busca_exata::dano_equipe(&cands, pick, e.n, boss.team_level);
+        let forca = pick
+            .iter()
+            .fold(0.0, |s, &i| s + (cands[i].lvl / boss.team_level).min(1.0));
+        let mult = js::pow(3.0, (e.n as f64 - forca).max(0.0));
+        pick.iter()
+            .map(|&i| {
+                let x = &cands[i];
+                let d = x.dps_out
+                    * if x.dps_in > 0.0 {
+                        TEMPO_MAXIMO.min(x.hp / (x.dps_in * mult))
+                    } else {
+                        TEMPO_MAXIMO
+                    };
+                Value::Object(slot(i, d, d_total))
+            })
+            .collect()
+    };
+    let orcamento = e.orcamento.map(|b| {
+        match crate::busca_exata::melhor_equipe(&cands, e.n, boss.team_level, Some(b), None, LIMITE_NOS_EXATA) {
+            Some(x) => json!({
+                "orcamento": js::json_num(b), "slots": equipe_json(&x.pick), "total": js::json_num(x.total),
+                "D": js::json_num(x.d), "poder": js::json_num(x.d / ref_d), "provado": x.provado,
+                "distancia": js::json_num(x.distancia()),
+            }),
+            None => json!({ "orcamento": js::json_num(b), "indisponivel": true }),
+        }
+    });
+    let curva: Vec<Value> = crate::busca_exata::curva_custo_poder(&cands, e.n, boss.team_level, 10, LIMITE_NOS_EXATA / 4)
+        .into_iter()
+        .map(|p| {
+            json!({
+                "orcamento": js::json_num(p.orcamento), "total": js::json_num(p.total), "poder": js::json_num(p.d / ref_d),
+                "ids": p.pick.iter().map(|&i| cands[i].id.clone()).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
     Ok(json!({
+        "exata": exata, "orcamento": orcamento, "curva": curva,
         "boss": boss_json, "moeda": e.moeda, "ref": { "soma": js::json_num(js::round(ref_d)), "equipe": ref_nomes },
         "ofertasAnalisadas": e.ofertas.len(), "candidatas": cartas.len(), "suspeitasN": 0, "suspeitas": [],
         "idadeMin": js::json_num(e.idade_min), "geradoEm": e.agora, "perfis": perfis,
@@ -1510,6 +1580,159 @@ pub fn equipe_propria(e: &EntradaPropria<'_>) -> Result<Value, &'static str> {
         },
     );
     Ok(saida)
+}
+
+// ---------- equipe híbrida ----------
+
+/// Entrada da equipe híbrida.
+pub struct EntradaHibrida<'a> {
+    pub motor: &'a MotorEquipes,
+    pub boss: &'a BossBolsa<'a>,
+    pub moeda: &'a str,
+    pub ofertas: &'a [OfertaEquipe],
+    pub n: usize,
+}
+
+/// Custo simbólico de usar um pokémon da conta: quase zero, mas o mais fraco que cumpre a
+/// meta sai na frente (os melhores ficam livres para bosses mais difíceis).
+const CUSTO_CONTA: f64 = 1e-6;
+
+/// Equipe híbrida: os pokémon da conta, completados pelas ofertas mais baratas que fecham a
+/// meta de dano (a mesma regra da Econômica). Responde também quanto se economiza em relação
+/// a comprar a equipe inteira.
+#[allow(clippy::too_many_lines)]
+pub fn equipe_hibrida(e: &EntradaHibrida<'_>) -> Result<Value, &'static str> {
+    let motor = e.motor;
+    let boss = &e.boss.boss;
+    let conta = e.boss.conta.ok_or("conta não encontrada")?;
+    let k = motor.modelo.constantes();
+    let (foe, _) = motor
+        .modelo
+        .boss(&boss.para_combate(), &motor.dex)
+        .ok_or("espécie do boss não está na Pokédex")?;
+    let ref_d = referencia(motor, boss, foe.hp);
+    let l = boss.team_level;
+    let mut cands: Vec<Candidato> = Vec::new();
+    let mut origem: Vec<(&'static str, &Value, &EspecieCombate)> = Vec::new();
+    let pokemons = conta
+        .get("pokemons")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
+    for f in pokemons.iter().filter(|f| js::mais(f.get("level")) > 0.0) {
+        let Some((mon, sp)) = combatente::de_ficha(&motor.dex, f, k) else {
+            continue;
+        };
+        let r = motor.modelo.avaliar(&mon, &foe, 1.0);
+        if !positivo(r.d) {
+            continue;
+        }
+        let lvl = js::mais(f.get("level"));
+        cands.push(Candidato {
+            id: format!("conta:{}", js::texto(f.get("id"))),
+            sp: sp.id,
+            lvl,
+            unit: CUSTO_CONTA * lvl.max(1.0),
+            justo: f64::NAN,
+            hp: mon.hp,
+            dps_out: r.dps_causado,
+            dps_in: r.dps_recebido,
+        });
+        origem.push(("conta", f, sp));
+    }
+    let da_conta = cands.len();
+    for o in e.ofertas {
+        let unit = o.preco / ou(o.quantidade, 1.0).max(1.0);
+        let Some((mon, sp)) = combatente::de_ficha(&motor.dex, &o.ficha, k) else {
+            continue;
+        };
+        let r = motor.modelo.avaliar(&mon, &foe, 1.0);
+        if !positivo(r.d) || !positivo(unit) {
+            continue;
+        }
+        cands.push(Candidato {
+            id: o.id.to_string(),
+            sp: sp.id,
+            lvl: js::mais(o.ficha.get("level")),
+            unit,
+            justo: f64::NAN,
+            hp: mon.hp,
+            dps_out: r.dps_causado,
+            dps_in: r.dps_recebido,
+        });
+        origem.push(("compra", &o.ficha, sp));
+    }
+    let op = Opcoes {
+        n: e.n,
+        nivel_boss: l,
+        referencia: ref_d,
+        teto_justo: false,
+        moeda_orb: e.moeda == "orb",
+        so_max: false,
+        so_eco: true,
+    };
+    let r = otimizador::selecionar(&cands, &op);
+    let compra: Vec<Candidato> = cands.iter().skip(da_conta).cloned().collect();
+    let so_compra = otimizador::selecionar(&compra, &op);
+    let custo_tudo = so_compra.eco.equipe.as_ref().map(|x| x.total);
+    let base = json!({
+        "boss": { "key": boss.key, "nome": boss.nome, "teamLevel": js::json_num(l) },
+        "moeda": e.moeda, "ref": { "soma": js::json_num(js::round(ref_d)) },
+        "contaAvaliados": da_conta, "ofertasAvaliadas": cands.len() - da_conta,
+    });
+    let Value::Object(mut saida) = base else {
+        return Err("falha interna");
+    };
+    let Some(eq) = r.eco.equipe.as_ref() else {
+        saida.insert("indisponivel".into(), Value::Bool(true));
+        saida.insert("aviso".into(), Value::from(r.avisos.join(" ")));
+        return Ok(Value::Object(saida));
+    };
+    let mut custo_compra = 0.0;
+    let mut vagas_compra = 0;
+    let slots: Vec<Value> = eq
+        .pick
+        .iter()
+        .enumerate()
+        .map(|(i, &ci)| {
+            let (orig, f, sp) = origem[ci];
+            let x = &cands[ci];
+            let preco = if orig == "compra" { x.unit } else { 0.0 };
+            if orig == "compra" {
+                custo_compra += x.unit;
+                vagas_compra += 1;
+            }
+            json!({
+                "origem": orig, "id": x.id.trim_start_matches("conta:"), "nome": sp.nome, "speciesId": sp.id,
+                "sprite": motor.sprite(Some(sp), js::verdadeiro(f.get("shiny"))), "nivel": js::json_num(x.lvl),
+                "preco": js::json_num(preco), "D": js::json_num(eq.danos.get(i).copied().unwrap_or(0.0)),
+            })
+        })
+        .collect();
+    saida.insert(
+        "perfil".into(),
+        json!({
+            "slots": slots, "custoCompra": js::json_num(custo_compra), "vagasCompra": vagas_compra,
+            "poder": js::json_num(r.eco.poder), "mult": js::json_num(eq.mult),
+            "margemEstresse": js::json_num(r.eco.margem_estresse),
+        }),
+    );
+    saida.insert(
+        "custoComprarTudo".into(),
+        custo_tudo.map_or(Value::Null, js::json_num),
+    );
+    saida.insert(
+        "economia".into(),
+        custo_tudo.map_or(Value::Null, |t| js::json_num(t - custo_compra)),
+    );
+    saida.insert(
+        "aviso".into(),
+        if r.avisos.is_empty() {
+            Value::Null
+        } else {
+            Value::from(r.avisos.join(" "))
+        },
+    );
+    Ok(Value::Object(saida))
 }
 
 // ---------- alvos de coleta (rota) ----------

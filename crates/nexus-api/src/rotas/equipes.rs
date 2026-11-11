@@ -121,6 +121,10 @@ pub async fn equipe_bolsa(State(estado): State<Estado>, Query(p): Params) -> Res
         nick: g("nick"),
         idade_min: idade.clamp(5.0, 1440.0 * 7.0),
         n: 5,
+        orcamento: p
+            .get("orcamento")
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0),
     };
     let job = estado.equipe_bolsa.trabalho(&estado, pedido);
     match job.esperar(std::time::Duration::from_millis(1500)).await {
@@ -185,5 +189,31 @@ pub async fn alvos_coleta(State(estado): State<Estado>, Query(p): Params) -> Res
             tracing::warn!(erro = %e, "alvos de coleta");
             erro(500, &e.to_string())
         }
+    }
+}
+
+/// `GET /api/bolsa/equipe-hibrida` (rota nova): a equipe com os pokémon da conta, comprando
+/// só as vagas que faltam.
+pub async fn equipe_hibrida(State(estado): State<Estado>, Query(p): Params) -> Response {
+    let g = |k: &str| p.get(k).filter(|v| !v.is_empty()).cloned();
+    let moeda = if p.get("moeda").map(String::as_str) == Some("gold") {
+        "gold"
+    } else {
+        "orb"
+    };
+    match estado
+        .equipe_bolsa
+        .hibrida(&estado, g("boss"), g("nick"), moeda.into())
+        .await
+    {
+        Ok(v) => {
+            let status = if v.get("erro").is_some() {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::OK
+            };
+            (status, Json(v)).into_response()
+        }
+        Err(e) => erro(500, &e.to_string()),
     }
 }

@@ -41,6 +41,8 @@ pub struct Pedido {
     pub nick: Option<String>,
     pub idade_min: f64,
     pub n: usize,
+    /// `orcamento=<gemas>`: também a melhor equipe até esse valor.
+    pub orcamento: Option<f64>,
 }
 
 impl Pedido {
@@ -50,7 +52,8 @@ impl Pedido {
             self.moeda,
             self.nick.clone().unwrap_or_default(),
             self.idade_min,
-            self.n
+            self.n,
+            self.orcamento
         ])
         .to_string()
     }
@@ -425,6 +428,7 @@ impl ServicoEquipeBolsa {
                     listas,
                     preco_de: &preco_de,
                     agora,
+                    orcamento: pedido.orcamento,
                 };
                 let r = be::equipe_bolsa(&entrada, &mut faltas)
                     .unwrap_or_else(|e| json!({ "erro": e }));
@@ -491,6 +495,7 @@ impl ServicoEquipeBolsa {
             nick: nick.clone(),
             idade_min: 90.0,
             n: 5,
+            orcamento: None,
         };
         let eco_compra = match self.concluido(&compra) {
             Some(d) => d.pointer("/perfis/eco").and_then(|eco| {
@@ -621,6 +626,61 @@ impl ServicoEquipeBolsa {
             o.insert("faltas".into(), Value::Bool(ativas));
         }
         Ok(r)
+    }
+}
+
+impl ServicoEquipeBolsa {
+    /// `GET /api/bolsa/equipe-hibrida`: os pokémon da conta, completados pelas ofertas.
+    pub async fn hibrida(
+        &self,
+        estado: &Estado,
+        boss: Option<String>,
+        nick: Option<String>,
+        moeda: String,
+    ) -> Result<Value, ErroEquipeBolsa> {
+        let motor = estado.equipes.motor().await?;
+        let est = estado.equipes.estado().await?;
+        let wiki = self.wiki(&estado.db).await?;
+        let agora = agora_ms();
+        let brutas = estado
+            .bolsa
+            .repo
+            .ofertas_ativas(&FiltroOfertas {
+                corte_item: agora - OFERTA_FRESCA_POKEMON_MS,
+                corte_pokemon: agora - OFERTA_FRESCA_POKEMON_MS,
+                tipo: Some("pokemon".into()),
+                moeda: Some(moeda.clone()),
+                limite: 6000,
+            })
+            .await
+            .map_err(|e| ErroEquipeBolsa::Repo(e.to_string()))?;
+        self.no_pool(move || {
+            let rb = match be::resolver_boss(&motor, &est, &wiki, boss.as_deref(), nick.as_deref())
+            {
+                Ok(b) => b,
+                Err(e) => return json!({ "erro": e }),
+            };
+            let ofertas: Vec<OfertaEquipe> = brutas
+                .iter()
+                .filter_map(|o| {
+                    Some(OfertaEquipe {
+                        id: o.id,
+                        preco: o.preco? as f64,
+                        quantidade: o.quantidade.map_or(0.0, f64::from),
+                        ficha: o.ficha.clone().filter(|f| !f.is_null())?,
+                    })
+                })
+                .collect();
+            let e = be::EntradaHibrida {
+                motor: &motor,
+                boss: &rb,
+                moeda: &moeda,
+                ofertas: &ofertas,
+                n: 5,
+            };
+            be::equipe_hibrida(&e).unwrap_or_else(|e| json!({ "erro": e }))
+        })
+        .await
     }
 }
 
