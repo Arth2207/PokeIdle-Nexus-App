@@ -82,7 +82,37 @@ Scoring e as rotinas de decisão, observação, compras e montagem de builds.
 
 **Pronto quando:** o host não tem mais nenhum processo Node; um backup restaurado num banco vazio sobe o sistema completo.
 
-**Total estimado:** de 5 a 7 meses.
+**Total estimado:** de 5 a 7 meses para o servidor, mais de 2 a 3 meses para o app, em parte em paralelo.
+
+## App desktop
+
+O app depende do contrato da API e do WebSocket, por isso as fases dele começam depois das fases correspondentes do servidor. Ele roda em paralelo ao Electron até a A2 estar validada.
+
+### Fase A1: Esqueleto e bolsa (depois da fase 1; 2 a 3 semanas)
+
+Projeto Tauri 2 + Leptos em `apps/desktop`, crate `contrato`, login por token e as telas da bolsa, só leitura.
+
+**Pronto quando:** o app mostra mercado, ticker e dicas a partir da API do Nexus; build Windows gerado no CI.
+
+### Fase A2: Relay e janela do jogo (depois da fase 3; 3 a 4 semanas)
+
+Núcleo em Rust com o cliente WebSocket (retomada por `seq`, backoff), execução de comandos, janela do jogo com o coletor injetado e envio da captura ao servidor.
+
+**Pronto quando:** 7 dias rodando no lugar do Electron e do `holodex-relay.js` sem perder captura nem comando.
+
+### Fase A3: Painel completo e versão web (depois da fase 4; 3 a 5 semanas)
+
+Telas de automação, builds, venda, hunts e equipes. A mesma interface é publicada como site estático pelo Nginx.
+
+**Pronto quando:** tudo o que o painel atual faz é possível no app e no navegador.
+
+### Fase A4: Distribuição (1 semana)
+
+Instalador Windows e atualização automática (updater do Tauri) a partir dos releases do GitHub, com artefatos assinados.
+
+**Pronto quando:** um push com tag gera o instalador, e o app instalado se atualiza sozinho.
+
+O Electron é desinstalado junto com a fase 7 do servidor.
 
 ## Rollback
 

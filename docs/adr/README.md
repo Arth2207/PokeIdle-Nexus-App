@@ -12,6 +12,7 @@ Cada decisão relevante fica registrada num ADR (Architecture Decision Record): 
 | [0006](0006-consolidar-estado-no-postgres.md) | Consolidar SQLite e arquivos JSON no Postgres | aceito |
 | [0007](0007-websocket-no-lugar-de-polling.md) | WebSocket no lugar do polling da fila de comandos | aceito |
 | [0008](0008-build-somente-no-ci.md) | Imagens compiladas só no CI | aceito |
+| [0009](0009-app-desktop-tauri-leptos.md) | App desktop em Tauri 2 com interface em Leptos | aceito |
 
 ## Modelo
 

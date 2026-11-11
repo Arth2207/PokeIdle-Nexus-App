@@ -17,6 +17,16 @@ flowchart LR
     PROM -. /metrics .-> WK
 ```
 
+## App desktop
+
+O cliente é um app Tauri 2 ([ADR 0009](adr/0009-app-desktop-tauri-leptos.md)) com três partes:
+
+- **núcleo em Rust**: cliente WebSocket do Nexus, execução de comandos no jogo e reconexão. Substitui o relay em Node;
+- **janela do jogo**: o PokeIdle num webview, com o coletor injetado. O coletor é o único trecho em JavaScript do sistema, porque roda dentro da página do jogo;
+- **interface** em Leptos (WebAssembly), também publicada como site pelo Nginx.
+
+O crate `contrato` guarda os tipos que servidor e app trocam (DTOs da API e mensagens do WebSocket). Uma mudança incompatível de um lado quebra a compilação do outro, em vez de quebrar em produção.
+
 ## Processos
 
 **nexus-api** atende todo o tráfego HTTP e WebSocket: bolsa, equipes, raros, ingestão de dados vindos do PC, fila de comandos e o motor de automação. O motor de combate e o otimizador também rodam aqui, já que são chamados por rotas.
@@ -33,6 +43,8 @@ Os dois ficam separados para que um pico de ETL nunca dispute CPU com uma requis
 | `persistencia` | Implementa os traits de repositório do `nucleo` usando sqlx/Postgres | `nucleo` |
 | `nexus-api` | Rotas axum, middlewares, WebSocket, cache | `nucleo`, `persistencia` |
 | `nexus-worker` | Scheduler e jobs | `nucleo`, `persistencia` |
+| `contrato` | DTOs da API e mensagens do WebSocket, compartilhados com o app | — |
+| `apps/desktop` | App Tauri + Leptos | `contrato` |
 
 A regra é que as dependências só apontam "para dentro": o `nucleo` não sabe que o Postgres existe. Ele declara o que precisa por meio de traits:
 

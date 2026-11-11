@@ -2,7 +2,7 @@
 
 Reescrita do backend do Holodex Nexus em Rust. O sistema atual é um conjunto de processos Node.js que coleta dados de mercado e de combate do jogo PokeIdle, calcula indicadores de preço, monta equipes contra bosses e coordena a automação das contas a partir de um app no PC.
 
-O Nexus substitui todos esses processos por dois binários Rust que compartilham um núcleo de domínio comum, rodando em Docker numa VPS pequena (2 vCPU, 8 GB de RAM).
+O Nexus substitui todos esses processos por dois binários Rust que compartilham um núcleo de domínio comum, rodando em Docker numa VPS pequena (2 vCPU, 8 GB de RAM). O app do PC, hoje em Electron, também é reescrito: Tauri 2 com núcleo em Rust e interface em Leptos ([ADR 0009](docs/adr/0009-app-desktop-tauri-leptos.md)).
 
 ## Status
 
@@ -16,6 +16,15 @@ O Nexus substitui todos esses processos por dois binários Rust que compartilham
 | 5 | ETL e dossiê | — |
 | 6 | Scoring e rotinas de IA | — |
 | 7 | Desligamento do legado | — |
+
+**App desktop**
+
+| Fase | Escopo | Situação |
+|---|---|---|
+| A1 | Esqueleto Tauri + Leptos, telas da bolsa (só leitura) | — |
+| A2 | Núcleo do relay em Rust, janela do jogo com o coletor | — |
+| A3 | Painel completo de automação e versão web do painel | — |
+| A4 | Instalador e atualização automática pelo CI | — |
 
 Detalhes de cada fase e o critério de "pronto" estão em [docs/migracao.md](docs/migracao.md).
 
@@ -37,6 +46,7 @@ O resto (rotas, ETL, scoring) não é gargalo, mas migrar tudo resolve outro pro
 - **Logs:** tracing (JSON em produção)
 - **Agendamento:** tokio-cron-scheduler
 - **Infra:** Docker multi-stage, Docker Compose, Nginx, GitHub Actions
+- **App desktop:** Tauri 2, Leptos (WebAssembly)
 
 ## Documentação
 
@@ -63,7 +73,10 @@ nexus-rs/
 │   ├── nucleo/          # domínio puro: bolsa, combate, otimizador, scoring
 │   ├── persistencia/    # implementações Postgres dos repositórios
 │   ├── nexus-api/       # binário HTTP + WebSocket
-│   └── nexus-worker/    # binário de ETL, scoring e rotinas agendadas
+│   ├── nexus-worker/    # binário de ETL, scoring e rotinas agendadas
+│   └── contrato/        # tipos compartilhados entre servidor e app (API e WebSocket)
+├── apps/
+│   └── desktop/         # app Tauri 2 + Leptos (substitui o Electron e o relay)
 ├── migrations/          # sqlx migrations (somente aditivas)
 ├── deploy/              # compose, nginx, deploy.sh, instalar.sh, monitoring
 ├── tests/               # integração e paridade
