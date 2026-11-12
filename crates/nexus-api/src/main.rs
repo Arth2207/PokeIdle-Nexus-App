@@ -59,6 +59,10 @@ paridade-continua | sombra | sombra-relatorio [--desde <horas>] | avaliar-fichas
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // O reqwest usa rustls sem provedor embutido: instala o `ring` antes de criar qualquer
+    // cliente HTTP (comparador, webhook). `Err` só quer dizer que já havia um instalado.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // Em desenvolvimento lê o arquivo .env. Em produção ele não existe, e tudo bem.
     dotenvy::dotenv().ok();
 
