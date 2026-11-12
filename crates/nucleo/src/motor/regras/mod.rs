@@ -57,6 +57,8 @@ impl ContaViva {
     pub fn de_json(v: &Value) -> Option<Self> {
         let texto = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
         let antes = v.get("antes").filter(|a| a.is_object()).unwrap_or(v);
+        // O que o legado leu da janela no começo do ciclo (foto); sem foto, a leitura atual.
+        let foto = |k: &str| antes.get(k).filter(|x| !x.is_null()).or_else(|| v.get(k));
         let linhas = v
             .get("linhas")
             .and_then(Value::as_array)
@@ -75,17 +77,18 @@ impl ContaViva {
         Some(Self {
             id: texto("id").unwrap_or_default(),
             nick: texto("nick")?,
-            ultimo: v.get("ultimo").cloned().unwrap_or(Value::Null),
+            ultimo: foto("ultimo").cloned().unwrap_or(Value::Null),
             welcome: v.get("welcome").cloned().unwrap_or(Value::Null),
-            publico: v.get("pub").cloned().unwrap_or(Value::Null),
-            hunt_key: texto("huntKey"),
+            publico: foto("pub").cloned().unwrap_or(Value::Null),
+            hunt_key: foto("huntKey").and_then(Value::as_str).map(str::to_owned),
             sessao_inicio: v.get("sessaoInicio").and_then(Value::as_i64).unwrap_or(0),
             linhas,
-            vender_ocupado: v
-                .get("venderBusy")
+            vender_ocupado: antes
+                .pointer("/estado/venderBusy")
+                .or_else(|| v.get("venderBusy"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
-            vender_ultimo: v.get("venderUltimo").cloned().unwrap_or(Value::Null),
+            vender_ultimo: foto("venderUltimo").cloned().unwrap_or(Value::Null),
             consumo: antes
                 .pointer("/cons/ev")
                 .and_then(Value::as_array)
@@ -273,6 +276,21 @@ pub fn shiny_bolas(
 mod testes {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn de_json_prefere_a_foto_do_comeco_do_ciclo() {
+        let v = json!({
+            "nick": "Ana", "ultimo": {"gold": "1"}, "huntKey": "nova", "venderBusy": true,
+            "antes": {"ultimo": {"gold": "2"}, "huntKey": "velha", "estado": {"venderBusy": false}}
+        });
+        let c = ContaViva::de_json(&v).unwrap();
+        assert_eq!(c.ultimo, json!({"gold": "2"}));
+        assert_eq!(c.hunt_key.as_deref(), Some("velha"));
+        assert!(!c.vender_ocupado);
+        // Sem foto (motor antigo), vale a leitura atual.
+        let sem = ContaViva::de_json(&json!({"nick": "Ana", "ultimo": {"gold": "1"}})).unwrap();
+        assert_eq!(sem.ultimo, json!({"gold": "1"}));
+    }
 
     fn conta(bolas: Value) -> ContaViva {
         ContaViva {
