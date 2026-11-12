@@ -123,7 +123,9 @@ impl Sombra {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let novas = repo::gravar_acoes_legado(db, &acoes_todas).await?;
+        let mut novas = repo::gravar_acoes_legado(db, &acoes_todas).await?;
+        // O rastro dos comandos sem registro (`mediasEm`, `pedrasEm`...), da foto do ciclo.
+        novas += repo::gravar_acoes_legado(db, &laco::marcas_do_legado(&janela)).await?;
         // O ciclo do legado (foto do começo dele): roda uma vez por ciclo, no mesmo instante.
         let agora = janela
             .pointer("/ciclo/t")
@@ -182,6 +184,7 @@ impl Sombra {
             laco::ciclo(&d, laco_estado, &relogio, &contas, &ctx)
         }))
         .map_err(|_| anyhow::anyhow!("pânico numa regra do motor no ciclo {agora}"))?;
+        let marcas = laco::marcas_do_ciclo(&self.laco, agora);
         let linhas: Vec<LinhaDecisao> = decisoes
             .iter()
             .map(|x| LinhaDecisao {
@@ -191,6 +194,13 @@ impl Sombra {
                 decisao: x.decisao.tipo().to_owned(),
                 dados: x.dados(),
             })
+            .chain(marcas.into_iter().map(|(nick, campo)| LinhaDecisao {
+                ciclo: agora,
+                nick,
+                dados: laco::esperada_da_marca(&campo),
+                regra: campo,
+                decisao: "marca".into(),
+            }))
             .collect();
         let n = repo::gravar_decisoes(db, &linhas).await?;
         if self.escrita {

@@ -209,6 +209,68 @@ pub struct Confronto {
     pub exemplos: Vec<String>,
 }
 
+/// Marcas de tempo que o legado e o Nexus põem quando uma regra age (`conta.xxxEm =
+/// Date.now()`). Comandos como `market.medias` não deixam ação no `D`; a marca é o rastro
+/// que dá para comparar.
+pub const MARCAS_DE_TEMPO: [&str; 7] = [
+    "mediasEm",
+    "bolaReligadaEm",
+    "recargaListaEm",
+    "equipeEm",
+    "pedrasEm",
+    "rodizioEm",
+    "venderEm",
+];
+
+/// Marcas de tempo que o laço do Nexus pôs neste ciclo: `(nick, campo)`. As adotadas do
+/// legado são de ciclos anteriores; só as do Nexus valem `agora`.
+pub fn marcas_do_ciclo(laco: &EstadoLaco, agora_ms: i64) -> Vec<(String, String)> {
+    let agora = agora_ms as f64;
+    let mut v: Vec<(String, String)> = laco
+        .marcas
+        .iter()
+        .filter(|((_, campo), valor)| MARCAS_DE_TEMPO.contains(&campo.as_str()) && **valor == agora)
+        .map(|((nick, campo), _)| (nick.clone(), campo.clone()))
+        .collect();
+    v.sort();
+    v
+}
+
+/// Esperada de uma marca do Nexus (tipo `marca`, texto = nome da marca).
+pub fn esperada_da_marca(campo: &str) -> Value {
+    serde_json::json!({ "esperadas": [{ "tipo": "marca", "texto": campo, "falha": null }] })
+}
+
+/// Marcas de tempo do legado na foto do ciclo (`contas[].antes.estado`), como ações
+/// (`t` = a própria marca) para a tabela das ações do legado. A chave primária descarta a
+/// repetição de um ciclo para o outro.
+pub fn marcas_do_legado(janela: &Value) -> Vec<Value> {
+    let Some(contas) = janela.get("contas").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut v = Vec::new();
+    for c in contas {
+        let (Some(nick), Some(estado)) = (
+            c.get("nick").and_then(Value::as_str),
+            c.pointer("/antes/estado").and_then(Value::as_object),
+        ) else {
+            continue;
+        };
+        for campo in MARCAS_DE_TEMPO {
+            if let Some(t) = estado
+                .get(campo)
+                .and_then(Value::as_f64)
+                .filter(|t| *t > 0.0)
+            {
+                v.push(serde_json::json!({
+                    "t": t as i64, "nick": nick, "tipo": "marca", "texto": campo, "ok": true
+                }));
+            }
+        }
+    }
+    v
+}
+
 /// Confronta as decisões do Nexus `(ciclo, nick, regra, dados)` com as ações do legado
 /// `(t, nick, tipo, texto)` no mesmo período. Uma decisão bate com uma ação da mesma conta e
 /// tipo, com o mesmo texto (ou o começo do de falha), a até `tolerancia_ms`; cada ação vale
@@ -414,5 +476,44 @@ mod testes {
             !r.contains_key("hunt"),
             "tipo que o Nexus não decide não conta"
         );
+    }
+
+    #[test]
+    fn marcas_de_tempo_dos_dois_lados_se_confrontam() {
+        let mut laco = EstadoLaco::default();
+        laco.marcar("Ana", "mediasEm", 1_000.0); // do Nexus, neste ciclo
+        laco.marcar("Ana", "pedrasEm", 500.0); // adotada do legado, ciclo velho
+        laco.marcar("Ana", "ouroMax", 1_000.0); // não é marca de tempo
+        let m = marcas_do_ciclo(&laco, 1_000);
+        assert_eq!(m, vec![("Ana".to_owned(), "mediasEm".to_owned())]);
+
+        let janela = json!({"contas": [
+            {"nick": "Ana", "antes": {"estado": {"mediasEm": 1_004, "pedrasEm": 500, "venderEm": 0}}},
+            {"nick": "Bia"}
+        ]});
+        let legado = marcas_do_legado(&janela);
+        assert_eq!(legado.len(), 2);
+
+        let decisoes = vec![(
+            1_000,
+            "Ana".to_owned(),
+            "mediasEm".to_owned(),
+            esperada_da_marca("mediasEm"),
+        )];
+        let acoes: Vec<(i64, String, String, String)> = legado
+            .iter()
+            .map(|a| {
+                (
+                    a["t"].as_i64().unwrap_or(0),
+                    "Ana".to_owned(),
+                    "marca".to_owned(),
+                    a["texto"].as_str().unwrap_or("").to_owned(),
+                )
+            })
+            .filter(|a| a.0 >= 1_000)
+            .collect();
+        let r = confrontar(&decisoes, &acoes, 120_000);
+        assert_eq!(r["marca"].iguais, 1);
+        assert_eq!(r["marca"].so_nexus + r["marca"].so_legado, 0);
     }
 }

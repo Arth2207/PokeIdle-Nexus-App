@@ -173,7 +173,7 @@ Uma função pura por `motorX` em `nucleo::motor::regras`: conta ao vivo (`Conta
 
 Com `NEXUS_ESCRITA_MOTOR=true`, os comandos do ciclo vão também para a fila da fase 3 (`nexus.comando`, origem `motor`, tipo `motor.<t>`, validade de dois ciclos, chave de idempotência `motor:<ciclo>:<i>`), para o app executar. Fica desligada até o cutover; ligada, só nos testes de integração.
 
-**Comandos sem registro** (`market.medias`, recargas de painel) não deixam ação no `D`; o relatório não os confronta. A cadência deles é coberta por teste de unidade e conferida à mão nas decisões gravadas (ex.: médias a cada 5 min enquanto estiverem velhas, como o legado).
+**Comandos sem registro** (`market.medias`, recargas, pedras, rodízio...) não deixam ação no `D`. O rastro deles são as marcas de tempo da conta (`mediasEm`, `pedrasEm`, `rodizioEm`, `equipeEm`, `venderEm`, `bolaReligadaEm`, `recargaListaEm`): a sombra grava as do legado (da foto do ciclo) como ações do tipo `marca` e as que o Nexus põe no ciclo como decisões do mesmo tipo, e o relatório confronta as duas.
 
 **Link até o PC:** a Tailscale pode cair para relay (~50 KB/s); a janela (1,6 MB) não cabia no ciclo. As rotas `/api/nexus/*` respondem em gzip quando pedido (~10x menor) e o cliente da sombra pede.
 
