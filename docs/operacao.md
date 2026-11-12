@@ -87,6 +87,9 @@ Envs do serviço:
 |---|---|
 | `NEXUS_SOMBRA_URL` | `ws://nexus-api-blue:8190/ws` (só `ws://`; rede interna do compose) |
 | `NEXUS_SOMBRA_TOKEN_FILE` | caminho do secret com o token, ex. `/run/secrets/nexus_sombra_token` |
+| `NEXUS_SOMBRA_GERAR_S` | opcional; segundos entre comandos sintéticos (jitter ±20%). Vazio ou 0 = desligado. Exige `NEXUS_DATABASE_URL_FILE` no container |
+
+Com `NEXUS_SOMBRA_GERAR_S` ligado, a sombra insere direto em `nexus.comando` (nunca em `public`) um `sombra.ping` (conta `sombra-teste`, origem `sintetico`, expira em 10 min); o NOTIFY entrega ao próprio cliente, que confirma `sombra`. Falha de banco só gera `warn`.
 
 Token com escopo `relay` (aparece uma vez; grave no secret):
 
@@ -112,12 +115,12 @@ O servidor precisa estar com `NEXUS_ESPELHO_COMANDOS` ligado. Se a sombra estive
 Relatório (só SELECT no banco; padrão 168 h = 7 dias):
 
 ```bash
-docker compose exec nexus-api-blue /nexus-api sombra-relatorio --desde 168
+docker compose exec nexus-api-blue /nexus-api sombra-relatorio --desde 168 [--origem espelho|sintetico|todas]
 ```
 
-Leitura, para `origem='espelho'` criados no período:
+Padrão `--origem todas`: imprime um bloco por origem (`espelho` e `sintetico`), cada um com seu veredito. `sintetico` é a carga do gerador (tráfego real quase nulo); `espelho` é o tráfego real. Leitura, para as linhas criadas no período:
 
-- espelhados: total; entregues: já reservados por algum consumidor; confirmados: resultado `sombra`.
+- total: total; entregues: já reservados por algum consumidor; confirmados: resultado `sombra`.
 - perdidos: expiraram sem nunca ter sido entregues. Tem de ser 0.
 - sem confirmação: encerrados sem `sombra` (entregues mas não confirmados, ou `erro:sem confirmacao`). Tem de ser 0.
 - pendentes: ainda abertos (não entram no veredito; confira de novo depois).

@@ -299,7 +299,7 @@ async fn sessao(
 }
 
 /// Ponto de entrada do subcomando `sombra`.
-pub async fn executar() -> anyhow::Result<()> {
+pub async fn executar(db: PgPool) -> anyhow::Result<()> {
     let cfg = ConfigSombra::do_ambiente()?;
     tracing::info!(url = %cfg.url, "cliente sombra iniciando");
     let cont = Arc::new(Contadores::default());
@@ -319,6 +319,11 @@ pub async fn executar() -> anyhow::Result<()> {
             }
         }
     });
+
+    if let Some(base) = intervalo_gerador() {
+        tracing::info!(intervalo_s = base.as_secs(), "gerador sintético ligado");
+        tokio::spawn(gerar(db, base, parar.clone()));
+    }
 
     rodar(&cfg, parar, cont.clone()).await;
     cont.log("sombra encerrada");
@@ -348,7 +353,7 @@ impl Relatorio {
 /// Só SELECT. Entregue = já foi reservado por algum consumidor (`reservado_por`, que fica
 /// mesmo depois de devolvido). Não há coluna de contagem de entregas; `tentativas` conta cada
 /// devolução à fila, então `tentativas >= 1` significa que o comando foi entregue mais de uma vez.
-pub async fn relatorio(db: &PgPool, horas: i32) -> Result<Relatorio, sqlx::Error> {
+pub async fn relatorio(db: &PgPool, horas: i32, origem: &str) -> Result<Relatorio, sqlx::Error> {
     let l = sqlx::query(
         "SELECT count(*) AS total,
                 count(*) FILTER (WHERE reservado_por IS NOT NULL) AS entregues,
@@ -367,9 +372,10 @@ pub async fn relatorio(db: &PgPool, horas: i32) -> Result<Relatorio, sqlx::Error
                     (ORDER BY extract(epoch FROM executado_em - criado_em))
                     FILTER (WHERE resultado = 'sombra'))::float8 AS p95
          FROM nexus.comando
-         WHERE origem = 'espelho' AND criado_em >= now() - make_interval(hours => $1)",
+         WHERE origem = $2 AND criado_em >= now() - make_interval(hours => $1)",
     )
     .bind(horas)
+    .bind(origem)
     .fetch_one(db)
     .await?;
     Ok(Relatorio {
@@ -385,10 +391,10 @@ pub async fn relatorio(db: &PgPool, horas: i32) -> Result<Relatorio, sqlx::Error
     })
 }
 
-pub fn imprimir(horas: i32, r: &Relatorio) {
+pub fn imprimir(horas: i32, origem: &str, r: &Relatorio) {
     let t = |v: Option<f64>| v.map_or("-".to_owned(), |s| format!("{s:.2} s"));
-    println!("comandos espelhados nas últimas {horas} h");
-    println!("  espelhados:                {}", r.total);
+    println!("comandos de origem {origem} nas últimas {horas} h");
+    println!("  total:                     {}", r.total);
     println!("  entregues:                 {}", r.entregues);
     println!("  confirmados (sombra):      {}", r.confirmados);
     println!("  perdidos (expiraram sem entrega): {}", r.perdidos);
@@ -416,9 +422,59 @@ pub fn imprimir(horas: i32, r: &Relatorio) {
     );
 }
 
-/// Ponto de entrada do subcomando `sombra-relatorio`.
-pub async fn executar_relatorio(db: &PgPool, horas: i32) -> anyhow::Result<()> {
-    let r = relatorio(db, horas).await.context("falha ao consultar")?;
-    imprimir(horas, &r);
+/// Ponto de entrada do subcomando `sombra-relatorio`. `origem`: espelho, sintetico ou todas.
+pub async fn executar_relatorio(db: &PgPool, horas: i32, origem: &str) -> anyhow::Result<()> {
+    let origens: &[&str] = match origem {
+        "espelho" => &["espelho"],
+        "sintetico" => &["sintetico"],
+        "todas" => &["espelho", "sintetico"],
+        o => bail!("--origem inválida: {o} (espelho|sintetico|todas)"),
+    };
+    for o in origens {
+        let r = relatorio(db, horas, o)
+            .await
+            .context("falha ao consultar")?;
+        imprimir(horas, o, &r);
+    }
     Ok(())
+}
+
+/// Gerador de carga sintética: a cada `base` (jitter ±20%) insere `sombra.ping` direto no banco.
+/// O trigger NOTIFY entrega ao próprio cliente sombra. Falha de banco só gera aviso.
+pub async fn gerar(db: PgPool, base: Duration, parar: CancellationToken) {
+    let mut n: u64 = 0;
+    loop {
+        tokio::select! {
+            () = parar.cancelled() => return,
+            () = tokio::time::sleep(com_jitter(base)) => {}
+        }
+        n += 1;
+        let agora = agora_ms();
+        let params = serde_json::json!({"n": n, "gerado_em": agora});
+        let novo = persistencia::comandos::NovoComando {
+            conta: "sombra-teste",
+            tipo: "sombra.ping",
+            params: &params,
+            prioridade: 5,
+            origem: "sintetico",
+            expira_ms: agora + 600_000,
+        };
+        if let Err(e) = persistencia::comandos::inserir(&db, &novo).await {
+            tracing::warn!(erro = %e, "sombra: falha ao gerar comando sintético");
+        }
+    }
+}
+
+/// Lê NEXUS_SOMBRA_GERAR_S; vazio, 0 ou inválido = desligado.
+pub fn intervalo_gerador() -> Option<Duration> {
+    let v = std::env::var("NEXUS_SOMBRA_GERAR_S").ok()?;
+    match v.trim().parse::<u64>() {
+        Ok(s) if s > 0 => Some(Duration::from_secs(s)),
+        Ok(_) => None,
+        Err(_) if v.trim().is_empty() => None,
+        Err(_) => {
+            tracing::warn!("NEXUS_SOMBRA_GERAR_S inválida; gerador desligado");
+            None
+        }
+    }
 }

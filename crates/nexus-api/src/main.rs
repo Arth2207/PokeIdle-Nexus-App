@@ -19,7 +19,7 @@
 //!   nexus-api paridade-continua                comparador em loop, gravando em nexus.paridade
 //!   nexus-api avaliar-fichas <agora_ms>        diagnóstico: valor justo de fichas (stdin)
 //!   nexus-api sombra                           cliente sombra do WebSocket (NEXUS_SOMBRA_URL, NEXUS_SOMBRA_TOKEN_FILE)
-//!   nexus-api sombra-relatorio [--desde <h>]   relatório da sombra (só SELECT; padrão 168 h)
+//!   nexus-api sombra-relatorio [--desde <h>] [--origem espelho|sintetico|todas]   relatório da sombra (só SELECT; padrão 168 h, todas)
 //!   nexus-api healthcheck                      checa o /health/ready local (usado pelo Docker)
 
 mod auth;
@@ -55,7 +55,7 @@ use crate::estado::Estado;
 
 const USO: &str = "uso: nexus-api [migrar | token criar <nome> <escopos> [conta] | \
 importar itens|especies|base|meus-itens|pokedex|equipes|wiki|faltas|welcome|raros | paridade [url] | \
-paridade-continua | sombra | sombra-relatorio [--desde <horas>] | avaliar-fichas <agora_ms> | pokedex-divergencias | healthcheck]";
+paridade-continua | sombra | sombra-relatorio [--desde <horas>] [--origem espelho|sintetico|todas] | avaliar-fichas <agora_ms> | pokedex-divergencias | healthcheck]";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -85,13 +85,23 @@ async fn main() -> anyhow::Result<()> {
         ["paridade", url] => paridade(&cfg, Some(url)).await,
         ["sombra"] => {
             telemetria::iniciar(cfg.log_formato).context("não consegui iniciar os logs")?;
-            sombra::executar().await
+            let estado = Estado::novo(&cfg).context("NEXUS_DATABASE_URL inválida")?;
+            sombra::executar(estado.db.clone()).await
         }
-        ["sombra-relatorio"] => sombra_relatorio(&cfg, 168).await,
-        ["sombra-relatorio", "--desde", horas] => {
-            let horas: i32 = horas.parse().context("--desde espera horas inteiras")?;
-            ensure!(horas > 0, "--desde deve ser maior que zero");
-            sombra_relatorio(&cfg, horas).await
+        ["sombra-relatorio", args @ ..] => {
+            let (mut horas, mut origem) = (168, "todas");
+            let mut it = args.iter();
+            while let Some(a) = it.next() {
+                match (&**a, it.next()) {
+                    ("--desde", Some(h)) => {
+                        horas = h.parse().context("--desde espera horas inteiras")?;
+                        ensure!(horas > 0, "--desde deve ser maior que zero");
+                    }
+                    ("--origem", Some(o)) => origem = o,
+                    _ => bail!(USO),
+                }
+            }
+            sombra_relatorio(&cfg, horas, origem).await
         }
         ["healthcheck"] => healthcheck(&cfg).await,
         _ => bail!(USO),
@@ -181,9 +191,9 @@ async fn abrir(endereco: SocketAddr) -> anyhow::Result<TcpListener> {
         .with_context(|| format!("não consegui abrir {endereco}"))
 }
 
-async fn sombra_relatorio(cfg: &Configuracao, horas: i32) -> anyhow::Result<()> {
+async fn sombra_relatorio(cfg: &Configuracao, horas: i32, origem: &str) -> anyhow::Result<()> {
     let estado = Estado::novo(cfg).context("NEXUS_DATABASE_URL inválida")?;
-    sombra::executar_relatorio(&estado.db, horas).await
+    sombra::executar_relatorio(&estado.db, horas, origem).await
 }
 
 async fn migrar(cfg: &Configuracao) -> anyhow::Result<()> {

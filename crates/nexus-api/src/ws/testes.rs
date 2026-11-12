@@ -1320,7 +1320,7 @@ async fn sombra_corpo(db: PgPool) {
     tokio::time::sleep(Duration::from_millis(400)).await;
     persistencia::comandos::expirar(&db).await.unwrap();
 
-    let r = relatorio(&db, 24).await.unwrap();
+    let r = relatorio(&db, 24, "espelho").await.unwrap();
     assert_eq!(r.total, 11);
     assert_eq!(r.entregues, 10);
     assert_eq!(r.confirmados, 10);
@@ -1330,6 +1330,38 @@ async fn sombra_corpo(db: PgPool) {
     assert!(r.p50_s.is_some() && r.p95_s.is_some());
     assert!(!r.aprovado());
     s.parar.cancel();
+}
+
+async fn sombra_gerador_corpo(db: PgPool) {
+    use crate::sombra::{gerar, relatorio, rodar, ConfigSombra, Contadores};
+
+    let s = servir(&db, true).await;
+    let token = criar_token(&db, "sombra", &[Escopo::Relay], None)
+        .await
+        .unwrap();
+    let cfg = ConfigSombra::nova(&format!("ws://{}/ws", s.addr), &token).unwrap();
+    let cont = Arc::new(Contadores::default());
+    let parar = CancellationToken::new();
+    {
+        let (c, p) = (cont.clone(), parar.clone());
+        tokio::spawn(async move { rodar(&cfg, p, c).await });
+    }
+    tokio::spawn(gerar(db.clone(), Duration::from_secs(1), parar.clone()));
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    parar.cancel();
+
+    let r = relatorio(&db, 24, "sintetico").await.unwrap();
+    assert!(r.total >= 3, "total {}", r.total);
+    assert!(r.confirmados >= 3, "confirmados {}", r.confirmados);
+    assert_eq!(r.duplicados, 0);
+    let e = relatorio(&db, 24, "espelho").await.unwrap();
+    assert_eq!(e.total, 0);
+    s.parar.cancel();
+}
+
+#[tokio::test]
+async fn sombra_gerador_sintetico() {
+    com_limite(sombra_gerador_corpo).await;
 }
 
 #[tokio::test]
