@@ -40,8 +40,9 @@ const AO_VIVO: &[&str] = &[
     "chance",
 ];
 /// Contadores de bolas que crescem a cada captura: o Nexus lê o estado importado com atraso e
-/// fica poucas dezenas atrás do legado. Tolerância de 1%.
-const CONTADORES: &[&str] = &["bolasDesde", "totalBolas"];
+/// fica poucas dezenas atrás do legado. Tolerância de 1%; `bph` (bolas por hora) é derivado
+/// do mesmo contador e herda o atraso.
+const CONTADORES: &[&str] = &["bolasDesde", "totalBolas", "bph"];
 const AMOSTRA: usize = 15;
 /// Validade do cache do mercado no legado (`TTL` do `bolsa.js`).
 const CACHE_MERCADO_LEGADO_MS: i64 = 3 * 60_000;
