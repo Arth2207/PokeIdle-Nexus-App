@@ -190,8 +190,8 @@ async fn relatorio(cfg: &Configuracao, horas: u32) -> anyhow::Result<()> {
         return Ok(());
     }
     println!(
-        "{:<12} {:<6} {:>12} {:>12} {:>14} {:>14} {}",
-        "conta", "janela", "linhas_node", "linhas_nexus", "soma_xp_node", "soma_xp_nexus", "igual"
+        "{:<12} {:<6} {:>12} {:>12} {:>14} {:>14} igual",
+        "conta", "janela", "linhas_node", "linhas_nexus", "soma_xp_node", "soma_xp_nexus"
     );
     for l in &linhas {
         println!(
