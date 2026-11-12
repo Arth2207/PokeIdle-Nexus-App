@@ -244,18 +244,28 @@ async fn health(db: sqlx::PgPool) -> StatusCode {
 }
 
 async fn healthcheck(cfg: &Configuracao) -> anyhow::Result<()> {
-    // Usado pelo Docker healthcheck: faz GET em /health/ready e sai com 0 ou 1
-    let url = format!("http://127.0.0.1:{}/health/ready", cfg.porta_metricas);
-    let status = std::process::Command::new("wget")
-        .args(["-qO-", "--timeout=5", &url])
-        .status()
-        .context("wget não disponível")?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        bail!("worker não está pronto ({url})")
+    // Imagem distroless não tem wget: HTTP/1.0 cru pelo socket, como no nexus-api.
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let checagem = async {
+        let mut conexao =
+            tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, cfg.porta_metricas)).await?;
+        conexao
+            .write_all(b"GET /health/ready HTTP/1.0\r\nHost: localhost\r\n\r\n")
+            .await?;
+        let mut inicio = [0u8; 12];
+        conexao.read_exact(&mut inicio).await?;
+        anyhow::Ok(inicio)
+    };
+    let inicio = tokio::time::timeout(Duration::from_secs(5), checagem)
+        .await
+        .context("healthcheck: sem resposta em 5s")??;
+    if !inicio.ends_with(b" 200") {
+        bail!(
+            "healthcheck: resposta {:?}",
+            String::from_utf8_lossy(&inicio)
+        );
     }
+    Ok(())
 }
 
 fn iniciar_logs(formato: configuracao::FormatoLog) {
