@@ -149,9 +149,15 @@ Em produção, o estado importado hoje é o do arquivo da VPS, provisório: é o
 - **Erro.** Onde o JS lançaria `TypeError` (campo ausente lido como lista), 500 `{erro: "erro interno"}`, como o legado.
 - **Comparador `motor.*`.** `NEXUS_PARIDADE_MOTOR_URL` liga a comparação no `paridade-continua`; `nexus-api paridade-motor <url>` roda uma vez. Cada rota sem `nick` e, as por conta, com cada nick do estado. Comparação exata (status e corpo), sem tolerância: o Nexus calcula no `agora` que o legado devolveu. Contra o motor da VPS, num banco descartável com o arquivo dela: 58 de 58 iguais.
 
-### Etapa 4: regras no `nucleo`
+### Etapa 4: regras no `nucleo` (em andamento)
 
-Uma função pura por `motorX`: recebe estado da conta + config + relógio e devolve uma lista de decisões (`enum` com os passos). Fixtures: snapshots reais do `/api/estado` e do `holodex-dados.json`, com o resultado do legado gravado. Conceitos novos: máquina de estados com `enum`, agendador com `tokio::time::interval`, estado compartilhado com `ArcSwap`.
+Uma função pura por `motorX` em `nucleo::motor::regras`: conta ao vivo (`ContaViva`) + `D` + relógio → lista de `Decisao`. O estado que o legado guarda entre ciclos (antiflood dos alertas, falhas de poção, horário da última venda) fica em `EstadoLaco`, para a regra continuar pura.
+
+- **Estado da janela.** O `/api/estado` só resume o `welcome` (hunts viram um número, itens só os de cura). O motor do PC ganhou duas rotas só de leitura: `GET /api/nexus/dados` (o `D` inteiro, sem `acesso`) e `GET /api/nexus/janela` (`ultimo`, `welcome` completo, `pub`, `huntKey`, linhas do HUD e estado da venda de cada conta). São a fonte da sombra até a A2.
+- **Versão de referência.** O motor do PC e a cópia do servidor tinham divergido: o PC tinha o coletor do Mercado, o servidor tinha o acesso pela Tailscale e correções. Os dois foram unidos (merge de três vias, um conflito resolvido) e o PC roda a versão unida. As regras são portadas dela.
+- **Fixtures.** Capturas do mesmo instante de `nexus/dados`, `nexus/janela` e `estado` (com os planos que o legado calculou), com quatro contas conectadas. Ficam fora do repositório, por conterem dados das contas.
+- **Feito:** `motorShinyBolas` e o `alerta()`.
+- **Ordem do resto**, da menor dependência para a maior: `motorRadar`, `motorMedias`, `motorBola`, `motorPedras`, `motorExtras`, `planoCompra` → `motorCompra` e `motorPocao`, `planoVender` (com o `veredito.js`) → `motorVender`, `planoHunt` → `motorHunt`, `planoRodizio`/`planoEquipe` → `motorRodizio`/`motorEquipe` (reaproveitando o combate e o otimizador da fase 2).
 
 ### Etapa 5: escrita e laço
 
