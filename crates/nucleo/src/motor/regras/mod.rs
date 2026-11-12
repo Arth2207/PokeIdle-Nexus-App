@@ -4,6 +4,12 @@
 //! devolve a lista de decisões. Nada é executado aqui: quem chama grava as decisões (sombra)
 //! ou, com `NEXUS_ESCRITA_MOTOR`, as transforma em comandos para o app.
 
+pub mod compra;
+pub mod equipe;
+pub mod hunt;
+pub mod simples;
+pub mod vender;
+
 use std::collections::HashMap;
 
 use serde::Serialize;
@@ -16,29 +22,74 @@ use crate::js;
 /// a A2 pelo `/ws`).
 #[derive(Debug, Clone, Default)]
 pub struct ContaViva {
+    pub id: String,
     pub nick: String,
-    /// `conta.ultimo`: a última leitura da janela (`hdx.eu`, `hdx.pokemons`, ouro...).
+    /// `conta.ultimo`: a última leitura da janela (`hdx.eu`, `hdx.pokemons`, ouro, `hunt`...).
     pub ultimo: Value,
     /// `conta.welcome`: hunts, bolas, itens e bosses que o jogo mandou ao conectar.
     pub welcome: Value,
+    /// `conta.pub`: dados públicos do jogo (multiplicadores das hunts).
+    pub publico: Value,
     pub hunt_key: Option<String>,
+    pub sessao_inicio: i64,
+    /// `conta.linhas`: `[seq, t, texto]` do HUD, da mais antiga para a mais nova. O Nexus
+    /// acumula entre consultas (a rota manda só as últimas 500).
+    pub linhas: Vec<(i64, i64, String)>,
+    /// `conta.venderBusy` e `conta.venderUltimo` do legado.
+    pub vender_ocupado: bool,
+    pub vender_ultimo: Value,
 }
 
 impl ContaViva {
     /// Lê uma conta do JSON da rota `/api/nexus/janela`.
     pub fn de_json(v: &Value) -> Option<Self> {
+        let texto = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+        let linhas = v
+            .get("linhas")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|l| {
+                        Some((
+                            l.get(0)?.as_f64()? as i64,
+                            l.get(1)?.as_f64()? as i64,
+                            l.get(2)?.as_str()?.to_owned(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         Some(Self {
-            nick: v.get("nick")?.as_str()?.to_owned(),
+            id: texto("id").unwrap_or_default(),
+            nick: texto("nick")?,
             ultimo: v.get("ultimo").cloned().unwrap_or(Value::Null),
             welcome: v.get("welcome").cloned().unwrap_or(Value::Null),
-            hunt_key: v.get("huntKey").and_then(Value::as_str).map(str::to_owned),
+            publico: v.get("pub").cloned().unwrap_or(Value::Null),
+            hunt_key: texto("huntKey"),
+            sessao_inicio: v.get("sessaoInicio").and_then(Value::as_i64).unwrap_or(0),
+            linhas,
+            vender_ocupado: v
+                .get("venderBusy")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            vender_ultimo: v.get("venderUltimo").cloned().unwrap_or(Value::Null),
         })
     }
 }
 
+/// O que o legado grava em `acoes` depois de um comando: um texto se o jogo responder `ok`,
+/// outro se não. Em `texto_falha`, `{r}` é a resposta do jogo.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Registro {
+    pub tipo: String,
+    pub texto_ok: String,
+    pub texto_falha: String,
+}
+
 /// O que uma regra decidiu. Em sombra, só é gravado.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "tipo", rename_all = "camelCase")]
+#[serde(tag = "decisao", rename_all = "camelCase")]
 pub enum Decisao {
     /// `alerta(nick, chave, titulo, texto, minutos)`: notificação e registro em `acoes`,
     /// no máximo uma vez a cada `minutos` por conta e chave.
@@ -49,13 +100,56 @@ pub enum Decisao {
         texto: String,
         minutos: i64,
     },
+    /// `comando(conta, obj)`: mensagem para o jogo (`__hdxCmd`), com o registro que segue.
+    Comando {
+        nick: String,
+        comando: Value,
+        registro: Option<Registro>,
+    },
+    /// `registrar(nick, tipo, texto, ok)` que não depende de resposta do jogo.
+    Registro {
+        nick: String,
+        tipo: String,
+        texto: String,
+        ok: bool,
+    },
+    /// `recarregarPainel(conta.id)`.
+    RecarregarPainel { nick: String },
+    /// `trocarHunt(conta, slug, nome, nivel)`, com o registro que segue.
+    TrocarHunt {
+        nick: String,
+        slug: String,
+        nome: String,
+        nivel: Value,
+        registro: Option<Registro>,
+    },
 }
 
-/// Estado do laço que sobrevive entre ciclos (no legado, variáveis do módulo).
+/// Estado do laço que sobrevive entre ciclos (no legado, variáveis do módulo e campos
+/// soltos no objeto da conta).
 #[derive(Debug, Default, Clone)]
 pub struct EstadoLaco {
     /// `avisado`: último alerta por `nick|chave`.
     pub avisado: HashMap<String, i64>,
+    /// `conta.<campo>` numéricos que as regras gravam (`pocaoMexida`, `bolaReligadaEm`,
+    /// `pedrasEm`...), por `nick` e nome do campo do legado. Ausente vale `undefined`.
+    pub marcas: HashMap<(String, &'static str), f64>,
+    /// `ultimaHunt`: a última hunt vista por conta (`{nome, lvl, slug, t}`).
+    pub ultima_hunt: HashMap<String, Value>,
+}
+
+impl EstadoLaco {
+    /// `conta.<campo> || 0`.
+    pub fn marca(&self, nick: &str, campo: &'static str) -> f64 {
+        self.marcas
+            .get(&(nick.to_owned(), campo))
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    pub fn marcar(&mut self, nick: &str, campo: &'static str, valor: f64) {
+        self.marcas.insert((nick.to_owned(), campo), valor);
+    }
 }
 
 /// `alerta()`: aplica a config de alertas da conta e o intervalo mínimo ao pedido. Devolve a
@@ -66,7 +160,10 @@ pub fn alerta(d: &Value, laco: &mut EstadoLaco, r: &Relogio, pedido: Decisao) ->
         chave,
         minutos,
         ..
-    } = &pedido;
+    } = &pedido
+    else {
+        return Some(pedido);
+    };
     let c = config::efetiva(d, nick);
     let a = c.get("alertas");
     if !js::verdadeiro(a.and_then(|x| x.get("ativo")))

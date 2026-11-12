@@ -16,6 +16,7 @@ libm = "0.2.16"
 serde = { version = "1.0.229", features = ["derive"] }
 # Ordem de inserção nas chaves dos objetos, como no JS (o motor itera objetos do legado).
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
+regex = "1.13.1"
 thiserror = "2.0.21"
 unicode-normalization = "0.1.26"
 

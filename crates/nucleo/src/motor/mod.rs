@@ -9,8 +9,10 @@
 //! conectada, e a parte que depende do jogo fica para quando o estado chegar.
 
 pub mod config;
+pub mod jogo;
 pub mod leitura;
 pub mod regras;
+pub mod veredito;
 
 use serde_json::Value;
 
