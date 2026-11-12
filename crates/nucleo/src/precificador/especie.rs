@@ -173,6 +173,8 @@ pub struct Central {
     por_nome: HashMap<String, i32>,
     /// Nome em minúsculas → id, só ids < 1100 (têm arte própria); vale a última ocorrência.
     dex_por_nome: HashMap<String, i32>,
+    /// Quem evolui para cada espécie, montado na primeira consulta (ver `nota`).
+    pais: std::sync::OnceLock<HashMap<i32, Vec<i32>>>,
 }
 
 impl Central {
@@ -194,7 +196,16 @@ impl Central {
             especies,
             por_nome,
             dex_por_nome,
+            pais: std::sync::OnceLock::new(),
         }
+    }
+
+    /// O mapa de pais, montado uma vez por catálogo.
+    pub(crate) fn pais_com(
+        &self,
+        montar: impl FnOnce() -> HashMap<i32, Vec<i32>>,
+    ) -> &HashMap<i32, Vec<i32>> {
+        self.pais.get_or_init(montar)
     }
 
     /// Id com arte própria (< 1100) pelo nome em minúsculas.

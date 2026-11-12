@@ -63,3 +63,28 @@ ALTER TABLE ONLY public.fato_resumo_item ADD CONSTRAINT fato_resumo_item_pkey PR
 ALTER TABLE ONLY public.fato_venda_mercado ADD CONSTRAINT fato_venda_mercado_pkey PRIMARY KEY (id);
 CREATE INDEX fato_venda_mercado_em ON public.fato_venda_mercado USING btree (em);
 CREATE INDEX ix_oferta_ativo ON public.fato_oferta_mercado USING btree (ativo, ts_visto DESC);
+
+-- Fila de comandos do legado (usada pelo espelho da fase 3) e cofre de raros.
+CREATE TABLE public.comando_fila (
+    id integer PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    ts bigint DEFAULT ((EXTRACT(epoch FROM now()))::bigint * 1000) NOT NULL,
+    nick text NOT NULL,
+    cmd text NOT NULL,
+    params jsonb DEFAULT '{}'::jsonb NOT NULL,
+    prioridade integer DEFAULT 5,
+    ts_expira bigint,
+    ts_executado bigint,
+    resultado text,
+    origem text DEFAULT 'manual'::text,
+    ts_reservado bigint
+);
+
+CREATE TABLE public.fato_cofre (
+    ts bigint NOT NULL,
+    nick text NOT NULL,
+    itens bigint,
+    pokemons bigint,
+    shiny bigint,
+    total bigint,
+    PRIMARY KEY (ts, nick)
+);

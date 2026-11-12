@@ -1,7 +1,10 @@
 //! Montagem do roteador HTTP.
 
 mod bolsa;
+mod comandos;
 mod equipes;
+mod ingestao;
+mod raros;
 mod saude;
 
 use axum::extract::DefaultBodyLimit;
@@ -19,8 +22,15 @@ use crate::auth::{self, Cliente, Escopo};
 use crate::estado::Estado;
 use crate::{etag, limite, metricas};
 
+/// O corpo como JSON. Como no legado, corpo vazio ou inválido vira `{}` (nunca dá 400 por
+/// JSON malformado: cai nas validações de campo de cada rota).
+pub(crate) fn corpo_json(corpo: &[u8]) -> serde_json::Value {
+    serde_json::from_slice(corpo).unwrap_or_else(|_| serde_json::json!({}))
+}
+
 /// Escopos aceitos em cada grupo de rotas.
 const LEITURA: &[Escopo] = &[Escopo::Leitura];
+const RELAY: &[Escopo] = &[Escopo::Relay];
 const INGESTAO: &[Escopo] = &[Escopo::Relay, Escopo::Escrita];
 
 const LIMITE_CORPO: usize = 2 * 1024 * 1024;
@@ -44,6 +54,8 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/bolsa/equipe-propria", get(equipes::equipe_propria))
         .route("/api/bolsa/alvos-coleta", get(equipes::alvos_coleta))
         .route("/api/bolsa/equipe-hibrida", get(equipes::equipe_hibrida))
+        .route("/api/raros2", get(raros::raros2))
+        .route("/api/shiny", get(raros::shiny))
         .route_layer(middleware::from_fn(|req, next| {
             auth::exigir_escopo(LEITURA, req, next)
         }))
@@ -57,10 +69,24 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/bolsa/meus-itens", post(bolsa::gravar_meus_itens))
         .route("/api/equipes/ingest", post(equipes::ingest))
         .route("/api/boss/tentativa", post(equipes::tentativa))
+        .route("/ingest", post(ingestao::ingest))
+        .route("/api/hunt-sync", post(ingestao::hunt_sync))
+        .route("/api/raros/ingest", post(raros::ingest))
+        .route("/api/shiny/registrar", post(raros::registrar))
+        .route("/api/comandos", get(comandos::listar))
+        .route("/api/confirmar-comando", post(comandos::confirmar))
+        .route("/api/inserir-comando", post(comandos::inserir))
         .route_layer(middleware::from_fn(|req, next| {
             auth::exigir_escopo(INGESTAO, req, next)
         }))
         .layer(DefaultBodyLimit::max(LIMITE_CORPO_INGESTAO));
+
+    // WebSocket: token com escopo `relay`; sem ele, 401/403 antes do upgrade.
+    let ws = Router::new()
+        .route("/ws", get(crate::ws::handler))
+        .route_layer(middleware::from_fn(|req, next| {
+            auth::exigir_escopo(RELAY, req, next)
+        }));
 
     // Cada grupo recebe token e rate limit. O CORS fica por fora do token nas leituras,
     // porque o preflight (OPTIONS) do navegador não manda token.
@@ -72,7 +98,8 @@ pub fn router(estado: Estado) -> Router {
     let protegidas = Router::new()
         .merge(protegido(Router::new().route("/api/eu", get(eu)), &estado))
         .merge(leitura)
-        .merge(protegido(ingestao, &estado));
+        .merge(protegido(ingestao, &estado))
+        .merge(protegido(ws, &estado));
 
     // Uma linha de log por requisição: método, caminho, status, latência e request id.
     let log_requisicoes = TraceLayer::new_for_http()
@@ -231,6 +258,35 @@ mod testes {
             .body(Body::from("{}"))
             .unwrap();
         assert_eq!(status_de(ingest).await, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn rotas_da_fase_3_sem_token_dao_401() {
+        for (metodo, caminho) in [
+            ("POST", "/ingest"),
+            ("POST", "/api/hunt-sync"),
+            ("POST", "/api/raros/ingest"),
+            ("POST", "/api/shiny/registrar"),
+            ("GET", "/api/raros2"),
+            ("GET", "/api/shiny"),
+            ("GET", "/api/comandos?nick=x"),
+            ("POST", "/api/confirmar-comando"),
+            ("POST", "/api/inserir-comando"),
+        ] {
+            let req = Request::builder()
+                .method(metodo)
+                .uri(caminho)
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(status_de(req).await, StatusCode::UNAUTHORIZED, "{caminho}");
+        }
+    }
+
+    #[test]
+    fn corpo_invalido_vira_objeto_vazio() {
+        assert_eq!(corpo_json(b"nao e json"), serde_json::json!({}));
+        assert_eq!(corpo_json(b""), serde_json::json!({}));
+        assert_eq!(corpo_json(br#"{"a":1}"#), serde_json::json!({"a": 1}));
     }
 
     #[tokio::test]

@@ -134,13 +134,17 @@ pub struct LinhaTentativa {
     pub dano_causado: Option<f64>,
     pub dano_recebido: Option<f64>,
     pub eventos: Option<Value>,
+    /// Chave de idempotência: reenviar a mesma tentativa não grava de novo.
+    pub chave: Option<String>,
 }
 
-pub async fn registrar_tentativa(db: &PgPool, t: &LinhaTentativa) -> Result<(), sqlx::Error> {
-    sqlx::query(
+/// Grava a tentativa. Devolve `false` quando a chave já existia (tentativa repetida).
+pub async fn registrar_tentativa(db: &PgPool, t: &LinhaTentativa) -> Result<bool, sqlx::Error> {
+    let gravadas = sqlx::query(
         "INSERT INTO nexus.boss_tentativa
-           (em, conta, boss, nivel_boss, tipos_boss, venceu, duracao_s, equipe, dano_causado, dano_recebido, eventos)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+           (em, conta, boss, nivel_boss, tipos_boss, venceu, duracao_s, equipe, dano_causado, dano_recebido, eventos, chave)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         ON CONFLICT DO NOTHING",
     )
     .bind(t.em)
     .bind(&t.conta)
@@ -153,9 +157,11 @@ pub async fn registrar_tentativa(db: &PgPool, t: &LinhaTentativa) -> Result<(), 
     .bind(t.dano_causado)
     .bind(t.dano_recebido)
     .bind(&t.eventos)
+    .bind(&t.chave)
     .execute(db)
-    .await?;
-    Ok(())
+    .await?
+    .rows_affected();
+    Ok(gravadas > 0)
 }
 
 /// As tentativas mais recentes (no máximo `limite`).
@@ -186,6 +192,7 @@ pub async fn carregar_tentativas(
             dano_causado: l.try_get("dano_causado")?,
             dano_recebido: l.try_get("dano_recebido")?,
             eventos: l.try_get("eventos")?,
+            chave: None,
         })
     })
     .collect()

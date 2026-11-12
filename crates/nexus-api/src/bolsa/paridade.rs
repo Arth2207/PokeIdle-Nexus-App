@@ -338,6 +338,68 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
         Ok(())
     }
 
+    /// `/api/raros2` e `/api/shiny`. O estado do Nexus chega pela importação (ou pelo relay,
+    /// com `NEXUS_ESCRITA_RAROS`): os instantes (`dadosEm`, `histEm`) ficam fora da comparação.
+    /// O valor das cartas depende do mercado de cada lado no instante da chamada: vai numa
+    /// rota à parte (`raros2.cartas`), com tolerância de 10% no preço.
+    async fn comparar_raros(
+        &self,
+        estado: &crate::estado::Estado,
+        rel: &mut Relatorio,
+    ) -> Result<(), String> {
+        let (_, l) = self.legado("/api/raros2").await?;
+        let n =
+            crate::raros::resposta_raros2(estado, "", nucleo::raros::NOTA_MIN_PADRAO, 0.0, None)
+                .await
+                .map_err(|e| e.to_string())?;
+        {
+            let (mut lc, mut nc) = (l.clone(), n.clone());
+            let (lp, np) = (cartas_de(&mut lc), cartas_de(&mut nc));
+            // Totais e ritmo dependem do valor das cartas (mercado de cada lado); os instantes
+            // do estado variam com o atraso da importação.
+            for campo in [
+                "cofre",
+                "progresso",
+                "falta",
+                "ritmoDia",
+                "diasParaMeta",
+                "porConta",
+                "dadosEm",
+                "histEm",
+                "geradoEm",
+            ] {
+                tirar(&mut lc, campo);
+                tirar(&mut nc, campo);
+            }
+            rel.entry("raros2")
+                .or_default()
+                .registrar("padrão", diferenca(&lc, &nc, ""));
+            rel.entry("raros2.cartas")
+                .or_default()
+                .registrar("padrão", comparar_cartas(&lp, &np));
+        }
+        let (_, l) = self.legado("/api/shiny").await?;
+        let n = crate::raros::resposta_shiny(estado, "")
+            .await
+            .map_err(|e| e.to_string())?;
+        {
+            let preparar = |mut v: Value| {
+                for campo in ["dadosEm", "histEm", "geradoEm"] {
+                    tirar(&mut v, campo);
+                }
+                // Contas com o mesmo valor podem sair em ordem diferente: compara por nick.
+                if let Some(Value::Array(c)) = v.get_mut("contas") {
+                    c.sort_by_key(|x| x.get("nick").map(Value::to_string).unwrap_or_default());
+                }
+                v
+            };
+            rel.entry("shiny")
+                .or_default()
+                .registrar("padrão", diferenca(&preparar(l), &preparar(n), ""));
+        }
+        Ok(())
+    }
+
     async fn legado(&self, caminho: &str) -> Result<(u16, Value), String> {
         let r = self
             .http
@@ -567,6 +629,12 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
                     .exemplos
                     .push(format!("falhou: {e}"));
             }
+            if let Err(e) = self.comparar_raros(estado, &mut rel).await {
+                rel.entry("raros2")
+                    .or_default()
+                    .exemplos
+                    .push(format!("falhou: {e}"));
+            }
             if let Err(e) = self.comparar_equipe_bolsa(estado, &mut rel).await {
                 rel.entry("equipe")
                     .or_default()
@@ -713,6 +781,55 @@ fn qualidade_equipe(l: &Value, n: &Value) -> Option<String> {
             if cl > 0.0 && (cn - cl).abs() > 0.05 * cl {
                 return Some(format!("{perfil}: custo {cn} fora de ±5% de {cl}"));
             }
+        }
+    }
+    None
+}
+
+/// Ofertas de um ticker em ordem de (preço, id): a consulta do legado só ordena por preço, e
+/// empates saem em qualquer ordem.
+/// Tira `pokemons` e `shinies` do JSON e devolve as duas listas juntas.
+fn cartas_de(v: &mut Value) -> Vec<Value> {
+    let mut cartas = Vec::new();
+    for campo in ["pokemons", "shinies"] {
+        if let Value::Array(a) = tirar(v, campo) {
+            cartas.extend(a);
+        }
+    }
+    cartas
+}
+
+/// Compara as cartas: tudo igual, menos o preço (`valorGemas`, `faixa`, `confianca`), que
+/// precisa estar a 10% de distância (mercados montados em instantes diferentes). Só olha as
+/// 100 primeiras: depois do corte de preço, a ordem de cartas de valor parecido diverge.
+fn comparar_cartas(l: &[Value], n: &[Value]) -> Option<String> {
+    let chave = |c: &Value| format!("{}|{}", c["nick"], c["id"]);
+    let por_chave: BTreeMap<String, &Value> = n.iter().map(|c| (chave(c), c)).collect();
+    let tira_preco = |c: &Value| {
+        let mut c = c.clone();
+        for campo in ["valorGemas", "faixa", "confianca", "semPreco"] {
+            tirar(&mut c, campo);
+        }
+        c
+    };
+    if l.len() != n.len() {
+        return Some(format!("quantidade de cartas {} ≠ {}", l.len(), n.len()));
+    }
+    for c in l.iter().take(100) {
+        let k = chave(c);
+        let Some(outra) = por_chave.get(&k) else {
+            return Some(format!("{k}: só no legado"));
+        };
+        if let Some(d) = diferenca(&tira_preco(c), &tira_preco(outra), &k) {
+            return Some(d);
+        }
+        let (a, b) = (c["valorGemas"].as_f64(), outra["valorGemas"].as_f64());
+        if let (Some(a), Some(b)) = (a, b) {
+            if (a - b).abs() > 0.10 * a.abs().max(b.abs()) {
+                return Some(format!("{k}: valorGemas {a} ≠ {b}"));
+            }
+        } else if a.is_some() != b.is_some() {
+            return Some(format!("{k}: preço presente só em um lado"));
         }
     }
     None

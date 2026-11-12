@@ -24,6 +24,18 @@ pub struct Estado {
     /// Equipe da bolsa: jobs de cálculo e o pool de CPU.
     pub equipe_bolsa: Arc<ServicoEquipeBolsa>,
     pub escrita_equipes: bool,
+    /// `NEXUS_ESCRITA_INGESTAO`: `POST /ingest` e `/api/hunt-sync`.
+    pub escrita_ingestao: bool,
+    /// `NEXUS_ESCRITA_RAROS`: `POST /api/raros/ingest` e `/api/shiny/registrar`.
+    pub escrita_raros: bool,
+    /// `NEXUS_ESCRITA_COMANDOS`: as três rotas da fila de comandos.
+    pub escrita_comandos: bool,
+    /// Avisos e buffer do WebSocket.
+    pub ws: Arc<crate::ws::Hub>,
+    /// `NEXUS_ESPELHO_COMANDOS`: copia a fila do legado para `nexus.comando`.
+    pub espelho_comandos: bool,
+    /// Cartas valiosas de raros (cache de 10 minutos).
+    pub raros: Arc<crate::raros::ServicoRaros>,
     /// `NEXUS_MELHORIAS`.
     pub melhorias: bool,
     pub limitador: Arc<Limitador>,
@@ -43,6 +55,10 @@ impl Estado {
         Ok(Self {
             escrita_bolsa: cfg.escrita_bolsa,
             escrita_equipes: cfg.escrita_equipes,
+            escrita_ingestao: cfg.escrita_ingestao,
+            escrita_raros: cfg.escrita_raros,
+            escrita_comandos: cfg.escrita_comandos,
+            espelho_comandos: cfg.espelho_comandos,
             melhorias: cfg.melhorias,
             equipes: Arc::new(ServicoEquipes::novo(
                 db.clone(),
@@ -63,6 +79,14 @@ impl Estado {
             equipes: Arc::new(ServicoEquipes::novo(db.clone(), ModeloAtivo::Legado, false)),
             equipe_bolsa: Arc::new(ServicoEquipeBolsa::novo(1)),
             escrita_equipes: false,
+            escrita_ingestao: false,
+            escrita_raros: false,
+            escrita_comandos: false,
+            ws: Arc::new(crate::ws::Hub::novo(
+                tokio_util::sync::CancellationToken::new(),
+            )),
+            espelho_comandos: false,
+            raros: Arc::new(crate::raros::ServicoRaros::novo()),
             melhorias: false,
             db,
             bolsa,

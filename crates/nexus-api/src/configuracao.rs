@@ -9,6 +9,10 @@
 //! | `NEXUS_LOG_FORMATO`   | não         | `texto`     |
 //! | `NEXUS_ESCRITA_BOLSA` | não         | `false`     |
 //! | `NEXUS_ESCRITA_EQUIPES` | não       | `false`     |
+//! | `NEXUS_ESCRITA_INGESTAO` | não     | `false`     |
+//! | `NEXUS_ESCRITA_RAROS` | não       | `false`     |
+//! | `NEXUS_ESCRITA_COMANDOS` | não    | `false`     |
+//! | `NEXUS_ESPELHO_COMANDOS` | não    | `false`     |
 //! | `NEXUS_CPU_THREADS`   | não         | `2`         |
 //! | `NEXUS_MODELO`        | não         | `legado`    |
 //! | `NEXUS_MELHORIAS`     | não         | `false`     |
@@ -24,6 +28,14 @@
 //!   gravam em tabelas do legado; só ligar no cutover da fase 1.
 //! - `NEXUS_ESCRITA_EQUIPES`: liga o `POST /api/equipes/ingest`. Até o cutover da fase 2 o
 //!   relay manda para o legado, e o estado chega pela importação.
+//! - `NEXUS_ESCRITA_INGESTAO`: liga `POST /ingest` e `POST /api/hunt-sync`, que gravam em
+//!   `nexus.evento` e `nexus.config_hunt`. Desligada, respondem `503`.
+//! - `NEXUS_ESCRITA_RAROS`: liga `POST /api/raros/ingest` e `POST /api/shiny/registrar`, que
+//!   gravam `nexus.estado_raros`. Desligada, o estado vem da importação (`importar raros`).
+//! - `NEXUS_ESCRITA_COMANDOS`: liga `GET /api/comandos` (que reserva), `POST
+//!   /api/confirmar-comando` e `POST /api/inserir-comando`, sobre `nexus.comando`.
+//! - `NEXUS_ESPELHO_COMANDOS`: a cada 5 s copia as linhas novas de `public.comando_fila` para
+//!   `nexus.comando` (só lê a tabela do legado). É o modo sombra da fila.
 //! - `NEXUS_MELHORIAS`: liga o que diverge do legado de propósito: busca exata nos perfis de
 //!   equipe, chance de vitória, ordem de compra e preços típicos corrigidos. Quebra a paridade
 //!   (o comparador vai acusar), então só depois do cutover da fase 2.
@@ -59,6 +71,14 @@ pub struct Configuracao {
     pub escrita_bolsa: bool,
     #[serde(default)]
     pub escrita_equipes: bool,
+    #[serde(default)]
+    pub escrita_ingestao: bool,
+    #[serde(default)]
+    pub escrita_raros: bool,
+    #[serde(default)]
+    pub escrita_comandos: bool,
+    #[serde(default)]
+    pub espelho_comandos: bool,
     #[serde(default)]
     pub paridade_equipe: bool,
     #[serde(default)]

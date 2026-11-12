@@ -5,6 +5,8 @@
 //! o app deixa de compilar, em vez de quebrar em produção.
 
 pub mod bolsa;
+pub mod rotas;
+pub mod ws;
 
 use serde::{Deserialize, Serialize};
 

@@ -22,6 +22,7 @@
 
 mod auth;
 mod bolsa;
+mod comandos;
 mod configuracao;
 mod conversao;
 mod desligamento;
@@ -30,8 +31,10 @@ mod estado;
 mod etag;
 mod limite;
 mod metricas;
+mod raros;
 mod rotas;
 mod telemetria;
+mod ws;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -82,7 +85,10 @@ async fn servir(cfg: Configuracao) -> anyhow::Result<()> {
     tracing::info!(?cfg, "configuração carregada");
 
     let metricas = metricas::instalar().context("não consegui iniciar as métricas")?;
-    let estado = Estado::novo(&cfg).context("NEXUS_DATABASE_URL inválida")?;
+    let mut estado = Estado::novo(&cfg).context("NEXUS_DATABASE_URL inválida")?;
+    // Sinal de parada dos servidores HTTP; o WebSocket também o usa para fechar as conexões.
+    let parar = CancellationToken::new();
+    estado.ws = Arc::new(ws::Hub::novo(parar.clone()));
 
     // Uma task remonta o mercado em segundo plano; o comparador (se configurado) roda junto.
     let parar_tarefas = CancellationToken::new();
@@ -113,6 +119,16 @@ async fn servir(cfg: Configuracao) -> anyhow::Result<()> {
         );
     }
 
+    if cfg.escrita_comandos || cfg.espelho_comandos {
+        comandos::iniciar(estado.clone(), parar_tarefas.clone());
+        tracing::warn!(
+            escrita = cfg.escrita_comandos,
+            espelho = cfg.espelho_comandos,
+            "fila de comandos do Nexus LIGADA"
+        );
+        ws::iniciar(estado.clone(), parar_tarefas.clone());
+    }
+
     let app = rotas::router(estado.clone());
     let app_metricas = metricas::router(metricas, estado);
 
@@ -123,7 +139,6 @@ async fn servir(cfg: Configuracao) -> anyhow::Result<()> {
     tracing::info!(%endereco, %endereco_metricas, "nexus-api ouvindo");
 
     // Um único sinal de parada para os dois servidores.
-    let parar = CancellationToken::new();
     tokio::spawn({
         let parar = parar.clone();
         async move {
@@ -323,7 +338,8 @@ async fn importar(cfg: &Configuracao, tipo: &str) -> anyhow::Result<()> {
             println!("constantes do servidor importadas");
         }
         "raros" => {
-            // raros-estado.json do legado: só os nomes por id (sem o "(provável)").
+            // raros-estado.json do legado: os nomes por id (sem o "(provável)") para a bolsa e o
+            // estado inteiro (itens, histórico e acumulado de shiny) para `nexus.estado_raros`.
             let v: serde_json::Value = serde_json::from_str(&texto).context("JSON inválido")?;
             let itens = v.pointer("/raros/itens").and_then(serde_json::Value::as_array).context("sem raros.itens")?;
             let nomes: serde_json::Map<String, serde_json::Value> = itens
@@ -337,6 +353,13 @@ async fn importar(cfg: &Configuracao, tipo: &str) -> anyhow::Result<()> {
             let n = nomes.len();
             persistencia::equipes::gravar_parametro(&db, bolsa::consultas::CHAVE_RAROS_NOMES, &serde_json::Value::Object(nomes)).await?;
             println!("nomes de itens raros importados: {n}");
+            if cfg.escrita_raros {
+                println!("NEXUS_ESCRITA_RAROS ligada: o estado de raros já é do Nexus; nada foi alterado");
+            } else {
+                persistencia::raros::substituir(&db, &v).await?;
+                let contas = v.pointer("/acc").and_then(serde_json::Value::as_object).map_or(0, serde_json::Map::len);
+                println!("estado de raros importado (contas com histórico de shiny: {contas})");
+            }
         }
         "faltas" => {
             ensure!(!cfg.escrita_equipes, "NEXUS_ESCRITA_EQUIPES ligada: as faltas já são do Nexus; nada foi alterado");

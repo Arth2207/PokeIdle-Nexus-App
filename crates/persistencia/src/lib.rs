@@ -5,10 +5,13 @@
 //! que ficam desligadas em produção até o cutover.
 
 pub mod bolsa_equipe;
+pub mod comandos;
 pub mod equipes;
+pub mod eventos;
 pub mod importacao;
 pub mod ingestao;
 pub mod mercado;
 pub mod paridade;
+pub mod raros;
 
 pub use mercado::PgRepoMercado;

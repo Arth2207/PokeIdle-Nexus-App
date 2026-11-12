@@ -12,6 +12,7 @@ use axum::{Extension, Json};
 use contrato::Erro;
 use nucleo::equipes;
 use serde_json::Value;
+use sha2::Digest;
 
 use crate::auth::Cliente;
 use crate::bolsa::agora_ms;
@@ -298,6 +299,43 @@ pub async fn equipe_hibrida(
     }
 }
 
+/// O instante `em` do corpo: inteiro, ou número com fração (arredondado). Limitado ao agora,
+/// para não passar na frente das tentativas reais.
+fn em_do_corpo(c: &Value, agora: i64) -> Option<i64> {
+    let n = c.get("em")?.as_number()?;
+    let em = n.as_i64().or_else(|| {
+        n.as_f64()
+            .filter(|f| f.is_finite())
+            .map(|f| f.round() as i64)
+    })?;
+    Some(em.min(agora))
+}
+
+/// A chave de idempotência da tentativa: sha256 de `conta|chave_do_cliente` quando o cliente
+/// manda `chave` (sem truncar), ou de `conta|boss|em` se houver conta e `em`. `conta` é a do
+/// token ou a do corpo. Sem nenhuma das duas, não há chave (sempre grava). O `em` é o mesmo
+/// (já limitado) que vai na linha.
+fn chave_da_tentativa(
+    c: &Value,
+    conta: Option<&str>,
+    boss: &str,
+    em: Option<i64>,
+) -> Option<String> {
+    let conta = conta
+        .map(|n| n.trim().to_lowercase())
+        .filter(|n| !n.is_empty());
+    let texto = if let Some(k) = c
+        .get("chave")
+        .and_then(Value::as_str)
+        .filter(|k| !k.is_empty())
+    {
+        format!("{}|{k}", conta.unwrap_or_default())
+    } else {
+        format!("{}|{boss}|{}", conta?, em?)
+    };
+    Some(hex::encode(sha2::Sha256::digest(texto.as_bytes())))
+}
+
 /// `POST /api/boss/tentativa` (rota nova): grava uma tentativa de boss para calibrar o
 /// modelo do jogo. Só com `NEXUS_ESCRITA_EQUIPES=true`; quem envia é o relay (fase 3).
 ///
@@ -364,12 +402,11 @@ pub async fn tentativa(
             .collect(),
         None => da_lista.map(|b| b.tipos).unwrap_or_default(),
     };
+    let agora = agora_ms();
+    let em_pedido = em_do_corpo(&c, agora);
+    let chave = chave_da_tentativa(&c, nick.as_deref(), &boss, em_pedido);
     let linha = persistencia::equipes::LinhaTentativa {
-        // Instante no futuro não passa na frente das tentativas reais.
-        em: c
-            .get("em")
-            .and_then(Value::as_i64)
-            .map_or_else(agora_ms, |e| e.min(agora_ms())),
+        em: em_pedido.unwrap_or(agora),
         conta: nick,
         boss,
         nivel_boss: nivel,
@@ -380,6 +417,7 @@ pub async fn tentativa(
         dano_causado: c.get("danoCausado").and_then(Value::as_f64),
         dano_recebido: c.get("danoRecebido").and_then(Value::as_f64),
         eventos: c.get("eventos").cloned().filter(|v| !v.is_null()),
+        chave,
     };
     if linha
         .eventos
@@ -389,10 +427,43 @@ pub async fn tentativa(
         return erro(413, "eventos acima de 2 MB");
     }
     match persistencia::equipes::registrar_tentativa(&estado.db, &linha).await {
-        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Ok(gravada) => {
+            if !gravada {
+                metrics::counter!("nexus_boss_tentativas_duplicadas_total").increment(1);
+            }
+            Json(serde_json::json!({ "ok": true, "duplicada": !gravada })).into_response()
+        }
         Err(e) => {
             tracing::warn!(erro = %e, "tentativa de boss");
             erro(503, "banco indisponível")
         }
+    }
+}
+
+#[cfg(test)]
+mod testes_chave {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn chave_inclui_a_conta_e_nao_trunca() {
+        let longa = "k".repeat(300);
+        let c = json!({"chave": longa});
+        let a = chave_da_tentativa(&c, Some("Ana"), "b", None);
+        assert_ne!(a, chave_da_tentativa(&c, Some("bia"), "b", None));
+        assert_eq!(a, chave_da_tentativa(&c, Some(" ana "), "b", None));
+        let c2 = json!({"chave": format!("{longa}x")});
+        assert_ne!(a, chave_da_tentativa(&c2, Some("ana"), "b", None));
+        // Sem chave e sem `em`: sem chave derivada.
+        assert_eq!(chave_da_tentativa(&json!({}), Some("ana"), "b", None), None);
+        assert!(chave_da_tentativa(&json!({}), Some("ana"), "b", Some(5)).is_some());
+    }
+
+    #[test]
+    fn em_float_e_arredondado_e_limitado() {
+        assert_eq!(em_do_corpo(&json!({"em": 10.6}), 100), Some(11));
+        assert_eq!(em_do_corpo(&json!({"em": 1000}), 100), Some(100));
+        assert_eq!(em_do_corpo(&json!({}), 100), None);
     }
 }

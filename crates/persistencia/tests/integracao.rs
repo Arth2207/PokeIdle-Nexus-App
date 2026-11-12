@@ -92,6 +92,9 @@ async fn bolsa_no_banco_de_teste() {
     leitura_monta_o_mercado(&repo, &db).await;
     equipes_no_banco(&db).await;
     equipe_da_bolsa_no_banco(&db).await;
+    fase3_eventos_e_hunt(&db).await;
+    fase3_comandos(&db).await;
+    fase3_raros_e_tentativas(&db).await;
 }
 
 /// Wiki de bosses, faltas, sugestões e preços típicos.
@@ -320,4 +323,374 @@ async fn leitura_monta_o_mercado(repo: &PgRepoMercado, db: &PgPool) {
     assert_eq!(ag.ofertas_itens.len(), 1);
     assert_eq!(ag.hist_itens.len(), 1);
     assert_eq!(ag.asks.len(), 2);
+}
+
+/// Eventos idempotentes (mesmo lote 2x = mesmas linhas) e hunt por conta.
+async fn fase3_eventos_e_hunt(db: &PgPool) {
+    use persistencia::eventos::{gravar, gravar_hunt, validar};
+
+    // A tabela é hypertable quando o Timescale está na imagem (é o caso do container de teste).
+    let hyper: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM timescaledb_information.hypertables
+         WHERE hypertable_schema = 'nexus' AND hypertable_name = 'evento'",
+    )
+    .fetch_one(db)
+    .await
+    .unwrap();
+    assert_eq!(hyper, 1, "nexus.evento deveria ser hypertable");
+
+    let t = 1_800_000_000_000_i64;
+    let eventos = vec![
+        json!({"k": "kill", "ts": t, "nome": "Rattata", "xp_treinador": 5}),
+        json!({"k": "kill", "ts": t + 1000, "nome": "Rattata", "xp_treinador": 5}),
+        json!({"k": "perfil", "ts": t, "tr_lv": 40}),
+        json!({"k": "capturado", "ts": t, "id": 77, "especie": "Pidgey"}),
+        json!({"k": "inventado", "ts": t}),
+    ];
+    let lote = validar("conta-a", &eventos, t, false);
+    assert_eq!((lote.eventos.len(), lote.erros.len()), (4, 1));
+    let primeira = gravar(db, "conta-a", Some("id-a"), &lote.eventos)
+        .await
+        .unwrap();
+    assert_eq!(primeira.len(), 4);
+    // Mesmo lote de novo: nada entra, as linhas continuam as mesmas.
+    let segunda = gravar(db, "conta-a", Some("id-a"), &lote.eventos)
+        .await
+        .unwrap();
+    assert!(segunda.is_empty());
+    // Outra conta com os mesmos eventos é outra linha.
+    let outra = validar("conta-b", &eventos[..1], t, false);
+    assert_eq!(
+        gravar(db, "conta-b", None, &outra.eventos)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let contagem: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT conta, tipo, count(*) FROM nexus.evento GROUP BY 1, 2 ORDER BY 1, 2",
+    )
+    .fetch_all(db)
+    .await
+    .unwrap();
+    assert_eq!(
+        contagem,
+        vec![
+            ("conta-a".into(), "capturado".into(), 1),
+            ("conta-a".into(), "kill".into(), 2),
+            ("conta-a".into(), "perfil".into(), 1),
+            ("conta-b".into(), "kill".into(), 1),
+        ]
+    );
+    // O `conta_id` do lote fica gravado ao lado da conta.
+    let ids: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT DISTINCT conta, conta_id FROM nexus.evento ORDER BY 1")
+            .fetch_all(db)
+            .await
+            .unwrap();
+    assert_eq!(
+        ids,
+        vec![
+            ("conta-a".into(), Some("id-a".into())),
+            ("conta-b".into(), None)
+        ]
+    );
+    // O instante gravado é o do evento.
+    let em_ms: i64 = sqlx::query_scalar(
+        "SELECT (extract(epoch FROM em) * 1000)::bigint FROM nexus.evento WHERE tipo = 'perfil'",
+    )
+    .fetch_one(db)
+    .await
+    .unwrap();
+    assert_eq!(em_ms, t);
+
+    let contas = vec![("a".to_owned(), "furious_scizor".to_owned())];
+    assert_eq!(gravar_hunt(db, &contas, 10).await.unwrap(), 1);
+    let contas = vec![("a".to_owned(), "ancient_pupitar".to_owned())];
+    assert_eq!(gravar_hunt(db, &contas, 20).await.unwrap(), 1);
+    let (n, slug): (i64, String) =
+        sqlx::query_as("SELECT count(*) OVER (), dados->>'hunt_slug' FROM nexus.config_hunt")
+            .fetch_one(db)
+            .await
+            .unwrap();
+    assert_eq!((n, slug.as_str()), (1, "ancient_pupitar"));
+}
+
+/// Fila: reserva, ordem, lease, esgotar tentativas, confirmação idempotente, expiração,
+/// espelho do legado e NOTIFY.
+async fn fase3_comandos(db: &PgPool) {
+    use persistencia::comandos::{self, Confirmacao, NovoComando, Reserva};
+
+    let mut ouvinte = sqlx::postgres::PgListener::connect_with(db).await.unwrap();
+    ouvinte.listen("nexus_comando").await.unwrap();
+
+    let futuro = 4_000_000_000_000_i64;
+    let params = json!({"recarregar": true});
+    let novo = |conta: &'static str, prioridade: i32, expira_ms: i64| NovoComando {
+        conta,
+        tipo: "config",
+        params: &params,
+        prioridade,
+        origem: "teste",
+        expira_ms,
+    };
+    let a = comandos::inserir(db, &novo("c1", 5, futuro)).await.unwrap();
+    let b = comandos::inserir(db, &novo("c1", 1, futuro)).await.unwrap();
+    let c = comandos::inserir(db, &novo("c1", 9, futuro)).await.unwrap();
+    let _expirado = comandos::inserir(db, &novo("c1", 5, 1_000_000_000_000))
+        .await
+        .unwrap();
+    let _outra = comandos::inserir(db, &novo("c2", 5, futuro)).await.unwrap();
+
+    // O trigger avisa de cada inserção.
+    let aviso = tokio::time::timeout(Duration::from_secs(5), ouvinte.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let aviso: Value = serde_json::from_str(aviso.payload()).unwrap();
+    assert_eq!(
+        (aviso["id"].as_i64(), aviso["evento"].as_str()),
+        (Some(a), Some("novo"))
+    );
+
+    // Ordem do legado: número menor primeiro; o expirado e o de outra conta ficam de fora.
+    let r1 = comandos::reservar(db, "c1", &Reserva::nova("relay-1"))
+        .await
+        .unwrap();
+    assert_eq!(r1.iter().map(|x| x.id).collect::<Vec<_>>(), vec![b, a, c]);
+    // Já reservados: ninguém mais os recebe.
+    assert!(comandos::reservar(db, "c1", &Reserva::nova("relay-2"))
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Confirmação é idempotente.
+    assert_eq!(
+        comandos::confirmar(db, a, "ok").await.unwrap(),
+        Confirmacao::Gravada
+    );
+    assert_eq!(
+        comandos::confirmar(db, a, "outro").await.unwrap(),
+        Confirmacao::Repetida
+    );
+    assert_eq!(
+        comandos::confirmar(db, 999_999, "ok").await.unwrap(),
+        Confirmacao::Inexistente
+    );
+    let resultado: String = sqlx::query_scalar("SELECT resultado FROM nexus.comando WHERE id = $1")
+        .bind(a)
+        .fetch_one(db)
+        .await
+        .unwrap();
+    assert_eq!(resultado, "ok");
+
+    // Lease vencido: b volta a pendente e o mesmo relay o recebe de novo (repetido).
+    sqlx::query(
+        "UPDATE nexus.comando SET reservado_em = now() - interval '10 minutes' WHERE id = ANY($1)",
+    )
+    .bind(vec![b, c])
+    .execute(db)
+    .await
+    .unwrap();
+    let r2 = comandos::reservar(db, "c1", &Reserva::nova("relay-1"))
+        .await
+        .unwrap();
+    assert_eq!(r2.iter().map(|x| x.id).collect::<Vec<_>>(), vec![b, c]);
+    assert!(r2.iter().all(|x| x.repetido));
+    let tentativas: i32 = sqlx::query_scalar("SELECT tentativas FROM nexus.comando WHERE id = $1")
+        .bind(b)
+        .fetch_one(db)
+        .await
+        .unwrap();
+    assert_eq!(tentativas, 1);
+
+    // Depois de 5 reservas sem confirmação, sai da fila com erro.
+    for _ in 0..4 {
+        sqlx::query(
+            "UPDATE nexus.comando SET reservado_em = now() - interval '10 minutes' WHERE id = $1",
+        )
+        .bind(b)
+        .execute(db)
+        .await
+        .unwrap();
+        let (devolvidos, encerrados) = comandos::devolver_vencidos(db, 120).await.unwrap();
+        assert!(devolvidos + encerrados >= 1);
+        let _ = comandos::reservar(db, "c1", &Reserva::nova("relay-1"))
+            .await
+            .unwrap();
+    }
+    let (res, exec): (Option<String>, bool) = sqlx::query_as(
+        "SELECT resultado, executado_em IS NOT NULL FROM nexus.comando WHERE id = $1",
+    )
+    .bind(b)
+    .fetch_one(db)
+    .await
+    .unwrap();
+    assert_eq!((res.as_deref(), exec), (Some("erro:sem confirmacao"), true));
+
+    // Expirados sem entrega.
+    let expirados = comandos::expirar(db).await.unwrap();
+    assert_eq!(expirados, vec![false]);
+
+    // Confirmar comando nunca entregue não vale.
+    let virgem = comandos::inserir(db, &novo("c9", 5, futuro)).await.unwrap();
+    assert_eq!(
+        comandos::confirmar(db, virgem, "ok").await.unwrap(),
+        Confirmacao::NaoReservado
+    );
+    // Reserva (por "relay-9") e devolução do consumidor: volta à fila contando tentativa.
+    let _ = comandos::reservar(db, "c9", &Reserva::nova("relay-9"))
+        .await
+        .unwrap();
+    assert_eq!(
+        comandos::devolver_do_consumidor(db, "relay-9")
+            .await
+            .unwrap(),
+        1
+    );
+    let de_novo = comandos::reservar(db, "c9", &Reserva::nova("relay-9"))
+        .await
+        .unwrap();
+    assert!(de_novo[0].repetido);
+    // Devolver sem contar tentativa (envio que falhou).
+    assert_eq!(comandos::devolver(db, &[virgem]).await.unwrap(), 1);
+    let t: i32 = sqlx::query_scalar("SELECT tentativas FROM nexus.comando WHERE id = $1")
+        .bind(virgem)
+        .fetch_one(db)
+        .await
+        .unwrap();
+    assert_eq!(t, 1);
+
+    // Espelho: o histórico existente não é copiado no primeiro ciclo; depois entram só as novas.
+    sqlx::query(
+        "INSERT INTO public.comando_fila (nick, cmd, params, ts_expira, origem)
+         VALUES ('antigo', 'reload', '{}', 4000000000000, 'manual')",
+    )
+    .execute(db)
+    .await
+    .unwrap();
+    let mut marca = None;
+    assert_eq!(comandos::espelhar(db, 500, &mut marca).await.unwrap().1, 0);
+    assert!(marca.is_some());
+    sqlx::query(
+        "INSERT INTO public.comando_fila (nick, cmd, params, ts_expira, ts_executado, resultado, origem)
+         VALUES (' Espelho ', 'reload', '{}', 4000000000000, NULL, NULL, 'ia_llm'),
+                ('espelho', 'config', '{}', 4000000000000, 1700000000000, 'ok', 'manual')",
+    )
+    .execute(db)
+    .await
+    .unwrap();
+    assert_eq!(comandos::espelhar(db, 500, &mut marca).await.unwrap().1, 2);
+    assert_eq!(comandos::espelhar(db, 500, &mut marca).await.unwrap().1, 0);
+    // Commit fora de ordem: a linha de id menor aparece depois da de id maior.
+    let m = marca.unwrap().1;
+    for id in [m + 10, m + 5] {
+        sqlx::query(
+            "INSERT INTO public.comando_fila (id, nick, cmd, params, ts_expira, origem)
+             OVERRIDING SYSTEM VALUE VALUES ($1::int, 'tardio', 'a', '{}', 4000000000000, 'm')",
+        )
+        .bind(id)
+        .execute(db)
+        .await
+        .unwrap();
+        assert_eq!(comandos::espelhar(db, 500, &mut marca).await.unwrap().1, 1);
+    }
+    sqlx::query("UPDATE nexus.comando SET executado_em = now() WHERE conta = 'tardio'")
+        .execute(db)
+        .await
+        .unwrap();
+    let pend = comandos::reservar(db, "espelho", &Reserva::nova("sombra"))
+        .await
+        .unwrap();
+    assert_eq!(pend.len(), 1);
+    assert_eq!(
+        (pend[0].tipo.as_str(), pend[0].origem.as_str()),
+        ("reload", "espelho")
+    );
+    assert_eq!(
+        comandos::confirmar(db, pend[0].id, "sombra").await.unwrap(),
+        Confirmacao::Gravada
+    );
+}
+
+/// Estado de raros (merge de deltas, transação) e tentativas de boss idempotentes.
+async fn fase3_raros_e_tentativas(db: &PgPool) {
+    use persistencia::equipes::{registrar_tentativa, LinhaTentativa};
+    use persistencia::raros;
+
+    assert_eq!(raros::carregar(db).await.unwrap(), json!({}));
+    let lote = |bolas: i64| {
+        json!({
+            "raros": {"itens": [{"id": 1, "nome": "X", "qtd": 2}], "porConta": []},
+            "historico": {"dia": {"Ana": {"2026-11-01": {"bolas": bolas, "shiny": 0, "kills": bolas}}}},
+        })
+    };
+    let agora = 1_800_000_000_000_i64;
+    for bolas in [100, 130, 20] {
+        let n = raros::modificar(db, |r| nucleo::raros::ingerir(r, &lote(bolas), agora))
+            .await
+            .unwrap();
+        assert_eq!(n, Ok(1));
+    }
+    // 100, depois +30, depois o contador reiniciou (20 < 130): soma 20.
+    let r = raros::carregar(db).await.unwrap();
+    assert_eq!(r["acc"]["ana"]["dias"]["2026-11-01"]["bolas"], json!(150));
+    assert_eq!(r["acc"]["ana"]["nome"], json!("Ana"));
+
+    // Corpo inválido: erro e nada muda.
+    let ruim = raros::modificar(db, |r| {
+        nucleo::raros::ingerir(r, &json!({"raros": {}}), agora)
+    })
+    .await
+    .unwrap();
+    assert_eq!(ruim, Err("raros inválido"));
+    assert_eq!(raros::carregar(db).await.unwrap(), r);
+
+    let v = raros::modificar(db, |r| {
+        nucleo::raros::registrar_shiny(
+            r,
+            &json!({"nick": "Ana", "dia": "2026-11-01", "shiny": 1, "bolas": 5}),
+            "2026-11-02",
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(v["bolas"], json!(155));
+    assert_eq!(v["shiny"], json!(1));
+    let r = raros::carregar(db).await.unwrap();
+    let resposta = nucleo::raros::shiny(&r, "", None);
+    assert_eq!(resposta["vazio"], json!(false));
+    assert_eq!(resposta["contas"][0]["shinies"], json!(1));
+
+    // Sem a tabela do legado populada, o cofre vem vazio e o cap cai no padrão.
+    assert!(raros::historico_cofre(db, 0).await.is_empty());
+    assert!(raros::captura_shiny(db).await.is_none());
+
+    // Tentativas: a mesma chave não grava duas vezes; sem chave, sempre grava.
+    let linha = |chave: Option<&str>| LinhaTentativa {
+        em: 1_800_000_000_000,
+        conta: Some("ana".into()),
+        boss: "articuno".into(),
+        nivel_boss: 300.0,
+        tipos_boss: vec!["ICE".into()],
+        venceu: true,
+        duracao_s: 12.0,
+        equipe: json!([{"nome": "A"}]),
+        dano_causado: None,
+        dano_recebido: None,
+        eventos: None,
+        chave: chave.map(str::to_owned),
+    };
+    assert!(registrar_tentativa(db, &linha(Some("k1"))).await.unwrap());
+    assert!(!registrar_tentativa(db, &linha(Some("k1"))).await.unwrap());
+    assert!(registrar_tentativa(db, &linha(Some("k2"))).await.unwrap());
+    assert!(registrar_tentativa(db, &linha(None)).await.unwrap());
+    assert!(registrar_tentativa(db, &linha(None)).await.unwrap());
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM nexus.boss_tentativa")
+        .fetch_one(db)
+        .await
+        .unwrap();
+    assert_eq!(n, 4);
 }

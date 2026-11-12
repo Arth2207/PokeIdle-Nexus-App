@@ -13,3 +13,4 @@ pub mod equipes;
 pub mod js;
 pub mod otimizador;
 pub mod precificador;
+pub mod raros;

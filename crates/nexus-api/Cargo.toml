@@ -8,10 +8,11 @@ publish.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 arc-swap = "1.9.5"
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["ws"] }
 config = { version = "0.15.27", default-features = false }
 contrato = { version = "0.1.0", path = "../contrato" }
 dotenvy = "0.15.7"
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 getrandom = "0.4.3"
 hex = "0.4.3"
 metrics = "0.24.6"
@@ -36,4 +37,6 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 workspace = true
 
 [dev-dependencies]
+testcontainers = "0.28.0"
+tokio-tungstenite = "0.29.0"
 tower = { version = "0.5.3", features = ["util"] }

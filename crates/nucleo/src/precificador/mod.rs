@@ -12,6 +12,7 @@ pub mod cotacao;
 pub mod especie;
 pub mod ficha;
 pub mod motor;
+pub mod nota;
 pub mod vizinhos;
 
 /// Ids dos itens usados como adicionais.
