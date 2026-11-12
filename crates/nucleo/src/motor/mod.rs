@@ -10,6 +10,7 @@
 
 pub mod config;
 pub mod leitura;
+pub mod regras;
 
 use serde_json::Value;
 
