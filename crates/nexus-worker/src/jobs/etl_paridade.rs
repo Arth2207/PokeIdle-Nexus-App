@@ -6,11 +6,7 @@ use sqlx::PgPool;
 use tracing::info;
 
 const CONTAS: &[&str] = &["mvxorqh6", "mvxoui28", "mvxoxith", "mw002fcf"];
-const JANELAS: &[(&str, &str)] = &[
-    ("1h", "1 hour"),
-    ("6h", "6 hours"),
-    ("24h", "24 hours"),
-];
+const JANELAS: &[(&str, &str)] = &[("1h", "1 hour"), ("6h", "6 hours"), ("24h", "24 hours")];
 
 pub async fn ciclo(db: &PgPool) -> Result<usize> {
     let mut ok = 0usize;
