@@ -22,7 +22,7 @@ use tracing::{error, info, warn};
 
 use crate::configuracao::Configuracao;
 
-const USO: &str = "uso: nexus-worker [healthcheck]";
+const USO: &str = "uso: nexus-worker [healthcheck | etl-relatorio [--desde <horas>]]";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -39,6 +39,11 @@ async fn main() -> anyhow::Result<()> {
     {
         [] => executar(cfg).await,
         ["healthcheck"] => healthcheck(&cfg).await,
+        ["etl-relatorio"] => relatorio(&cfg, 24).await,
+        ["etl-relatorio", "--desde", h] => {
+            let horas: u32 = h.parse().context("--desde requer número inteiro")?;
+            relatorio(&cfg, horas).await
+        }
         _ => {
             eprintln!("{USO}");
             std::process::exit(2);
@@ -94,8 +99,9 @@ async fn executar(cfg: Configuracao) -> anyhow::Result<()> {
         cfg.escrita_etl,
         parar.clone(),
     );
+    let paridade = loop_etl_paridade(db.clone(), cfg.etl_efic_intervalo, parar.clone());
 
-    tokio::join!(etl, efic);
+    tokio::join!(etl, efic, paridade);
 
     info!("nexus-worker encerrado");
     Ok(())
@@ -150,6 +156,56 @@ async fn loop_etl_eficiencia(
             Err(e) => warn!(erro = %e, "etl_eficiencia: ciclo falhou"),
         }
     }
+}
+
+async fn loop_etl_paridade(db: sqlx::PgPool, intervalo: Duration, parar: CancellationToken) {
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(intervalo) => {}
+            _ = parar.cancelled() => break,
+        }
+        match jobs::etl_paridade::ciclo(&db).await {
+            Ok(n) => {
+                metrics::gauge!("nexus_worker_paridade_ultima_ok").set(1.0);
+                info!(comparacoes = n, "etl_paridade: ciclo ok");
+            }
+            Err(e) => {
+                metrics::gauge!("nexus_worker_paridade_ultima_ok").set(0.0);
+                warn!(erro = %e, "etl_paridade: ciclo falhou");
+            }
+        }
+    }
+}
+
+async fn relatorio(cfg: &Configuracao, horas: u32) -> anyhow::Result<()> {
+    iniciar_logs(cfg.log_formato);
+    let db = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&cfg.database_url)
+        .await
+        .context("não consegui conectar ao banco")?;
+    let linhas = jobs::etl_paridade::relatorio(&db, horas).await?;
+    if linhas.is_empty() {
+        println!("sem dados nas últimas {} horas", horas);
+        return Ok(());
+    }
+    println!(
+        "{:<12} {:<6} {:>12} {:>12} {:>14} {:>14} {}",
+        "conta", "janela", "linhas_node", "linhas_nexus", "soma_xp_node", "soma_xp_nexus", "igual"
+    );
+    for l in &linhas {
+        println!(
+            "{:<12} {:<6} {:>12} {:>12} {:>14} {:>14} {}",
+            l.conta_id,
+            l.janela,
+            l.linhas_node,
+            l.linhas_nexus,
+            l.soma_xp_node,
+            l.soma_xp_nexus,
+            if l.igual { "✓" } else { "✗ DIVERGE" }
+        );
+    }
+    Ok(())
 }
 
 async fn iniciar_servidor(
