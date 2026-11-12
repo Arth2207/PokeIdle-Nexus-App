@@ -154,6 +154,19 @@ As rotas `POST /api/bolsa/ofertas`, `resumo-itens` e `meus-itens` e a limpeza pe
 
 `POST /api/equipes/ingest`, a gravação das faltas de coleta e o registro das sugestões de equipe (`nexus.equipe_sugestao`) só acontecem com `NEXUS_ESCRITA_EQUIPES=true`. Até o cutover da fase 2, quem recebe o relay é o legado, e o estado chega pela importação; o Nexus calcula as faltas, mas não as grava.
 
+### Escrita da fase 3 (ingestão, raros e comandos)
+
+Quatro flags, todas desligadas por padrão. Enquanto estiverem assim, o relay segue falando só com o legado.
+
+| Flag | O que liga |
+|---|---|
+| `NEXUS_ESCRITA_INGESTAO` | `POST /ingest` e `POST /api/hunt-sync` (gravam `nexus.evento` e `nexus.config_hunt`). Métrica `nexus_ingest_eventos_total{tipo,resultado}` (aceito, duplicado, erro) |
+| `NEXUS_ESCRITA_RAROS` | `POST /api/raros/ingest` e `POST /api/shiny/registrar` (gravam `nexus.estado_raros`). Desligada, o estado vem do `importar raros` (cron de 10 min), que agora grava o estado completo; com ela ligada, o import não sobrescreve |
+| `NEXUS_ESCRITA_COMANDOS` | `GET /api/comandos` (reserva), `POST /api/confirmar-comando` e `POST /api/inserir-comando` sobre `nexus.comando` |
+| `NEXUS_ESPELHO_COMANDOS` | A cada 5 s copia as linhas novas de `public.comando_fila` para `nexus.comando` (só lê o legado; `origem='espelho'`). É o modo sombra: o relay novo recebe, não executa e confirma `sombra` |
+
+A migration `20261114000001_fase3.sql` é só aditiva (schema `nexus`); aplica no deploy como as outras. Métricas da fila: `nexus_comandos_entregues_total{origem}`, `nexus_comandos_duplicados_total` (2ª entrega ao mesmo relay), `nexus_comandos_confirmados_total{sombra}`, `nexus_comandos_perdidos_total` (expirou sem ninguém receber), `nexus_comandos_devolvidos_total` e `nexus_comandos_sem_confirmacao_total`. O `GET /ws` (veja [websocket](websocket.md)) responde 503 se `NEXUS_ESCRITA_COMANDOS` e `NEXUS_ESPELHO_COMANDOS` estiverem desligadas; o nginx precisa liberar o upgrade nessa rota. O comparador passou a incluir `raros2`, `raros2.cartas` e `shiny`; só compara quando os dois lados têm o mesmo `dadosEm`.
+
 ### Melhorias e tokens por conta
 
 `NEXUS_MELHORIAS=true` liga o que diverge do legado de propósito ([ADR 0010](adr/0010-paridade-primeiro-melhorias-depois.md)): seleção exata nos perfis de equipe, chance de vitória, ordem de compra, preços típicos corrigidos e a tabela de tipos do servidor. Só no cutover da fase 2.

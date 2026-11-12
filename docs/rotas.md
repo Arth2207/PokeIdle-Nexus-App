@@ -94,6 +94,24 @@ O detalhamento dessas rotas entra neste documento quando a fase 4 começar.
 | POST | `/api/boss/tentativa` | `{ nick, boss, nivelBoss?, tiposBoss?, venceu, duracaoS, equipe, danoCausado?, danoRecebido?, eventos? }` | Grava uma tentativa de boss (escopo `relay` ou `escrita`, só com `NEXUS_ESCRITA_EQUIPES`) |
 | GET | `/api/bolsa/equipe-hibrida` | `boss`, `nick`, `moeda` | A equipe com os pokémon da conta, comprando só as vagas que faltam: slots com `origem` (`conta` ou `compra`), `custoCompra`, `custoComprarTudo` e `economia` |
 
+### Fase 3: ingestão, raros e fila (atrás de flags)
+
+Escopo `relay` (ou `escrita`) nas rotas de escrita e na fila; `leitura` em `GET /api/raros2` e `GET /api/shiny`. Token preso a uma conta só grava e lê a própria. Corpo vazio ou JSON inválido vira `{}`, como no legado. Desligada a flag da rota, a resposta é `503`.
+
+| Método | Rota | Flag | Contrato |
+|---|---|---|---|
+| POST | `/ingest` | `NEXUS_ESCRITA_INGESTAO` | `{conta_id, eventos[], nick?}` → `{ok, erros, total}` (`ok` é contagem). Grava em `nexus.evento` com chave de idempotência: reenviar o lote não duplica (exceto evento sem `ts` válido: grava com o instante da chegada e não é idempotente; conta em `nexus_ingestao_sem_ts_total`). A conta gravada é o `nick` normalizado quando vem, senão o `conta_id`; o `conta_id` fica em coluna própria. Token de conta só aceita lote cujo `nick` é a conta dele (lote sem `nick` exige token global, 403) Tipo desconhecido conta em `erros`. Não grava `dim_conta` |
+| POST | `/api/hunt-sync` | `NEXUS_ESCRITA_INGESTAO` | `{eventos: [{nick, hunt_slug}]}` → `{atualizados}`, em `nexus.config_hunt`. Nick fora do escopo do token é pulado (não conta em `atualizados`), sem derrubar o lote |
+| POST | `/api/raros/ingest` | `NEXUS_ESCRITA_RAROS` | `{raros: {itens}, historico?}` → `{ok, itens}`. Token de conta não grava (o estado é global) |
+| POST | `/api/shiny/registrar` | `NEXUS_ESCRITA_RAROS` | `{nick, dia?, shiny?, bolas?}` → `{ok, nick, dia, shiny, bolas}` |
+| GET | `/api/raros2` | (leitura) | `nick`, `notaMin`, `meta`. Lê `nexus.estado_raros` e o estado de equipes; não grava `fato_cofre`. Com token de conta, o campo `contas` de cada item só traz a própria conta. A nota da carta vem só da ficha (o `notaFicha` do legado não foi portado) |
+| GET | `/api/shiny` | (leitura) | `nick` |
+| GET | `/api/comandos` | `NEXUS_ESCRITA_COMANDOS` | `?nick=` → `{nick, comandos: [{id, cmd, params, origem}]}`. Reserva até 10 pendentes, com lease de 120 s |
+| POST | `/api/confirmar-comando` | `NEXUS_ESCRITA_COMANDOS` | `{id, resultado?}` → `{ok, id}`. Idempotente. Só confirma comando já entregue (um nunca entregue segue pendente, mesma resposta); token de conta só confirma comando da própria conta (`403`) |
+| POST | `/api/inserir-comando` | `NEXUS_ESCRITA_COMANDOS` | `{nick, cmd, params?, origem?, ts_expira_min?}` → `{ok, id}`. `ts_expira_min` acima de 1440 é limitado a 1440 (como no legado) e abaixo de -1440 é `400`; `params: null` é preservado como no legado |
+
+Na fila, o comando reservado e não confirmado em 120 s volta a pendente; depois de 5 reservas sem confirmação sai da fila com `erro:sem confirmacao`. Com `NEXUS_MELHORIAS`, a ordem é prioridade maior primeiro (o legado entrega o menor número primeiro) e `ts_expira_min` fica entre 1 e 1440. `POST /api/boss/tentativa` aceita `chave` (a chave gravada é `sha256(conta|chave)`, sem truncar; sem `chave`, deriva `sha256(conta|boss|em)`, com `em` float arredondado) e responde `{ok, duplicada}`.
+
 `GET /api/bolsa/equipe` ganhou campos novos (o contrato antigo continua igual): `exata` (a melhor equipe por dano pela busca exata, comparada com a da heurística, com `provado` e `distancia` até o ótimo), `curva` (fronteira custo × poder de equipes completas) e, com `orcamento=<gemas>`, `orcamento` (a melhor equipe até esse valor).
 
 
