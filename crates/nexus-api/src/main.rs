@@ -33,6 +33,7 @@ mod estado;
 mod etag;
 mod limite;
 mod metricas;
+mod motor;
 mod raros;
 mod rotas;
 mod sombra;
@@ -54,7 +55,8 @@ use crate::configuracao::Configuracao;
 use crate::estado::Estado;
 
 const USO: &str = "uso: nexus-api [migrar | token criar <nome> <escopos> [conta] | \
-importar itens|especies|base|meus-itens|pokedex|equipes|wiki|faltas|welcome|raros | paridade [url] | \
+importar itens|especies|base|meus-itens|pokedex|equipes|wiki|faltas|welcome|raros|motor|motor-contas | \
+comparar-motor motor|motor-contas | paridade [url] | \
 paridade-continua | sombra | sombra-relatorio [--desde <horas>] [--origem espelho|sintetico|todas] | avaliar-fichas <agora_ms> | pokedex-divergencias | healthcheck]";
 
 #[tokio::main]
@@ -104,6 +106,14 @@ async fn main() -> anyhow::Result<()> {
             sombra_relatorio(&cfg, horas, origem).await
         }
         ["healthcheck"] => healthcheck(&cfg).await,
+        ["comparar-motor", tipo] => {
+            let texto =
+                std::io::read_to_string(std::io::stdin()).context("não consegui ler o stdin")?;
+            let db = Estado::novo(&cfg)
+                .context("NEXUS_DATABASE_URL inválida")?
+                .db;
+            motor::comparar(&db, tipo, &texto).await
+        }
         _ => bail!(USO),
     }
 }
@@ -402,8 +412,9 @@ async fn importar(cfg: &Configuracao, tipo: &str) -> anyhow::Result<()> {
             persistencia::bolsa_equipe::gravar_faltas(&db, &f).await?;
             println!("faltas de coleta importadas: {}", f.0.len());
         }
+        "motor" | "motor-contas" => motor::importar(&db, tipo, &texto).await?,
         outro => bail!(
-            "não sei importar {outro:?} (use itens, especies, base, meus-itens, pokedex, equipes, wiki, faltas, welcome ou raros)"
+            "não sei importar {outro:?} (use itens, especies, base, meus-itens, pokedex, equipes, wiki, faltas, welcome, raros, motor ou motor-contas)"
         ),
     }
     Ok(())

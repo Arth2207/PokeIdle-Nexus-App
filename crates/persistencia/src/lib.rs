@@ -11,6 +11,7 @@ pub mod eventos;
 pub mod importacao;
 pub mod ingestao;
 pub mod mercado;
+pub mod motor;
 pub mod paridade;
 pub mod raros;
 

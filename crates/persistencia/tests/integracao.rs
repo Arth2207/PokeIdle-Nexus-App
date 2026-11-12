@@ -111,6 +111,7 @@ async fn bolsa_no_banco_de_teste() {
     timescale_evento(&db).await;
     fase3_comandos(&db).await;
     fase3_raros_e_tentativas(&db).await;
+    motor_estado(&db).await;
 }
 
 /// Wiki de bosses, faltas, sugestões e preços típicos.
@@ -751,4 +752,69 @@ async fn timescale_evento(db: &PgPool) {
     assert_eq!(cagg, 1);
     // Sem política de retenção (apagar dados exige autorização).
     assert!(!jobs.contains(&"policy_retention".to_string()));
+}
+
+/// Fase 4: o estado do motor volta do banco igual ao arquivo (menos `acesso`).
+async fn motor_estado(db: &PgPool) {
+    use persistencia::motor;
+    let dados = json!({
+        "config": {
+            "Conta1": {"hunt": {"auto": true, "alvo": "x"}, "pocao": {"min": 0.25}},
+            "—": {"hunt": {}},
+            "Vazia": {}
+        },
+        "acoes": [
+            {"nick": "Conta1", "t": 3, "tipo": "hunt", "ok": true, "texto": "c", "de": "a", "para": "b"},
+            {"nick": "Conta1", "t": 2, "tipo": "compra", "ok": false, "texto": "b"},
+            {"nick": "Conta2", "t": 1, "tipo": "venda", "texto": "a", "prev": [1.5, null]}
+        ],
+        "pausa": false,
+        "dia": {"Conta1": {"2026-11-12": {"bolas": 10}}},
+        "mercadoAvisos": [],
+        "saldo": {"Conta1": 123.456},
+        "acesso": {"emails": ["x@y"]}
+    });
+    let n = motor::importar_dados(db, &dados, "sha").await.unwrap();
+    assert_eq!(
+        n,
+        motor::Contagem {
+            config: 4,
+            acoes: 3,
+            estado: 4
+        }
+    );
+    // Reimportar substitui, não duplica.
+    let n = motor::importar_dados(db, &dados, "sha").await.unwrap();
+    assert_eq!(n.acoes, 3);
+    let volta = motor::carregar_dados(db).await.unwrap();
+    let mut esperado = dados.clone();
+    esperado.as_object_mut().unwrap().remove("acesso");
+    assert_eq!(motor::primeira_diferenca(&esperado, &volta, ""), None);
+    assert!(volta.get("acesso").is_none());
+    // A ação mais nova tem o maior id; colunas extraídas para filtro.
+    let (t, ok): (i64, Option<bool>) =
+        sqlx::query_as("SELECT t, ok FROM nexus.motor_acao ORDER BY id DESC LIMIT 1")
+            .fetch_one(db)
+            .await
+            .unwrap();
+    assert_eq!((t, ok), (3, Some(true)));
+    // Formato inválido não toca no banco.
+    let ruim = json!({"config": {}, "acoes": [{"nick": "x"}]});
+    assert!(motor::importar_dados(db, &ruim, "sha").await.is_err());
+    assert_eq!(motor::carregar_dados(db).await.unwrap(), volta);
+
+    let contas = json!([
+        {"id": "a", "nome": "Principal", "cor": "#f00"},
+        {"id": "b", "nome": "Segunda"}
+    ]);
+    assert_eq!(
+        motor::importar_contas(db, &contas, "sha2").await.unwrap(),
+        2
+    );
+    assert_eq!(motor::carregar_contas(db).await.unwrap(), contas);
+    let importacoes: i64 = sqlx::query_scalar("SELECT count(*) FROM nexus.motor_importacao")
+        .fetch_one(db)
+        .await
+        .unwrap();
+    assert_eq!(importacoes, 3);
 }

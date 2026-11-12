@@ -112,23 +112,30 @@ Defeitos encontrados (paridade mantém; correção atrás de `NEXUS_MELHORIAS` o
 
 ## Plano
 
-### Etapa 2: estado no Postgres
+### Etapa 2: estado no Postgres (feita)
 
-Tabelas no schema `nexus`, aditivas:
+Migration `20261116000001_motor.sql`, aditiva:
 
 | Tabela | De |
 |---|---|
 | `motor_conta` | `contas.json` |
-| `motor_config` (conta, seção, `jsonb`) | `config[nick]`; uma linha por seção para comparar e versionar |
-| `motor_build` | `builds` |
-| `motor_acao` | `acoes` (append-only) |
-| `motor_dia`, `motor_saldo` | `dia`, `horas`, `saldo`, `histT`, `medHist`, `carimbos` |
-| `motor_calibracao` | `calib2`, `medidas`, `vida` |
-| `motor_controle` | `pausa`, `bloqueio`, `alertas`, `mercado*` |
+| `motor_config` (nick, seção, `jsonb`) | `config[nick]`, uma linha por seção. Conta sem seção vira uma linha com seção vazia |
+| `motor_acao` (colunas `nick`, `t`, `tipo`, `ok` + registro inteiro em `jsonb`) | `acoes`; os campos variam com o tipo. `id` cresce no sentido do tempo |
+| `motor_estado` (chave, `jsonb`) | as outras chaves de topo: `dia`, `saldo`, `horas`, `builds`, `calib2`, `pausa`... |
+| `motor_importacao` | registro de cada importação (tipo, sha256 do arquivo, linhas) |
 
-`acesso` e `preferencias` ficam fora: são do túnel e da interface, não do motor.
+As chaves de `motor_estado` ganham tabela própria quando a regra da etapa 4 precisar consultá-las; até lá o formato ainda varia. `acesso` e `preferencias` ficam fora: são do túnel e da interface, não do motor.
 
-Subcomando `importar-motor` (só leitura do arquivo, idempotente) e `comparar-motor` (arquivo × tabela, campo a campo). Tipos em `serde` onde o formato é estável (`acoes`, `builds`, `config` conhecida); `jsonb` no que ainda varia.
+```
+nexus-api importar motor < holodex-dados.json
+nexus-api importar motor-contas < contas.json
+nexus-api comparar-motor motor < holodex-dados.json
+nexus-api comparar-motor motor-contas < contas.json
+```
+
+A importação substitui tudo numa transação e valida o arquivo antes de tocar no banco. A comparação é exata (números pelo valor, como no JS; inteiros sem passar por `f64`) e para na primeira diferença. Com o arquivo real da VPS, num banco descartável: 70 seções de config, 300 ações, 16 chaves de estado e 4 contas, e arquivo e banco iguais.
+
+Em produção, a importação roda depois do deploy da migration e da resposta à pergunta 2.
 
 ### Etapa 3: rotas de leitura
 
