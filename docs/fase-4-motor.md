@@ -173,6 +173,10 @@ Uma função pura por `motorX` em `nucleo::motor::regras`: conta ao vivo (`Conta
 
 Com `NEXUS_ESCRITA_MOTOR=true`, os comandos do ciclo vão também para a fila da fase 3 (`nexus.comando`, origem `motor`, tipo `motor.<t>`, validade de dois ciclos, chave de idempotência `motor:<ciclo>:<i>`), para o app executar. Fica desligada até o cutover; ligada, só nos testes de integração.
 
+**Comandos sem registro** (`market.medias`, recargas de painel) não deixam ação no `D`; o relatório não os confronta. A cadência deles é coberta por teste de unidade e conferida à mão nas decisões gravadas (ex.: médias a cada 5 min enquanto estiverem velhas, como o legado).
+
+**Link até o PC:** a Tailscale pode cair para relay (~50 KB/s); a janela (1,6 MB) não cabia no ciclo. As rotas `/api/nexus/*` respondem em gzip quando pedido (~10x menor) e o cliente da sombra pede.
+
 **O que a sombra ainda não reproduz:** o que acontece depois da resposta do jogo dentro da própria regra (ex.: a conferência de estoque 15 s depois da compra, que desliga a compra automática). Em sombra o Nexus assume resposta `ok`; a consequência do lado do legado chega no `D` do ciclo seguinte, e é ela que o Nexus passa a ver.
 
 ### Etapa 6: plano de cutover
