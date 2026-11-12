@@ -129,6 +129,9 @@ pub struct Configuracao {
     /// Intervalo do laço do motor em sombra, em segundos (o legado roda a cada 30).
     #[serde(default = "motor_sombra_padrao")]
     pub motor_sombra_s: u64,
+    /// Fuso, em minutos, do motor que a sombra lê. Sem ela, vale `motor_fuso_min` (o
+    /// comparador pode olhar a VPS em UTC e a sombra o PC em UTC−3).
+    pub motor_sombra_fuso_min: Option<i64>,
     /// Fase 4: o laço do motor enfileira os comandos que decide (`nexus.comando`, origem
     /// `motor`), para o app executar. Desligada: só grava as decisões (sombra).
     #[serde(default)]
@@ -136,6 +139,13 @@ pub struct Configuracao {
 }
 
 impl Configuracao {
+    /// Fuso da sombra do motor em ms.
+    pub fn motor_sombra_fuso_ms(&self) -> i64 {
+        self.motor_sombra_fuso_min
+            .unwrap_or(self.motor_fuso_min)
+            .saturating_mul(60_000)
+    }
+
     /// Origens do CORS, já separadas.
     pub fn origens_cors(&self) -> Vec<String> {
         self.cors_origens

@@ -103,7 +103,7 @@ async fn main() -> anyhow::Result<()> {
             };
             let estado = Estado::novo(&cfg).context("NEXUS_DATABASE_URL inválida")?;
             let mut sombra =
-                motor_sombra::Sombra::nova(url, estado.motor_fuso_ms, cfg.escrita_motor)?;
+                motor_sombra::Sombra::nova(url, cfg.motor_sombra_fuso_ms(), cfg.escrita_motor)?;
             for i in 0..ciclos {
                 if i > 0 {
                     tokio::time::sleep(Duration::from_secs(cfg.motor_sombra_s.max(10))).await;
@@ -508,7 +508,7 @@ async fn paridade_continua(cfg: Configuracao) -> anyhow::Result<()> {
     let parar_sombra = tokio_util::sync::CancellationToken::new();
     if let Some(url_motor) = &cfg.motor_sombra_url {
         let sombra =
-            motor_sombra::Sombra::nova(url_motor, estado.motor_fuso_ms, cfg.escrita_motor)?;
+            motor_sombra::Sombra::nova(url_motor, cfg.motor_sombra_fuso_ms(), cfg.escrita_motor)?;
         tokio::spawn(sombra.rodar(
             estado.db.clone(),
             Duration::from_secs(cfg.motor_sombra_s.max(10)),
