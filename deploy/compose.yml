@@ -36,7 +36,8 @@ x-api: &api
     resources:
       limits:
         cpus: "1.5"
-        memory: 512M
+        # Pico no boot ~770 MB (blue registrou 762 MB); estável ~300 MB.
+        memory: 1G
   logging: &logs
     driver: json-file
     options:
@@ -115,7 +116,7 @@ services:
   # idempotência — reiniciar o worker durante o deploy não duplica nem perde dados.
   nexus-worker:
     image: ${NEXUS_IMAGEM_WORKER:-ghcr.io/arth2207/nexus-api:inexistente}
-    command: ["/nexus-worker"]
+    entrypoint: ["/nexus-worker"]
     environment:
       NEXUS_LOG_FORMATO: json
       NEXUS_DATABASE_URL_FILE: /run/secrets/database_url
@@ -125,6 +126,8 @@ services:
     volumes:
       - /var/run/postgresql:/var/run/postgresql
       - /opt/mapper/data/mapa.db:/opt/mapper/data/mapa.db:ro
+    # mapa.db é grupo dossie (gid 986, modo 660) — adiciona o gid para leitura
+    group_add: ["986"]
     networks:
       default: {}
       monitoring:
