@@ -181,6 +181,10 @@ Métricas novas: `nexus_comandos_pendentes{idade=ate_1m|ate_5m|mais_5m}`, `nexus
 
 `nexus-api token criar <nome> <escopos> [conta]`, com a conta, cria um token preso a ela: nas rotas de equipes ele só enxerga essa conta (pedir outra dá `403`). `nexus-api pokedex-divergencias` compara as duas pokédex do sistema.
 
+### Aviso no Discord
+
+`NEXUS_DISCORD_WEBHOOK` (URL do webhook, tratada como segredo e nunca logada; vazia = desligado) só vale com `NEXUS_MELHORIAS`. Cada `raro.novo` e `shiny.novo` gera uma mensagem curta, enviada por uma task separada: a gravação nunca espera. A fila tem 64 posições; cheia, a mensagem é descartada e contada em `nexus_discord_webhook_descartadas_total`. O envio tem timeout de 5 s, respeita o `retry_after` do `429` (até 2 repetições) e o resultado vai em `nexus_discord_webhook_envios_total{resultado}`. Entregue o valor por arquivo de ambiente ou secret, não na linha de comando.
+
 ### Modelos de combate
 
 O modelo `legado` responde nas rotas; o `jogo` roda ao lado a cada 10 minutos e só aparece nas métricas: `nexus_modelo_cobertura{boss,modelo}` e `nexus_modelo_especies_em_comum{boss}` mostram quanto as equipes teóricas dos dois divergem. Com 5 ou mais tentativas em `nexus.boss_tentativa`, a mesma tarefa calibra HP, dano e base da penalidade do boss (`nexus_modelo_jogo_parametro`, `nexus_modelo_jogo_erro_rms_log`) e, com `NEXUS_ESCRITA_EQUIPES=true`, grava os parâmetros em `nexus.parametro`. `NEXUS_MODELO=jogo` troca o modelo das respostas; só faz sentido depois da calibração.

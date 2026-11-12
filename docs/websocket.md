@@ -90,7 +90,12 @@ O lote é gravado pela mesma função do `POST /ingest` (mesma validação, mesm
 
 ### Compressão
 
-`permessage-deflate` não é negociado: o `tungstenite` usado pelo axum não o implementa. Mensagens seguem sem compressão (o nginx pode comprimir o tráfego, se for o caso).
+`permessage-deflate` não é negociado: o `tungstenite` usado pelo axum não o implementa. No lugar, a aplicação comprime sozinha, de forma opcional, com o subprotocolo extra `nexus.v1.deflate`:
+
+- O cliente oferece `Sec-WebSocket-Protocol: nexus.v1.deflate, nexus.v1`. O servidor escolhe `nexus.v1.deflate` e devolve no handshake; quem oferece só `nexus.v1` tem o comportamento de sempre (tudo texto).
+- Servidor para cliente: mensagem com mais de 1024 bytes de JSON vai como frame **binário** com o JSON em deflate cru (RFC 1951, sem cabeçalho zlib). Mensagem menor continua frame de texto. O cliente decide pelo tipo do frame.
+- Cliente para servidor: também pode mandar frame binário deflate. O JSON descomprimido tem teto de 10 MiB (o limite de corpo da ingestão); passou disso, a conexão fecha com `1011` (proteção contra zip bomb). Binário que não é deflate válido é tratado como mensagem inválida. O frame comprimido continua limitado a 64 KiB.
+- `contrato::compressao` tem `comprimir`, `descomprimir` (com limite) e as constantes, para o cliente reutilizar. Usa `flate2` com backend em Rust puro, que compila para `wasm32`.
 
 ## Origem dos eventos
 
