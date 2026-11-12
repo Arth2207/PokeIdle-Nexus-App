@@ -4,8 +4,14 @@
 //! janela conectada: as que pedem `nick` respondem 404 `{erro: "conta"}`, e as que agregam
 //! contas usam só o que está guardado no `D`.
 
+use std::collections::HashMap;
+
 use serde_json::{json, Map, Value};
 
+use super::veredito::{key_idx, Especies};
+use crate::combate::especie::Pokedex;
+
+use super::regras::ContaViva;
 use super::{caminho, config, existe, num_ou_0, ou, Relogio};
 use crate::js::{self, json_num, mais, verdadeiro};
 
@@ -423,42 +429,761 @@ pub fn financeiro(d: &Value, r: &Relogio) -> Res {
 
 /// `planoRaros()` sem conta conectada: só a meta do radar e os dias até o fim do mês.
 pub fn raros(d: &Value, r: &Relogio) -> Resposta {
-    let radar = config::base(d, "")
-        .get("radar")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let meta = mais(radar.get("metaGemas"));
-    Resposta::ok(json!({
-        "itens": [],
-        "porConta": [],
-        "gemasSeVendesse": 0,
-        "gemasProjetadas": 0,
-        "metaRealista": 0,
-        "diasRestantes": r.dias_restantes_mes(),
-        "meta": radar.get("metaGemas"),
-        "falta": json_num(max_js(0.0, js::round(meta - 0.0))),
-        "altaPct": radar.get("altaPct"),
-        "ativo": radar.get("ativo"),
-        "temPrecos": false,
-    }))
+    Resposta::ok(plano_raros(d, r, &[]))
 }
 
-/// `planoPedras()` sem conta conectada.
-pub fn plano_pedras() -> Value {
+/// `ehRaro(id, nome, ouro, gema)`: consumível comum não é raro, mas o filtro por nome não
+/// derruba item com preço de gema no Mercado.
+fn eh_raro(id: f64, nome: &Value, ouro: Option<&Value>, gema: Option<&Value>) -> bool {
+    let n = if verdadeiro(Some(nome)) {
+        js::texto(Some(nome)).to_lowercase()
+    } else {
+        String::new()
+    };
+    if ["potion", "revive", "ball", "ether", "elixir"]
+        .iter()
+        .any(|p| n.contains(p))
+    {
+        return false;
+    }
+    let tem_gema = mais(gema) > 0.0;
+    if n.ends_with("stone") && !tem_gema {
+        return false;
+    }
+    id >= 60000.0 || num_ou_0(ouro) >= 1e6 || mais(gema) > 0.0
+}
+
+struct LinhaRaro {
+    id: f64,
+    nome: Value,
+    qtd: f64,
+    contas: Map<String, Value>,
+}
+
+/// `String(nome).replace(/\s*\(prov[áa]vel\)\s*$/i, '')`.
+fn sem_provavel(nome: &str) -> String {
+    let aparado = nome.trim_end();
+    let minusculo = aparado.to_lowercase();
+    if minusculo.ends_with("(provável)") || minusculo.ends_with("(provavel)") {
+        let n = aparado.chars().count().saturating_sub(10);
+        return aparado
+            .chars()
+            .take(n)
+            .collect::<String>()
+            .trim_end()
+            .to_owned();
+    }
+    nome.to_owned()
+}
+
+/// Média de preço (`medias[id]?.<moeda>?.media || null`).
+fn media_de(a: Option<&Value>, moeda: &str) -> Option<f64> {
+    let v = a.and_then(|x| caminho(x, &[moeda, "media"]));
+    verdadeiro(v).then(|| mais(v))
+}
+
+fn ou_nulo(x: Option<f64>) -> Value {
+    x.map_or(Value::Null, json_num)
+}
+
+/// `planoRaros()` com as contas ao vivo: raros no inventário, preço de hoje contra a média de
+/// 7 dias, projeção até o fim do mês e total de gemas por conta.
+pub fn plano_raros(d: &Value, r: &Relogio, contas: &[ContaViva]) -> Value {
+    let cs: Vec<&ContaViva> = contas
+        .iter()
+        .filter(|c| !c.nick.is_empty() && verdadeiro(caminho(&c.ultimo, &["hdx", "eu"])))
+        .collect();
+    let padrao = config::padrao();
+    let base = config::base(d, cs.first().map_or("", |c| c.nick.as_str()));
+    let radar = match base.get("radar") {
+        Some(x) if verdadeiro(Some(x)) => x.clone(),
+        _ => padrao.get("radar").cloned().unwrap_or(Value::Null),
+    };
+    let achar_itens = |chave: &str| {
+        cs.iter()
+            .filter_map(|c| caminho(&c.ultimo, &["hdx", chave, "itens"]))
+            .find(|x| verdadeiro(Some(x)))
+            .cloned()
+            .unwrap_or_else(|| json!({}))
+    };
+    let m7 = achar_itens("medias");
+    let m1 = achar_itens("medias1");
+    // Map(id numérico -> nome); o último que aparece vence.
+    let mut nomes: std::collections::HashMap<String, Value> = Default::default();
+    for c in &cs {
+        if let Some(Value::Array(a)) = c.welcome.get("itens") {
+            for i in a {
+                if let Some(Value::Number(n)) = i.get("id") {
+                    let chave = js::numero(n.as_f64().unwrap_or(f64::NAN));
+                    nomes.insert(chave, i.get("nome").cloned().unwrap_or(Value::Null));
+                }
+            }
+        }
+    }
+    let mut linhas: Vec<LinhaRaro> = Vec::new();
+    for c in &cs {
+        let Some(Value::Object(itens)) = caminho(&c.ultimo, &["hdx", "eu", "items"]) else {
+            continue;
+        };
+        for (k, q) in itens {
+            let positivo = mais(Some(q)) > 0.0;
+            if !positivo {
+                continue;
+            }
+            let id = js::mais(Some(&Value::String(k.clone())));
+            let chave = js::numero(id);
+            let n = match nomes.get(&chave) {
+                Some(x) if verdadeiro(Some(x)) => x.clone(),
+                _ if id == 70000.0 => Value::String("Bronze Boss Token (provável)".into()),
+                _ => Value::String(format!("#{k}")),
+            };
+            let a = m7.get(&chave);
+            let ouro = a.and_then(|x| caminho(x, &["gold", "media"]));
+            let gema = a.and_then(|x| caminho(x, &["orb", "media"]));
+            if !eh_raro(id, &n, ouro, gema) {
+                continue;
+            }
+            let pos = linhas
+                .iter()
+                .position(|l| l.id == id || (l.id.is_nan() && id.is_nan()));
+            let l = match pos {
+                Some(p) => &mut linhas[p],
+                None => {
+                    linhas.push(LinhaRaro {
+                        id,
+                        nome: n,
+                        qtd: 0.0,
+                        contas: Map::new(),
+                    });
+                    let ultimo = linhas.len() - 1;
+                    &mut linhas[ultimo]
+                }
+            };
+            l.qtd += mais(Some(q));
+            l.contas.insert(c.nick.clone(), json_num(mais(Some(q))));
+        }
+    }
+    // drops/dia por nome de item (média dos últimos 7 dias completos com dados)
+    let hoje = r.hoje();
+    let dias_restantes = r.dias_restantes_mes();
+    let mut drops_por_nome: std::collections::HashMap<String, f64> = Default::default();
+    for c in &cs {
+        let Some(Value::Object(por)) = d.get("dia").and_then(|x| x.get(&c.nick)) else {
+            continue;
+        };
+        let mut chaves: Vec<&String> = por.keys().collect();
+        chaves.sort();
+        let ini = chaves.len().saturating_sub(7);
+        let completos: Vec<&&String> = chaves[ini..]
+            .iter()
+            .filter(|k| k.as_str() < hoje.as_str())
+            .collect();
+        if completos.is_empty() {
+            continue;
+        }
+        let mut soma: Vec<(String, f64)> = Vec::new();
+        for k in &completos {
+            if let Some(Value::Object(dr)) = por.get(k.as_str()).and_then(|x| x.get("drops")) {
+                for (n, q) in dr {
+                    let q = mais(Some(q));
+                    match soma.iter_mut().find(|(x, _)| x == n) {
+                        Some((_, t)) => *t += q,
+                        None => soma.push((n.clone(), q)),
+                    }
+                }
+            }
+        }
+        for (n, total) in soma {
+            *drops_por_nome.entry(n).or_insert(0.0) += total / completos.len() as f64;
+        }
+    }
+    let mut itens: Vec<Map<String, Value>> = Vec::new();
+    for l in &linhas {
+        let chave = js::numero(l.id);
+        let a = m7.get(&chave);
+        let b = m1.get(&chave);
+        let (g7, g1) = (media_de(a, "gold"), media_de(b, "gold"));
+        let (o7, o1) = (media_de(a, "orb"), media_de(b, "orb"));
+        let var = |x: Option<f64>, y: Option<f64>| match (x, y) {
+            (Some(x), Some(y)) if x != 0.0 && y != 0.0 => Some((y / x - 1.0) * 100.0),
+            _ => None,
+        };
+        let v = var(g7, g1)
+            .unwrap_or(-999.0)
+            .max(var(o7, o1).unwrap_or(-999.0));
+        let nome = js::texto(Some(&l.nome));
+        let drops_dia = drops_por_nome
+            .get(&nome)
+            .copied()
+            .filter(|x| *x != 0.0)
+            .or_else(|| {
+                drops_por_nome
+                    .get(&sem_provavel(&nome))
+                    .copied()
+                    .filter(|x| *x != 0.0)
+            });
+        let qtd_fim = drops_dia.map(|dd| js::round(l.qtd + dd * dias_restantes as f64));
+        let gemas_proj = match (o7, qtd_fim) {
+            (Some(o), Some(q)) => Some(js::round(o * q)),
+            _ => None,
+        };
+        let alta = mais(radar.get("altaPct"));
+        let sinal = if v <= -999.0 {
+            "normal"
+        } else if v >= alta {
+            "vender"
+        } else if v <= -alta {
+            "barato"
+        } else {
+            "normal"
+        };
+        let mut o = Map::new();
+        o.insert("id".into(), json_num(l.id));
+        o.insert("nome".into(), l.nome.clone());
+        o.insert("qtd".into(), json_num(l.qtd));
+        o.insert("contas".into(), Value::Object(l.contas.clone()));
+        o.insert("ouroMedio".into(), ou_nulo(g7));
+        o.insert("ouroHoje".into(), ou_nulo(g1));
+        o.insert("gemaMedia".into(), ou_nulo(o7));
+        o.insert("gemaHoje".into(), ou_nulo(o1));
+        o.insert("valorOuro".into(), ou_nulo(g7.map(|g| g * l.qtd)));
+        o.insert("valorGemas".into(), ou_nulo(o7.map(|g| g * l.qtd)));
+        o.insert(
+            "varPct".into(),
+            ou_nulo((v > -999.0).then(|| js::round(v * 10.0) / 10.0)),
+        );
+        o.insert("sinal".into(), json!(sinal));
+        o.insert(
+            "dropsDia".into(),
+            ou_nulo(drops_dia.map(|x| js::round(x * 10.0) / 10.0)),
+        );
+        o.insert("qtdFimMes".into(), ou_nulo(qtd_fim));
+        o.insert("gemasProjetadas".into(), ou_nulo(gemas_proj));
+        itens.push(o);
+    }
+    let valor_gemas = |i: &Map<String, Value>| num_ou_0(i.get("valorGemas"));
+    ordenar_como_js(&mut itens, |x, y| valor_gemas(y) - valor_gemas(x));
+    let gemas = itens.iter().fold(0.0, |t, i| t + valor_gemas(i));
+    // Totais por conta: cada conta tem seu próprio cofre de gemas
+    let mut por_conta: Vec<(String, f64, f64, f64)> = Vec::new();
+    for c in &cs {
+        if !por_conta.iter().any(|p| p.0 == c.nick) {
+            por_conta.push((c.nick.clone(), 0.0, 0.0, 0.0));
+        }
+    }
+    for i in &itens {
+        let gm = num_ou_0(i.get("gemaMedia"));
+        if let Some(Value::Object(cc)) = i.get("contas") {
+            for (n, q) in cc {
+                let q = mais(Some(q));
+                let p = match por_conta.iter().position(|p| &p.0 == n) {
+                    Some(p) => p,
+                    None => {
+                        por_conta.push((n.clone(), 0.0, 0.0, 0.0));
+                        por_conta.len() - 1
+                    }
+                };
+                por_conta[p].1 += q;
+                por_conta[p].2 += 1.0;
+                por_conta[p].3 += gm * q;
+            }
+        }
+    }
+    let mut por_conta: Vec<Value> = por_conta
+        .into_iter()
+        .map(|(nick, qtd, n, g)| {
+            json!({"nick": nick, "qtd": json_num(qtd), "itens": json_num(n),
+                "gemas": json_num(js::round(g))})
+        })
+        .collect();
+    ordenar_como_js(&mut por_conta, |a, b| {
+        num_ou_0(b.get("gemas")) - num_ou_0(a.get("gemas"))
+    });
+    let proj_total = itens.iter().fold(0.0, |t, i| {
+        let p = num_ou_0(i.get("gemasProjetadas"));
+        t + if p != 0.0 { p } else { valor_gemas(i) }
+    });
+    let meta = mais(radar.get("metaGemas"));
     json!({
-        "contas": [], "equipe": [], "transferencias": [], "sobras": [],
-        "temPrecos": false, "tipoDePedra": {}
+        "itens": itens,
+        "porConta": por_conta,
+        "gemasSeVendesse": json_num(js::round(gemas)),
+        "gemasProjetadas": json_num(js::round(proj_total)),
+        "metaRealista": json_num(js::round(proj_total * 0.8)),
+        "diasRestantes": dias_restantes,
+        "meta": radar.get("metaGemas"),
+        "falta": json_num(max_js(0.0, js::round(meta - gemas))),
+        "altaPct": radar.get("altaPct"),
+        "ativo": radar.get("ativo"),
+        "temPrecos": m7.as_object().is_some_and(|o| !o.is_empty()),
     })
 }
 
-/// `GET /api/pedras/plano`.
-pub fn pedras_plano() -> Resposta {
-    Resposta::ok(plano_pedras())
+/// `planoPedras()`: refino da equipe, falta e sobra de pedras entre as contas. `contas` na
+/// ordem do `Map` do legado; `esp` é a pokédex (`BYD`).
+pub fn plano_pedras(contas: &[ContaViva], esp: &Especies) -> Value {
+    let vivas: Vec<&ContaViva> = contas
+        .iter()
+        .filter(|c| !c.nick.is_empty() && verdadeiro(caminho(&c.ultimo, &["hdx", "pokemons"])))
+        .collect();
+    let vazio = Map::new();
+    let mapa: &Map<String, Value> = vivas
+        .iter()
+        .find_map(|c| {
+            c.welcome
+                .get("pedrasEvolucao")
+                .filter(|v| verdadeiro(Some(v)))
+        })
+        .and_then(Value::as_object)
+        .unwrap_or(&vazio);
+    let medias: Map<String, Value> = vivas
+        .iter()
+        .find_map(|c| {
+            caminho(&c.ultimo, &["hdx", "medias", "itens"]).filter(|v| verdadeiro(Some(v)))
+        })
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut inv: HashMap<String, Map<String, Value>> = HashMap::new();
+    for c in &vivas {
+        let itens = caminho(&c.ultimo, &["hdx", "eu", "items"])
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        inv.insert(c.nick.clone(), itens);
+    }
+    // saldo que vai sendo "gasto" no plano
+    let mut virt: HashMap<String, HashMap<String, f64>> = inv
+        .iter()
+        .map(|(n, m)| {
+            let saldos = m
+                .iter()
+                .map(|(k, v)| (k.clone(), num_ou_0(Some(v))))
+                .collect();
+            (n.clone(), saldos)
+        })
+        .collect();
+    let escolha = |t: &str| -> Option<&Value> {
+        [mapa.get(t), mapa.get("NORMAL")]
+            .into_iter()
+            .flatten()
+            .find(|v| verdadeiro(Some(v)))
+    };
+    let tem_pedra = |id: f64| {
+        mapa.values().any(|m| {
+            m.get("itemId")
+                .is_some_and(|x| mais(Some(x)) == id && x.is_number())
+        })
+    };
+    let mut necessarias: Vec<f64> = Vec::new();
+    let mut linhas: Vec<LinhaPedra> = Vec::new();
+    for c in &vivas {
+        let Some(Value::Array(pokes)) = caminho(&c.ultimo, &["hdx", "pokemons"]) else {
+            continue;
+        };
+        for p in pokes.iter().filter(|x| existe(x.get("slot"))) {
+            let Some(sp) = esp.por_id(p.get("speciesId")) else {
+                continue;
+            };
+            let ki = key_idx(sp);
+            let stat = if ki == 3 { "spAtk" } else { "atk" };
+            let refino = p
+                .get("refino")
+                .filter(|v| verdadeiro(Some(v)))
+                .and_then(|r| r.get(stat));
+            let n = {
+                let x = mais(refino);
+                if x == 0.0 || x.is_nan() {
+                    0.0
+                } else {
+                    x
+                }
+            };
+            let custo = custo_degrau(n + 1.0);
+            let mut tipos: Vec<&'static str> = Vec::new();
+            for t in &sp.tipos {
+                if !tipos.contains(&t.nome()) {
+                    tipos.push(t.nome());
+                }
+            }
+            let mut ids: Vec<f64> = Vec::new();
+            for t in &tipos {
+                let id = escolha(t).and_then(|m| m.get("itemId"));
+                if verdadeiro(id) {
+                    let f = mais(id);
+                    if !ids.iter().any(|x| *x == f || (x.is_nan() && f.is_nan())) {
+                        ids.push(f);
+                    }
+                }
+            }
+            necessarias.extend(&ids);
+            let nomes_pedras = tipos
+                .iter()
+                .map(|t| {
+                    escolha(t)
+                        .and_then(|m| m.get("nome"))
+                        .filter(|v| verdadeiro(Some(v)))
+                        .cloned()
+                        .unwrap_or_else(|| Value::String((*t).to_owned()))
+                })
+                .collect();
+            linhas.push(LinhaPedra {
+                nick: c.nick.clone(),
+                id: p.get("id").cloned(),
+                nome: sp.nome.clone(),
+                stat,
+                nivel_refino: n,
+                custo,
+                tipos,
+                ids,
+                nomes_pedras,
+                tem: 0.0,
+                falta: 0.0,
+                situacao: "falta",
+                uso: None,
+            });
+        }
+    }
+    ordenar_como_js(&mut linhas, |a, b| a.custo - b.custo);
+    let pilha = |virt: &HashMap<String, HashMap<String, f64>>, nick: &str, i: f64| {
+        virt.get(nick)
+            .and_then(|m| m.get(&js::numero(i)))
+            .copied()
+            .unwrap_or(0.0)
+    };
+    let saldo = |virt: &HashMap<String, HashMap<String, f64>>, nick: &str, ids: &[f64]| {
+        ids.iter().fold(0.0, |t, i| t + pilha(virt, nick, *i))
+    };
+    let mut transferencias: Vec<Value> = Vec::new();
+    for l in &mut linhas {
+        let proprio = saldo(&virt, &l.nick, &l.ids);
+        let todos = vivas
+            .iter()
+            .fold(0.0, |t, c| t + saldo(&virt, &c.nick, &l.ids));
+        l.tem = proprio;
+        l.falta = max_js(0.0, l.custo - proprio);
+        l.situacao = if proprio >= l.custo {
+            "pode"
+        } else if todos >= l.custo {
+            "juntando"
+        } else {
+            "falta"
+        };
+        if l.situacao == "pode" {
+            // reserva as pedras no saldo virtual, maior pilha primeiro (mesma ordem do servidor)
+            let mut f = l.custo;
+            let mut uso = Vec::new();
+            let mut ordem = l.ids.clone();
+            ordenar_como_js(&mut ordem, |a, b| {
+                pilha(&virt, &l.nick, *b) - pilha(&virt, &l.nick, *a)
+            });
+            for i in ordem {
+                let u = min_js(pilha(&virt, &l.nick, i), f);
+                if u > 0.0 {
+                    uso.push((i, u));
+                    if let Some(s) = virt
+                        .get_mut(&l.nick)
+                        .and_then(|m| m.get_mut(&js::numero(i)))
+                    {
+                        *s -= u;
+                    }
+                    f -= u;
+                }
+                if f <= 0.0 {
+                    break;
+                }
+            }
+            l.uso = Some(uso);
+        } else if l.situacao == "juntando" {
+            let mut f = l.falta;
+            'contas: for c in &vivas {
+                if c.nick == l.nick {
+                    continue;
+                }
+                for &i in &l.ids {
+                    let u = min_js(pilha(&virt, &c.nick, i), f);
+                    if u > 0.0 {
+                        transferencias.push(json!({
+                            "de": c.nick, "para": l.nick, "itemId": json_num(i),
+                            "qtd": json_num(u), "paraQuem": l.nome,
+                        }));
+                        if let Some(s) = virt
+                            .get_mut(&c.nick)
+                            .and_then(|m| m.get_mut(&js::numero(i)))
+                        {
+                            *s -= u;
+                        }
+                        f -= u;
+                    }
+                    if f <= 0.0 {
+                        break;
+                    }
+                }
+                if f <= 0.0 {
+                    break 'contas;
+                }
+            }
+        }
+    }
+    let mut sobras: Vec<Value> = Vec::new();
+    for c in &vivas {
+        let Some(itens) = inv.get(&c.nick) else {
+            continue;
+        };
+        for (i, q) in entradas_js(itens) {
+            let id = mais(Some(&Value::String(i.clone())));
+            if !tem_pedra(id) || mais(Some(q)) <= 0.0 {
+                continue;
+            }
+            if necessarias.contains(&id) {
+                continue;
+            }
+            let m = medias
+                .get(&js::numero(id))
+                .and_then(|x| caminho(x, &["gold", "media"]))
+                .filter(|v| verdadeiro(Some(v)))
+                .cloned();
+            let total = m
+                .as_ref()
+                .map_or(Value::Null, |m| json_num(mais(Some(m)) * mais(Some(q))));
+            sobras.push(json!({
+                "nick": c.nick, "itemId": json_num(id), "qtd": q,
+                "precoMedio": m, "total": total,
+            }));
+        }
+    }
+    let equipe: Vec<Value> = linhas.iter().map(LinhaPedra::json).collect();
+    let contas_json: Vec<Value> = vivas
+        .iter()
+        .map(|c| {
+            let pedras = inv
+                .get(&c.nick)
+                .map(|m| {
+                    entradas_js(m)
+                        .into_iter()
+                        .filter(|(i, _)| tem_pedra(mais(Some(&Value::String((*i).clone())))))
+                        .map(|(i, v)| (i.clone(), v.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            json!({ "nick": c.nick, "pedras": objeto_js(pedras) })
+        })
+        .collect();
+    let tipo_de_pedra = objeto_js(
+        mapa.values()
+            .map(|m| {
+                (
+                    js::texto(m.get("itemId")),
+                    m.get("nome").cloned().unwrap_or(Value::Null),
+                )
+            })
+            .collect(),
+    );
+    json!({
+        "contas": contas_json,
+        "equipe": equipe,
+        "transferencias": transferencias,
+        "sobras": sobras,
+        "temPrecos": !medias.is_empty(),
+        "tipoDePedra": tipo_de_pedra,
+    })
 }
 
-/// `GET /api/espolio`.
+/// `custoDegrau(n)`: `REFINO_BASE * (3n² − 3n + 1)`, com `REFINO_BASE = 500`.
+pub fn custo_degrau(n: f64) -> f64 {
+    500.0 * (3.0 * n * n - 3.0 * n + 1.0)
+}
+
+/// Uma linha do plano de pedras (o `L` do legado). `ids` e `uso` são ids de item.
+struct LinhaPedra {
+    nick: String,
+    id: Option<Value>,
+    nome: String,
+    stat: &'static str,
+    nivel_refino: f64,
+    custo: f64,
+    tipos: Vec<&'static str>,
+    ids: Vec<f64>,
+    nomes_pedras: Vec<Value>,
+    tem: f64,
+    falta: f64,
+    situacao: &'static str,
+    uso: Option<Vec<(f64, f64)>>,
+}
+
+impl LinhaPedra {
+    fn json(&self) -> Value {
+        let mut o = Map::new();
+        o.insert("nick".into(), json!(self.nick));
+        if let Some(id) = &self.id {
+            o.insert("id".into(), id.clone());
+        }
+        o.insert("nome".into(), json!(self.nome));
+        o.insert("stat".into(), json!(self.stat));
+        o.insert("nivelRefino".into(), json_num(self.nivel_refino));
+        o.insert("custo".into(), json_num(self.custo));
+        o.insert("tipos".into(), json!(self.tipos));
+        o.insert(
+            "ids".into(),
+            Value::Array(self.ids.iter().map(|i| json_num(*i)).collect()),
+        );
+        o.insert(
+            "nomesPedras".into(),
+            Value::Array(self.nomes_pedras.clone()),
+        );
+        o.insert("tem".into(), json_num(self.tem));
+        o.insert("falta".into(), json_num(self.falta));
+        o.insert("situacao".into(), json!(self.situacao));
+        if let Some(u) = &self.uso {
+            let pares = u
+                .iter()
+                .map(|(i, q)| (js::numero(*i), json_num(*q)))
+                .collect();
+            o.insert("uso".into(), objeto_js(pares));
+        }
+        Value::Object(o)
+    }
+}
+
+/// `Math.min` com `NaN` contagiante.
+fn min_js(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.min(b)
+    }
+}
+
+/// A chave é um índice de array do JS (`"0"`, `"12"`, sem zero à esquerda)? Essas chaves
+/// saem primeiro, em ordem numérica, nos objetos do JS.
+fn chave_indice(k: &str) -> Option<u32> {
+    let ok = !k.is_empty()
+        && k.bytes().all(|b| b.is_ascii_digit())
+        && (k == "0" || !k.starts_with('0'))
+        && k.len() <= 10;
+    ok.then(|| k.parse::<u32>().ok())
+        .flatten()
+        .filter(|n| *n != u32::MAX)
+}
+
+/// `Object.entries(o)`: índices em ordem numérica, depois as demais chaves na inserção.
+pub(crate) fn entradas_js(o: &Map<String, Value>) -> Vec<(&String, &Value)> {
+    let mut idx: Vec<(u32, &String, &Value)> = Vec::new();
+    let mut resto = Vec::new();
+    for (k, v) in o {
+        match chave_indice(k) {
+            Some(n) => idx.push((n, k, v)),
+            None => resto.push((k, v)),
+        }
+    }
+    idx.sort_by_key(|(n, _, _)| *n);
+    idx.into_iter()
+        .map(|(_, k, v)| (k, v))
+        .chain(resto)
+        .collect()
+}
+
+/// `Object.fromEntries(pares)`: chave repetida fica com o último valor, na posição da
+/// primeira, e os índices de array vêm primeiro.
+pub(crate) fn objeto_js(pares: Vec<(String, Value)>) -> Value {
+    let mut o = Map::new();
+    for (k, v) in pares {
+        o.insert(k, v);
+    }
+    Value::Object(
+        entradas_js(&o)
+            .into_iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+    )
+}
+
+/// `GET /api/pedras/plano` sem nenhuma conta conectada.
+pub fn pedras_plano() -> Resposta {
+    pedras_plano_contas(&[], &Especies::sem_precos(&Pokedex::default()))
+}
+
+/// `GET /api/pedras/plano`.
+pub fn pedras_plano_contas(contas: &[ContaViva], esp: &Especies) -> Resposta {
+    Resposta::ok(plano_pedras(contas, esp))
+}
+
+/// `GET /api/espolio` sem nenhuma conta conectada.
 pub fn espolio() -> Resposta {
-    Resposta::ok(json!({ "contas": [], "pedras": plano_pedras() }))
+    let vazio = config::carregar(&json!({}));
+    espolio_contas(&vazio, &[], &Especies::sem_precos(&Pokedex::default()))
+}
+
+/// `GET /api/espolio`: o que cada conta juntou, o valor médio de mercado (ouro) e o plano
+/// de pedras.
+pub fn espolio_contas(d: &Value, contas: &[ContaViva], esp: &Especies) -> Resposta {
+    let medias: Map<String, Value> = contas
+        .iter()
+        .find_map(|c| {
+            caminho(&c.ultimo, &["hdx", "medias", "itens"]).filter(|v| verdadeiro(Some(v)))
+        })
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for c in contas.iter().filter(|c| !c.nick.is_empty()) {
+        let mut nomes: HashMap<String, Value> = HashMap::new();
+        if let Some(Value::Array(a)) = c.welcome.get("itens") {
+            for i in a {
+                if let Some(Value::Number(n)) = i.get("id") {
+                    nomes.insert(
+                        js::numero(n.as_f64().unwrap_or(f64::NAN)),
+                        i.get("nome").cloned().unwrap_or(Value::Null),
+                    );
+                }
+            }
+        }
+        let vazio = Map::new();
+        let it = caminho(&c.ultimo, &["hdx", "eu", "items"])
+            .and_then(Value::as_object)
+            .unwrap_or(&vazio);
+        // (valor, linha): o valor (`m * q` ou nulo) ordena a lista
+        let mut lista: Vec<(f64, Value)> = Vec::new();
+        for (id, q) in entradas_js(it) {
+            if mais(Some(q)).is_nan() || mais(Some(q)) <= 0.0 {
+                continue;
+            }
+            let m = medias
+                .get(id)
+                .and_then(|x| caminho(x, &["gold", "media"]))
+                .filter(|v| verdadeiro(Some(v)));
+            let valor = m.map(|m| mais(Some(m)) * mais(Some(q)));
+            let nome = nomes
+                .get(&js::numero(mais(Some(&Value::String(id.clone())))))
+                .filter(|v| verdadeiro(Some(v)))
+                .cloned()
+                .unwrap_or_else(|| Value::String(format!("#{id}")));
+            let chave = valor.filter(|v| *v != 0.0 && !v.is_nan()).unwrap_or(0.0);
+            lista.push((
+                chave,
+                json!({
+                    "id": json_num(mais(Some(&Value::String(id.clone())))),
+                    "nome": nome, "qtd": q, "precoMedio": m,
+                    "valor": valor.map_or(Value::Null, json_num),
+                }),
+            ));
+        }
+        ordenar_como_js(&mut lista, |a, b| b.0 - a.0);
+        let total = lista.iter().fold(0.0, |t, x| t + x.0);
+        let papel = config::base(d, &c.nick).pointer("/papel/tipo").cloned();
+        let mut linha = Map::new();
+        linha.insert("nick".into(), json!(c.nick));
+        if let Some(p) = papel {
+            linha.insert("papel".into(), p);
+        }
+        linha.insert("total".into(), json_num(total));
+        linha.insert(
+            "itens".into(),
+            Value::Array(lista.into_iter().map(|x| x.1).collect()),
+        );
+        out.push(Value::Object(linha));
+    }
+    Resposta::ok(json!({ "contas": out, "pedras": plano_pedras(contas, esp) }))
 }
 
 /// `GET /api/equipe/melhor/todas`.

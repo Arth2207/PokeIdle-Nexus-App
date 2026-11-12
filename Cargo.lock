@@ -1979,6 +1979,7 @@ dependencies = [
  "libm",
  "proptest",
  "rayon",
+ "regex",
  "serde",
  "serde_json",
  "thiserror",

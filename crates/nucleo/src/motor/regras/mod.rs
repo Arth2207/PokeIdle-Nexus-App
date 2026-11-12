@@ -38,12 +38,25 @@ pub struct ContaViva {
     /// `conta.venderBusy` e `conta.venderUltimo` do legado.
     pub vender_ocupado: bool,
     pub vender_ultimo: Value,
+    /// `conta.cons.ev`: consumo medido nas últimas 6 h, `[t, item, quanto]`, e
+    /// `conta.ouroMax`. Estado do legado; a rota `/api/nexus/janela` manda os dois.
+    pub consumo: Vec<compra::Consumo>,
+    pub ouro_max: f64,
+    /// `conta.huntDesde`: desde quando a conta está na hunt atual.
+    pub hunt_desde: i64,
+    /// Campos numéricos e lógicos da conta no legado (marcas de tempo, contadores).
+    pub campos: serde_json::Map<String, Value>,
+    /// Estado de equipe e rodízio do legado (`equipeDesistiu`, `rodizioBloq`...).
+    pub objetos: Value,
 }
 
 impl ContaViva {
-    /// Lê uma conta do JSON da rota `/api/nexus/janela`.
+    /// Lê uma conta do JSON da rota `/api/nexus/janela`. O estado do laço (marcas, objetos,
+    /// consumo, `ouroMax`, `huntDesde`) vem da foto `antes`, tirada no começo do último ciclo
+    /// do legado; sem ela, dos campos de mesmo nome no topo.
     pub fn de_json(v: &Value) -> Option<Self> {
         let texto = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+        let antes = v.get("antes").filter(|a| a.is_object()).unwrap_or(v);
         let linhas = v
             .get("linhas")
             .and_then(Value::as_array)
@@ -73,6 +86,32 @@ impl ContaViva {
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
             vender_ultimo: v.get("venderUltimo").cloned().unwrap_or(Value::Null),
+            consumo: antes
+                .pointer("/cons/ev")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|e| {
+                            Some((
+                                e.get(0)?.as_f64()? as i64,
+                                crate::js::texto(e.get(1)),
+                                e.get(2)?.as_f64()?,
+                            ))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            ouro_max: antes.get("ouroMax").and_then(Value::as_f64).unwrap_or(0.0),
+            hunt_desde: antes
+                .get("huntDesde")
+                .and_then(Value::as_f64)
+                .map_or(0, |x| x as i64),
+            campos: antes
+                .get("estado")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default(),
+            objetos: antes.get("objetos").cloned().unwrap_or(Value::Null),
         })
     }
 }
@@ -133,22 +172,36 @@ pub struct EstadoLaco {
     pub avisado: HashMap<String, i64>,
     /// `conta.<campo>` numéricos que as regras gravam (`pocaoMexida`, `bolaReligadaEm`,
     /// `pedrasEm`...), por `nick` e nome do campo do legado. Ausente vale `undefined`.
-    pub marcas: HashMap<(String, &'static str), f64>,
+    pub marcas: HashMap<(String, String), f64>,
     /// `ultimaHunt`: a última hunt vista por conta (`{nome, lvl, slug, t}`).
     pub ultima_hunt: HashMap<String, Value>,
 }
 
 impl EstadoLaco {
     /// `conta.<campo> || 0`.
-    pub fn marca(&self, nick: &str, campo: &'static str) -> f64 {
+    pub fn marca(&self, nick: &str, campo: &str) -> f64 {
         self.marcas
-            .get(&(nick.to_owned(), campo))
+            .get(&(nick.to_owned(), campo.to_owned()))
             .copied()
             .unwrap_or(0.0)
     }
 
-    pub fn marcar(&mut self, nick: &str, campo: &'static str, valor: f64) {
-        self.marcas.insert((nick.to_owned(), campo), valor);
+    pub fn marcar(&mut self, nick: &str, campo: &str, valor: f64) {
+        self.marcas
+            .insert((nick.to_owned(), campo.to_owned()), valor);
+    }
+
+    /// Em sombra, o estado do laço do legado vale a cada ciclo: as marcas da conta passam a
+    /// ser os campos numéricos e lógicos que a rota `janela` mandou (`true` = 1).
+    pub fn adotar_campos(&mut self, nick: &str, campos: &serde_json::Map<String, Value>) {
+        self.marcas.retain(|(n, _), _| n != nick);
+        for (k, v) in campos {
+            let x = match v {
+                Value::Bool(b) => f64::from(u8::from(*b)),
+                outro => outro.as_f64().unwrap_or(f64::NAN),
+            };
+            self.marcar(nick, k, x);
+        }
     }
 }
 
