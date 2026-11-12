@@ -143,13 +143,15 @@ GRANT SELECT ON public.fato_hunt_eficiencia TO nexus_app;
 
 ### Etapa 1 — levantamento ✓ (este doc)
 
-### Etapa 2 — crate e container `nexus-worker`
+### Etapa 2 — crate e container `nexus-worker` ✓
 
-- Novo crate `crates/nexus-worker` no workspace.
-- Binário com `/health` e `/metrics`.
-- Scheduler de jobs (tokio + `CancellationToken`).
-- Compose: container separado, limite de CPU/memória, blue/green no deploy.
-- CI: imagem gerada no CI (nunca na VPS, como todo o Nexus).
+- Crate `crates/nexus-worker`; binário `/nexus-worker` na mesma imagem do `nexus-api`
+  (o compose usa `entrypoint: ["/nexus-worker"]`, não `command`, porque o ENTRYPOINT da imagem é a API).
+- `/health/ready` e `/metrics` na porta 9191 (só rede interna + `monitoring`).
+- Healthcheck por socket HTTP/1.0 (a imagem distroless não tem `wget`).
+- Container único, **sem blue/green**: o cursor é transacional e o INSERT idempotente,
+  então recriar o worker no deploy não perde nem duplica dados.
+- Limite: 0,5 CPU / 256 MB (uso real ~3 MB em repouso).
 
 ### Etapa 3 — ETL contínuo em sombra
 
@@ -160,14 +162,33 @@ GRANT SELECT ON public.fato_hunt_eficiencia TO nexus_app;
 - Tabela `nexus.fato_kill_shadow` (mesma estrutura da `public.fato_kill`), escritor único o `nexus-worker`.
 - `INSERT … ON CONFLICT (ts_at, ts_ms, conta_id) DO NOTHING`.
 - Descarta `ts = 1234567890000`.
+- **Status ✓** em produção desde 2026-11-12 (primeiro ciclo: 19.999 abates nas 4 contas).
+- `mapa.db` aberto com URI `file:…?immutable=1`. O banco está em modo WAL, e o SQLite
+  exige escrita no `-shm` mesmo em só leitura; no container só o `.db` está montado (`:ro`).
+  - Consequência: lê só o arquivo principal. Abates que ainda estão no WAL (antes do
+    checkpoint) entram num ciclo seguinte. Um checkpoint durante a leitura pode dar erro
+    transitório ("malformed"); o ciclo falha e repete sem avançar o cursor.
+  - Risco a medir no comparador: abate gravado no WAL com `ts` menor que o cursor já
+    avançado seria pulado. Se o comparador mostrar falta sistemática, trocar por montar o
+    diretório e um `-shm` gravável, ou copiar o `.db` para `/tmp` antes de ler.
 
-### Etapa 4 — comparador fato × fato
+### Etapa 4 — comparador fato × fato (código ✓, validação pendente)
 
-- Mesmo padrão do comparador das fases 3/4: escolhe um intervalo (ex.: última hora completa), conta linhas e soma `xp_treinador + xp_pokemon + ouro` por conta.
-- Métricas `nexus_etl_paridade_{contagem,soma}_{total,igual,diferente}` por conta.
-- Relatório: `nexus-worker etl-relatorio --desde <horas>`.
+- Job horário `etl_paridade`: 4 contas × janelas `1h`/`6h`/`24h`, conta linhas e soma
+  `xp_treinador + xp_pokemon` em `public.fato_kill` × `nexus.fato_kill_shadow`; grava em
+  `nexus.etl_paridade` (coluna `igual` gerada pelo banco).
+- Relatório: `nexus-worker etl-relatorio [--desde <horas>]`.
+- **Pendências:**
+  - As janelas terminam em `NOW()`; o Node e o Nexus rodam em cadências diferentes, então a
+    borda recente sempre diverge. Trocar por janela fechada com atraso (ex.: hora cheia
+    terminada há 30 min).
+  - Somar também `ouro` e publicar métricas por conta (`nexus_etl_paridade_*`).
+  - `fato_hunt_eficiencia` ainda sem comparador.
 
 ### Etapa 5 — ETL de eficiência e preços de mercado *(condicional)*
+
+- **Status:** eficiência portada em sombra (`nexus.fato_hunt_eficiencia_shadow`, job horário).
+  Preços de mercado ainda sem decisão.
 
 - ETL eficiência: se scoring ainda usa `fato_hunt_eficiencia`, porta `etl-eficiencia.js` para job horário no worker.
 - Preços de mercado: verificar `mercado_msg` no SQLite; se tiver dados, porta `etl-mercado.js`.
