@@ -1206,3 +1206,133 @@ async fn deflate_corpo(db: PgPool) {
 async fn deflate() {
     com_limite(deflate_corpo).await;
 }
+
+/// Proxy TCP que permite derrubar todas as conexões abertas, sem derrubar o servidor.
+struct Proxy {
+    addr: SocketAddr,
+    corte: Arc<std::sync::Mutex<CancellationToken>>,
+}
+
+impl Proxy {
+    async fn novo(destino: SocketAddr) -> Proxy {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let corte = Arc::new(std::sync::Mutex::new(CancellationToken::new()));
+        let c = corte.clone();
+        tokio::spawn(async move {
+            while let Ok((mut entrada, _)) = l.accept().await {
+                let tok = c.lock().unwrap().clone();
+                tokio::spawn(async move {
+                    let Ok(mut saida) = TcpStream::connect(destino).await else {
+                        return;
+                    };
+                    tokio::select! {
+                        () = tok.cancelled() => {}
+                        _ = tokio::io::copy_bidirectional(&mut entrada, &mut saida) => {}
+                    }
+                });
+            }
+        });
+        Proxy { addr, corte }
+    }
+
+    fn derrubar(&self) {
+        let mut g = self.corte.lock().unwrap();
+        g.cancel();
+        *g = CancellationToken::new();
+    }
+}
+
+async fn esperar_sombra(db: &PgPool, ids: &[i64]) {
+    for id in ids {
+        esperar_executado(db, *id).await;
+        let (_, r) = estado_do_cmd(db, *id).await;
+        assert_eq!(r.as_deref(), Some("sombra"), "comando {id}");
+    }
+}
+
+async fn cmd_espelho(db: &PgPool, expira_ms: i64) -> i64 {
+    inserir(
+        db,
+        &NovoComando {
+            conta: "conta1",
+            tipo: "hunt",
+            params: &json!({}),
+            prioridade: 5,
+            origem: "espelho",
+            expira_ms,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+async fn sombra_corpo(db: PgPool) {
+    use crate::sombra::{relatorio, rodar, ConfigSombra, Contadores};
+    use std::sync::atomic::Ordering;
+
+    let s = servir(&db, true).await;
+    let token = criar_token(&db, "sombra", &[Escopo::Relay], None)
+        .await
+        .unwrap();
+    let proxy = Proxy::novo(s.addr).await;
+    let cfg = ConfigSombra::nova(&format!("ws://{}/ws", proxy.addr), &token).unwrap();
+    let cont = Arc::new(Contadores::default());
+    let parar = CancellationToken::new();
+    let tarefa = {
+        let (c, p) = (cont.clone(), parar.clone());
+        tokio::spawn(async move { rodar(&cfg, p, c).await })
+    };
+    let longe = agora_ms() + 600_000;
+
+    // Comandos inseridos com a sombra conectada.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let mut ids = Vec::new();
+    for _ in 0..5 {
+        ids.push(cmd_espelho(&db, longe).await);
+    }
+    esperar_sombra(&db, &ids).await;
+
+    // Derruba a conexão; mais comandos entram enquanto ela está fora.
+    proxy.derrubar();
+    for _ in 0..5 {
+        ids.push(cmd_espelho(&db, longe).await);
+    }
+    esperar_sombra(&db, &ids).await;
+
+    assert_eq!(cont.duplicados.load(Ordering::Relaxed), 0);
+    assert!(cont.reconexoes.load(Ordering::Relaxed) >= 1);
+    let tent: i64 = sqlx::query_scalar("SELECT coalesce(sum(tentativas), 0) FROM nexus.comando")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(tent, 0, "nenhuma redistribuição esperada");
+
+    // SIGTERM: encerra limpo.
+    parar.cancel();
+    tokio::time::timeout(Duration::from_secs(5), tarefa)
+        .await
+        .expect("sombra não encerrou")
+        .unwrap();
+
+    // Um comando que expira sem ninguém para receber vira "perdido".
+    cmd_espelho(&db, agora_ms() + 200).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    persistencia::comandos::expirar(&db).await.unwrap();
+
+    let r = relatorio(&db, 24).await.unwrap();
+    assert_eq!(r.total, 11);
+    assert_eq!(r.entregues, 10);
+    assert_eq!(r.confirmados, 10);
+    assert_eq!(r.perdidos, 1);
+    assert_eq!(r.duplicados, 0);
+    assert_eq!(r.sem_confirmacao, 0);
+    assert!(r.p50_s.is_some() && r.p95_s.is_some());
+    assert!(!r.aprovado());
+    s.parar.cancel();
+}
+
+#[tokio::test]
+async fn sombra_confirma_reconecta_e_relata() {
+    com_limite(sombra_corpo).await;
+}

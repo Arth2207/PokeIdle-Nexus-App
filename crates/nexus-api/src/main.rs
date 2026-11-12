@@ -18,6 +18,8 @@
 //!   nexus-api paridade [url]                   uma rodada de comparação com o legado
 //!   nexus-api paridade-continua                comparador em loop, gravando em nexus.paridade
 //!   nexus-api avaliar-fichas <agora_ms>        diagnóstico: valor justo de fichas (stdin)
+//!   nexus-api sombra                           cliente sombra do WebSocket (NEXUS_SOMBRA_URL, NEXUS_SOMBRA_TOKEN_FILE)
+//!   nexus-api sombra-relatorio [--desde <h>]   relatório da sombra (só SELECT; padrão 168 h)
 //!   nexus-api healthcheck                      checa o /health/ready local (usado pelo Docker)
 
 mod auth;
@@ -33,6 +35,7 @@ mod limite;
 mod metricas;
 mod raros;
 mod rotas;
+mod sombra;
 mod telemetria;
 mod webhook;
 mod ws;
@@ -52,7 +55,7 @@ use crate::estado::Estado;
 
 const USO: &str = "uso: nexus-api [migrar | token criar <nome> <escopos> [conta] | \
 importar itens|especies|base|meus-itens|pokedex|equipes|wiki|faltas|welcome|raros | paridade [url] | \
-paridade-continua | avaliar-fichas <agora_ms> | pokedex-divergencias | healthcheck]";
+paridade-continua | sombra | sombra-relatorio [--desde <horas>] | avaliar-fichas <agora_ms> | pokedex-divergencias | healthcheck]";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -76,6 +79,16 @@ async fn main() -> anyhow::Result<()> {
         ["paridade-continua"] => paridade_continua(cfg).await,
         ["paridade"] => paridade(&cfg, None).await,
         ["paridade", url] => paridade(&cfg, Some(url)).await,
+        ["sombra"] => {
+            telemetria::iniciar(cfg.log_formato).context("não consegui iniciar os logs")?;
+            sombra::executar().await
+        }
+        ["sombra-relatorio"] => sombra_relatorio(&cfg, 168).await,
+        ["sombra-relatorio", "--desde", horas] => {
+            let horas: i32 = horas.parse().context("--desde espera horas inteiras")?;
+            ensure!(horas > 0, "--desde deve ser maior que zero");
+            sombra_relatorio(&cfg, horas).await
+        }
         ["healthcheck"] => healthcheck(&cfg).await,
         _ => bail!(USO),
     }
@@ -162,6 +175,11 @@ async fn abrir(endereco: SocketAddr) -> anyhow::Result<TcpListener> {
     TcpListener::bind(endereco)
         .await
         .with_context(|| format!("não consegui abrir {endereco}"))
+}
+
+async fn sombra_relatorio(cfg: &Configuracao, horas: i32) -> anyhow::Result<()> {
+    let estado = Estado::novo(cfg).context("NEXUS_DATABASE_URL inválida")?;
+    sombra::executar_relatorio(&estado.db, horas).await
 }
 
 async fn migrar(cfg: &Configuracao) -> anyhow::Result<()> {

@@ -77,6 +77,54 @@ As métricas ficam no Prometheus (job `nexus-api`) e os alertas no grupo `nexus-
 
 Métricas da bolsa: `nexus_bolsa_montagem_duracao_segundos`, `nexus_bolsa_tickers`, `nexus_bolsa_vendas_janela`, `nexus_bolsa_vendas_lidas_total`, `nexus_bolsa_ofertas_avaliadas`, `nexus_bolsa_gerado_em_segundos` e `nexus_bolsa_montagem_falhas_total`. As regras `NexusParidadeBaixa`, `NexusParidadeParada` e `NexusBolsaMontagemFalhando` estão no arquivo de alertas, mas ainda precisam ser carregadas no Prometheus.
 
+## Cliente sombra do WebSocket
+
+Mede "7 dias sem comando perdido nem duplicado" antes da A2. O subcomando `nexus-api sombra` conecta em `/ws` como um relay, recebe os comandos do espelho (`origem='espelho'`), não executa nada e responde `comando.resultado` com `sombra`. Reconecta sozinho (backoff de 1 a 30 s com jitter, `retomar` com o último `seq`, trata `sessao.ressincronizar`), responde ping e encerra limpo com SIGTERM. Comando recebido de novo depois de enviado a confirmação vai para o log (`warn`) e para o contador `duplicados`, que sai no log de 5 em 5 minutos e no encerramento. O token nunca é logado.
+
+Envs do serviço:
+
+| Variável | Valor |
+|---|---|
+| `NEXUS_SOMBRA_URL` | `ws://nexus-api-blue:8190/ws` (só `ws://`; rede interna do compose) |
+| `NEXUS_SOMBRA_TOKEN_FILE` | caminho do secret com o token, ex. `/run/secrets/nexus_sombra_token` |
+
+Token com escopo `relay` (aparece uma vez; grave no secret):
+
+```bash
+sudo -u nexus-deploy docker compose exec nexus-api-blue /nexus-api token criar sombra relay
+```
+
+Serviço de compose (mesma imagem, comando `sombra`; exemplo, o arquivo de deploy é editado à parte):
+
+```yaml
+nexus-sombra:
+  image: <mesma imagem do nexus-api>
+  command: ["sombra"]
+  restart: unless-stopped
+  environment:
+    NEXUS_SOMBRA_URL: ws://nexus-api-blue:8190/ws
+    NEXUS_SOMBRA_TOKEN_FILE: /run/secrets/nexus_sombra_token
+  secrets: [nexus_sombra_token]
+```
+
+O servidor precisa estar com `NEXUS_ESPELHO_COMANDOS` ligado. Se a sombra estiver rodando junto do relay real, o token da sombra só deve ser usado por ela: duas conexões do mesmo token dividem os comandos.
+
+Relatório (só SELECT no banco; padrão 168 h = 7 dias):
+
+```bash
+docker compose exec nexus-api-blue /nexus-api sombra-relatorio --desde 168
+```
+
+Leitura, para `origem='espelho'` criados no período:
+
+- espelhados: total; entregues: já reservados por algum consumidor; confirmados: resultado `sombra`.
+- perdidos: expiraram sem nunca ter sido entregues. Tem de ser 0.
+- sem confirmação: encerrados sem `sombra` (entregues mas não confirmados, ou `erro:sem confirmacao`). Tem de ser 0.
+- pendentes: ainda abertos (não entram no veredito; confira de novo depois).
+- entregues mais de 1 vez: não há coluna de contagem de entregas, então usa `tentativas >= 1` (cada devolução à fila, por lease vencido ou reconexão do token, soma uma). Reconexão legítima com comando reservado e não confirmado aparece aqui. Tem de ser 0 numa janela sem quedas; durante queda, compare com o log do cliente.
+- atraso p50/p95: segundos entre `criado_em` e a confirmação `sombra`.
+- veredito `OK` só com perdidos, duplicados e sem confirmação em 0. A meta é 7 dias seguidos nesse estado.
+
 ## Atualizar a infraestrutura
 
 Mudanças em `compose.yml`, `nginx.conf` ou `deploy.sh` não chegam pelo CI: elas são instaladas a partir do repositório.
