@@ -39,6 +39,9 @@ const AO_VIVO: &[&str] = &[
     "askMin",
     "chance",
 ];
+/// Contadores de bolas que crescem a cada captura: o Nexus lê o estado importado com atraso e
+/// fica poucas dezenas atrás do legado. Tolerância de 1%.
+const CONTADORES: &[&str] = &["bolasDesde", "totalBolas"];
 const AMOSTRA: usize = 15;
 /// Validade do cache do mercado no legado (`TTL` do `bolsa.js`).
 const CACHE_MERCADO_LEGADO_MS: i64 = 3 * 60_000;
@@ -47,6 +50,14 @@ const CACHE_MERCADO_LEGADO_MS: i64 = 3 * 60_000;
 /// divergir no último bit).
 fn perto(a: f64, b: f64) -> bool {
     a == b || (a - b).abs() <= 1e-9 || (a - b).abs() <= 1e-6 * a.abs().max(b.abs())
+}
+
+/// O legado ainda não terminou o trabalho em segundo plano de `falta.sugestao` (veio `null`)
+/// enquanto o Nexus já tem a sugestão.
+fn sugestao_pendente(legado: &Value, nexus: &Value) -> bool {
+    let nula = |v: &Value| v.pointer("/falta/sugestao").is_some_and(Value::is_null);
+    let cheia = |v: &Value| v.pointer("/falta/sugestao").is_some_and(|x| !x.is_null());
+    nula(legado) && cheia(nexus)
 }
 
 /// Primeira diferença entre dois JSONs, com o caminho até ela.
@@ -69,6 +80,10 @@ pub fn diferenca(a: &Value, b: &Value, caminho: &str) -> Option<String> {
                         .any(|c| caminho.ends_with(c)));
             let ok = perto(x, y)
                 || (tempo && (x - y).abs() <= 1e-4 * x.abs().max(y.abs()))
+                || (CONTADORES
+                    .iter()
+                    .any(|c| caminho.ends_with(&format!(".{c}")))
+                    && (x - y).abs() <= 0.01 * x.abs().max(y.abs()))
                 || (vivo && (x - y).abs() <= 0.05 * x.abs().max(y.abs()));
             (!ok).then(|| format!("{caminho}: {x} ≠ {y}"))
         }
@@ -190,12 +205,22 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
         if !self.equipe_bolsa {
             return Ok(());
         }
-        let (status, l) = self.legado("/api/bolsa/equipe-propria").await?;
+        let (mut status, mut l) = self.legado("/api/bolsa/equipe-propria").await?;
         let n = estado
             .equipe_bolsa
             .propria(estado, None, None)
             .await
             .map_err(|e| e.to_string())?;
+        // O legado calcula a sugestão (`falta.sugestao`) num trabalho em segundo plano e responde
+        // `null` até ele terminar; o Nexus calcula na hora. Repete a leitura do legado até o
+        // trabalho acabar (é tempo, não lógica).
+        for _ in 0..4 {
+            if !sugestao_pendente(&l, &n) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            (status, l) = self.legado("/api/bolsa/equipe-propria").await?;
+        }
         let ns = if n.get("erro").is_some() { 404 } else { 200 };
         let colecao = |v: &Value| {
             (
@@ -960,6 +985,22 @@ mod testes {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn contador_de_bolas_tolera_atraso_e_sugestao_pendente_e_detectada() {
+        let a = json!({"contas": [{"bolasDesde": 118441, "outro": 5}]});
+        let b = json!({"contas": [{"bolasDesde": 118416, "outro": 5}]});
+        assert_eq!(diferenca(&a, &b, ""), None);
+        let c = json!({"contas": [{"bolasDesde": 118441, "outro": 6}]});
+        assert!(diferenca(&c, &b, "").is_some());
+        let longe = json!({"contas": [{"bolasDesde": 100000, "outro": 5}]});
+        assert!(diferenca(&a, &longe, "").is_some());
+        let l = json!({"falta": {"sugestao": null}});
+        let n = json!({"falta": {"sugestao": {"custoAproximado": 1090}}});
+        assert!(sugestao_pendente(&l, &n));
+        assert!(!sugestao_pendente(&n, &n));
+        assert!(!sugestao_pendente(&l, &l));
+    }
 
     #[test]
     fn dado_ao_vivo_tem_tolerancia_so_onde_deve() {
