@@ -38,11 +38,14 @@ const AO_VIVO: &[&str] = &[
     "comparaveis",
     "askMin",
     "chance",
+    // Bolas por hora = `kph × bolasKill` do ritmo, taxa recalculada a cada leitura do relay;
+    // o Nexus lê o estado importado com atraso e a taxa oscila 1–3% entre as duas leituras.
+    "bph",
 ];
 /// Contadores de bolas que crescem a cada captura: o Nexus lê o estado importado com atraso e
-/// fica poucas dezenas atrás do legado. Tolerância de 1%; `bph` (bolas por hora) é derivado
-/// do mesmo contador e herda o atraso.
-const CONTADORES: &[&str] = &["bolasDesde", "totalBolas", "bph"];
+/// fica poucas dezenas atrás do legado. Tolerância de 1%; `azar` (chance de já ter saído o
+/// shiny) é derivado de `bolasDesde` e herda o atraso.
+const CONTADORES: &[&str] = &["bolasDesde", "totalBolas", "azar"];
 const AMOSTRA: usize = 15;
 /// Validade do cache do mercado no legado (`TTL` do `bolsa.js`).
 const CACHE_MERCADO_LEGADO_MS: i64 = 3 * 60_000;
@@ -53,12 +56,16 @@ fn perto(a: f64, b: f64) -> bool {
     a == b || (a - b).abs() <= 1e-9 || (a - b).abs() <= 1e-6 * a.abs().max(b.abs())
 }
 
-/// O legado ainda não terminou o trabalho em segundo plano de `falta.sugestao` (veio `null`)
-/// enquanto o Nexus já tem a sugestão.
+/// O legado ainda não terminou o trabalho em segundo plano de `falta.sugestao` enquanto o
+/// Nexus já tem o custo. Enquanto o trabalho roda, o legado responde `null` ou só a `nota`
+/// ("Veja a aba Econômica..."), sem `custoAproximado`.
 fn sugestao_pendente(legado: &Value, nexus: &Value) -> bool {
-    let nula = |v: &Value| v.pointer("/falta/sugestao").is_some_and(Value::is_null);
-    let cheia = |v: &Value| v.pointer("/falta/sugestao").is_some_and(|x| !x.is_null());
-    nula(legado) && cheia(nexus)
+    let sem_custo = |v: &Value| {
+        v.pointer("/falta/sugestao")
+            .is_some_and(|s| s.get("custoAproximado").is_none())
+    };
+    let com_custo = |v: &Value| v.pointer("/falta/sugestao/custoAproximado").is_some();
+    sem_custo(legado) && com_custo(nexus)
 }
 
 /// Primeira diferença entre dois JSONs, com o caminho até ela.
@@ -214,8 +221,9 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
             .map_err(|e| e.to_string())?;
         // O legado calcula a sugestão (`falta.sugestao`) num trabalho em segundo plano e responde
         // `null` até ele terminar; o Nexus calcula na hora. Repete a leitura do legado até o
-        // trabalho acabar (é tempo, não lógica).
-        for _ in 0..4 {
+        // trabalho acabar (é tempo, não lógica). O trabalho entra numa fila de equipes e pode
+        // levar perto de um minuto.
+        for _ in 0..12 {
             if !sugestao_pendente(&l, &n) {
                 break;
             }
@@ -923,11 +931,31 @@ fn comparar_ofertas(r: &mut ResultadoRota, legado: &Value, nexus: &Value) {
             .unwrap_or_default()
     };
     let (l, n) = (por_id(legado), por_id(nexus));
+    let mut puladas: u64 = 0;
     l.iter().for_each(|(id, o)| match n.get(id) {
+        Some(x) if cotacao_de_outro_instante(o, x) => puladas += 1,
         Some(x) => r.registrar(&id.to_string(), diferenca(o, x, "")),
         None => r.so_legado += 1,
     });
     r.so_nexus = n.keys().filter(|k| !l.contains_key(*k)).count() as u64;
+    // Fica visível: se quase todas forem puladas sempre, a contagem de vendas do Nexus diverge.
+    if puladas > 0 {
+        metrics::counter!("nexus_paridade_ofertas_puladas_total").increment(puladas);
+        tracing::info!(
+            puladas,
+            comparadas = r.comparados,
+            "ofertas de pokémon fora da comparação: cotação com base de vendas diferente"
+        );
+    }
+}
+
+/// Dado ao vivo: o legado guarda a cotação de cada pokémon por 30 minutos e o Nexus cota em
+/// outro instante. Se as vendas usadas (`comparaveis`) diferem, os dois partiram de bases
+/// diferentes e a oferta não entra na comparação. Com a mesma base, qualquer diferença conta.
+fn cotacao_de_outro_instante(legado: &Value, nexus: &Value) -> bool {
+    let precificador = |o: &Value| o.get("fonte").and_then(Value::as_str) == Some("precificador");
+    let base = |o: &Value| o.get("comparaveis").and_then(Value::as_f64);
+    precificador(legado) && precificador(nexus) && base(legado) != base(nexus)
 }
 
 fn tirar(v: &mut Value, campo: &str) -> Value {
@@ -1001,6 +1029,9 @@ mod testes {
         assert!(sugestao_pendente(&l, &n));
         assert!(!sugestao_pendente(&n, &n));
         assert!(!sugestao_pendente(&l, &l));
+        let nota = json!({"falta": {"sugestao": {"nota": "Veja a aba Econômica"}}});
+        assert!(sugestao_pendente(&nota, &n));
+        assert!(!sugestao_pendente(&nota, &nota));
     }
 
     #[test]
@@ -1010,6 +1041,20 @@ mod testes {
         assert_eq!(diferenca(&a, &b, ""), None);
         let c = json!({"confianca": {"chance": 0.4989494951215404}, "ofStat": {"n": 100}, "poder": 1.03});
         assert!(diferenca(&a, &c, "").is_some());
+    }
+
+    #[test]
+    fn cotacao_com_base_diferente_fica_fora() {
+        let of = |id: i64, base: f64, desconto: f64| json!({"ofertaId": id, "fonte": "precificador", "comparaveis": base, "desconto": desconto});
+        let mut r = ResultadoRota::default();
+        let l = json!([of(1, 35689.0, -0.28), of(2, 100.0, -0.1)]);
+        let n = json!([of(1, 35710.0, -0.19), of(2, 100.0, -0.2)]);
+        comparar_ofertas(&mut r, &l, &n);
+        assert_eq!((r.comparados, r.iguais), (1, 0));
+        let item = |d: f64| json!([{"ofertaId": 3, "fonte": "mediana 7d do item", "comparaveis": 5, "desconto": d}]);
+        let mut r = ResultadoRota::default();
+        comparar_ofertas(&mut r, &item(-0.1), &item(-0.3));
+        assert_eq!((r.comparados, r.iguais), (1, 0));
     }
 
     #[test]
