@@ -242,6 +242,148 @@ async fn registrar(
     Ok(())
 }
 
+/// Uma decisão do laço em sombra, para `nexus.motor_decisao`.
+#[derive(Debug, Clone)]
+pub struct LinhaDecisao {
+    pub ciclo: i64,
+    pub nick: String,
+    pub regra: String,
+    pub decisao: String,
+    pub dados: Value,
+}
+
+/// Grava as decisões de um ciclo de uma vez.
+pub async fn gravar_decisoes(db: &PgPool, linhas: &[LinhaDecisao]) -> Result<u64, sqlx::Error> {
+    if linhas.is_empty() {
+        return Ok(0);
+    }
+    let ciclos: Vec<i64> = linhas.iter().map(|l| l.ciclo).collect();
+    let nicks: Vec<&str> = linhas.iter().map(|l| l.nick.as_str()).collect();
+    let regras: Vec<&str> = linhas.iter().map(|l| l.regra.as_str()).collect();
+    let decisoes: Vec<&str> = linhas.iter().map(|l| l.decisao.as_str()).collect();
+    let dados = Value::Array(linhas.iter().map(|l| l.dados.clone()).collect());
+    Ok(sqlx::query(
+        "INSERT INTO nexus.motor_decisao (ciclo, nick, regra, decisao, dados)
+         SELECT c, n, r, k, d
+         FROM unnest($1::bigint[], $2::text[], $3::text[], $4::text[]) WITH ORDINALITY AS a(c, n, r, k, o)
+         JOIN jsonb_array_elements($5) WITH ORDINALITY AS b(d, o2) ON o = o2",
+    )
+    .bind(&ciclos)
+    .bind(&nicks)
+    .bind(&regras)
+    .bind(&decisoes)
+    .bind(dados)
+    .execute(db)
+    .await?
+    .rows_affected())
+}
+
+/// Decisões gravadas desde `desde_ms` (instante do ciclo), da mais antiga para a mais nova:
+/// `(ciclo, nick, regra, dados)`.
+pub async fn decisoes_desde(
+    db: &PgPool,
+    desde_ms: i64,
+) -> Result<Vec<(i64, String, String, Value)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT ciclo, nick, regra, dados FROM nexus.motor_decisao WHERE ciclo >= $1
+         ORDER BY ciclo, id",
+    )
+    .bind(desde_ms)
+    .fetch_all(db)
+    .await
+}
+
+/// Com `NEXUS_ESCRITA_MOTOR`: põe na fila da fase 3 os comandos do ciclo `ciclo` (ms),
+/// `(conta, tipo, params)`, com origem `motor`. `expira_ms` é um instante absoluto (ms desde
+/// 1970): um comando de ciclo velho não vale mais. A chave de idempotência (ciclo, conta,
+/// posição) evita duplicar se o mesmo ciclo for enfileirado de novo depois de uma falha no
+/// meio. Devolve os ids.
+pub async fn enfileirar(
+    db: &PgPool,
+    ciclo: i64,
+    comandos: &[(String, String, Value)],
+    expira_ms: i64,
+) -> Result<Vec<i64>, sqlx::Error> {
+    let mut ids = Vec::with_capacity(comandos.len());
+    for (i, (conta, tipo, params)) in comandos.iter().enumerate() {
+        let novo = crate::comandos::NovoComando {
+            conta,
+            tipo,
+            params,
+            prioridade: 5,
+            origem: "motor",
+            expira_ms,
+        };
+        let chave = format!("motor:{ciclo}:{i}");
+        ids.push(
+            crate::comandos::inserir_ext(db, &novo, Some(&chave), None)
+                .await?
+                .0,
+        );
+    }
+    Ok(ids)
+}
+
+/// Retenção: apaga decisões com mais de `dias_decisao` e ações do legado com mais de
+/// `dias_acao` (pelo instante do ciclo / da ação). Devolve (decisões, ações) apagadas.
+pub async fn podar_sombra(
+    db: &PgPool,
+    agora_ms: i64,
+    dias_decisao: i64,
+    dias_acao: i64,
+) -> Result<(u64, u64), sqlx::Error> {
+    let dia = 86_400_000;
+    let d = sqlx::query("DELETE FROM nexus.motor_decisao WHERE ciclo < $1")
+        .bind(agora_ms - dias_decisao * dia)
+        .execute(db)
+        .await?
+        .rows_affected();
+    let a = sqlx::query("DELETE FROM nexus.motor_acao_legado WHERE t < $1")
+        .bind(agora_ms - dias_acao * dia)
+        .execute(db)
+        .await?
+        .rows_affected();
+    Ok((d, a))
+}
+
+/// Guarda as ações do legado ainda não vistas (`acoes` do `D` de um ciclo). Devolve quantas
+/// eram novas.
+pub async fn gravar_acoes_legado(db: &PgPool, acoes: &[Value]) -> Result<u64, sqlx::Error> {
+    let validas: Vec<Value> = acoes
+        .iter()
+        .filter(|a| a.get("t").and_then(Value::as_i64).is_some())
+        .cloned()
+        .collect();
+    if validas.is_empty() {
+        return Ok(0);
+    }
+    Ok(sqlx::query(
+        "INSERT INTO nexus.motor_acao_legado (t, nick, tipo, texto, ok, dados)
+         SELECT (a->>'t')::bigint, coalesce(a->>'nick', ''), coalesce(a->>'tipo', ''),
+                coalesce(a->>'texto', ''),
+                CASE jsonb_typeof(a->'ok') WHEN 'boolean' THEN (a->>'ok')::boolean END, a
+         FROM jsonb_array_elements($1) AS x(a)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Value::Array(validas))
+    .execute(db)
+    .await?
+    .rows_affected())
+}
+
+/// Ações do legado guardadas desde `desde_ms`: `(t, nick, tipo, texto)`, por tempo.
+pub async fn acoes_legado_desde(
+    db: &PgPool,
+    desde_ms: i64,
+) -> Result<Vec<(i64, String, String, String)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT t, nick, tipo, texto FROM nexus.motor_acao_legado WHERE t >= $1 ORDER BY t",
+    )
+    .bind(desde_ms)
+    .fetch_all(db)
+    .await
+}
+
 /// Primeira diferença exata entre dois JSONs, com o caminho. `None` se forem iguais.
 /// Sem tolerância: o banco tem de devolver o arquivo igual (números comparados pelo valor,
 /// como no JS: `1` e `1.0` são o mesmo número).

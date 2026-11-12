@@ -112,6 +112,7 @@ async fn bolsa_no_banco_de_teste() {
     fase3_comandos(&db).await;
     fase3_raros_e_tentativas(&db).await;
     motor_estado(&db).await;
+    motor_sombra(&db).await;
 }
 
 /// Wiki de bosses, faltas, sugestões e preços típicos.
@@ -752,6 +753,78 @@ async fn timescale_evento(db: &PgPool) {
     assert_eq!(cagg, 1);
     // Sem política de retenção (apagar dados exige autorização).
     assert!(!jobs.contains(&"policy_retention".to_string()));
+}
+
+/// Fase 4, etapa 5: decisões em sombra, ações do legado sem repetição e, com a escrita
+/// ligada, os comandos na fila da fase 3 com origem `motor`.
+async fn motor_sombra(db: &PgPool) {
+    use persistencia::motor;
+    let linha = |ciclo, regra: &str| motor::LinhaDecisao {
+        ciclo,
+        nick: "Conta1".into(),
+        regra: regra.into(),
+        decisao: "comando".into(),
+        dados: json!({"decisao": {"decisao": "comando"}, "esperadas": []}),
+    };
+    let n = motor::gravar_decisoes(db, &[linha(1_000, "motorBola"), linha(2_000, "motorPocao")])
+        .await
+        .unwrap();
+    assert_eq!(n, 2);
+    assert_eq!(motor::gravar_decisoes(db, &[]).await.unwrap(), 0);
+    let d = motor::decisoes_desde(db, 1_500).await.unwrap();
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].2, "motorPocao");
+
+    let acoes = [
+        json!({"t": 10, "nick": "Conta1", "tipo": "bola", "texto": "religuei", "ok": true}),
+        json!({"t": 20, "nick": "Conta1", "tipo": "alerta", "texto": "x"}),
+        json!({"nick": "sem t"}),
+    ];
+    assert_eq!(motor::gravar_acoes_legado(db, &acoes).await.unwrap(), 2);
+    // O mesmo `D` no ciclo seguinte não repete.
+    assert_eq!(motor::gravar_acoes_legado(db, &acoes).await.unwrap(), 0);
+    let a = motor::acoes_legado_desde(db, 15).await.unwrap();
+    assert_eq!(
+        a,
+        [(20, "Conta1".to_owned(), "alerta".to_owned(), "x".to_owned())]
+    );
+
+    let fila = [(
+        "Conta1".to_owned(),
+        "motor.auto.set".to_owned(),
+        json!({"t": "auto.set", "autoBallSemParar": true}),
+    )];
+    // 2100-01-01: longe o bastante para o teste.
+    let ids = motor::enfileirar(db, 1, &fila, 4_102_444_800_000)
+        .await
+        .unwrap();
+    assert_eq!(ids.len(), 1);
+    // O mesmo ciclo de novo não duplica.
+    assert_eq!(
+        motor::enfileirar(db, 1, &fila, 4_102_444_800_000)
+            .await
+            .unwrap(),
+        ids
+    );
+    // Texto longo cabe na chave (md5) e a poda respeita a idade.
+    let longo = json!({"t": 30, "nick": "Conta1", "tipo": "alerta", "texto": "x".repeat(10_000)});
+    assert_eq!(motor::gravar_acoes_legado(db, &[longo]).await.unwrap(), 1);
+    assert_eq!(
+        motor::podar_sombra(db, 86_400_000 + 2_500, 1, 1)
+            .await
+            .unwrap(),
+        (2, 3)
+    );
+    let (tipo, origem): (String, String) =
+        sqlx::query_as("SELECT tipo, origem FROM nexus.comando WHERE id = $1")
+            .bind(ids[0])
+            .fetch_one(db)
+            .await
+            .unwrap();
+    assert_eq!(
+        (tipo.as_str(), origem.as_str()),
+        ("motor.auto.set", "motor")
+    );
 }
 
 /// Fase 4: o estado do motor volta do banco igual ao arquivo (menos `acesso`).
