@@ -149,28 +149,52 @@ Em produção, o estado importado hoje é o do arquivo da VPS, provisório: é o
 - **Erro.** Onde o JS lançaria `TypeError` (campo ausente lido como lista), 500 `{erro: "erro interno"}`, como o legado.
 - **Comparador `motor.*`.** `NEXUS_PARIDADE_MOTOR_URL` liga a comparação no `paridade-continua`; `nexus-api paridade-motor <url>` roda uma vez. Cada rota sem `nick` e, as por conta, com cada nick do estado. Comparação exata (status e corpo), sem tolerância: o Nexus calcula no `agora` que o legado devolveu. Contra o motor da VPS, num banco descartável com o arquivo dela: 58 de 58 iguais.
 
-### Etapa 4: regras no `nucleo` (em andamento)
+### Etapa 4: regras no `nucleo` (feita)
 
-Uma função pura por `motorX` em `nucleo::motor::regras`: conta ao vivo (`ContaViva`) + `D` + relógio → lista de `Decisao`. O estado que o legado guarda entre ciclos (antiflood dos alertas, falhas de poção, horário da última venda) fica em `EstadoLaco`, para a regra continuar pura.
+Uma função pura por `motorX` em `nucleo::motor::regras`: conta ao vivo (`ContaViva`) + `D` + relógio → lista de `Decisao`. O estado que o legado guarda entre ciclos (antiflood dos alertas, marcas de tempo por conta, última hunt) fica em `EstadoLaco`, para a regra continuar pura. `nucleo::motor::laco::ciclo` roda as doze na ordem do legado: poção, compra, hunt, vender, equipe, bola, rodízio, shiny, médias, pedras, radar, extras.
 
-- **Estado da janela.** O `/api/estado` só resume o `welcome` (hunts viram um número, itens só os de cura). O motor do PC ganhou duas rotas só de leitura: `GET /api/nexus/dados` (o `D` inteiro, sem `acesso`) e `GET /api/nexus/janela` (`ultimo`, `welcome` completo, `pub`, `huntKey`, linhas do HUD e estado da venda de cada conta). São a fonte da sombra até a A2.
-- **Versão de referência.** O motor do PC e a cópia do servidor tinham divergido: o PC tinha o coletor do Mercado, o servidor tinha o acesso pela Tailscale e correções. Os dois foram unidos (merge de três vias, um conflito resolvido) e o PC roda a versão unida. As regras são portadas dela.
-- **Fixtures.** Capturas do mesmo instante de `nexus/dados`, `nexus/janela` e `estado` (com os planos que o legado calculou), com quatro contas conectadas. Ficam fora do repositório, por conterem dados das contas.
-- **Feito:** `motorShinyBolas` e o `alerta()`.
-- **Ordem do resto**, da menor dependência para a maior: `motorRadar`, `motorMedias`, `motorBola`, `motorPedras`, `motorExtras`, `planoCompra` → `motorCompra` e `motorPocao`, `planoVender` (com o `veredito.js`) → `motorVender`, `planoHunt` → `motorHunt`, `planoRodizio`/`planoEquipe` → `motorRodizio`/`motorEquipe` (reaproveitando o combate e o otimizador da fase 2).
+- **Estado da janela.** O `/api/estado` só resume o `welcome`. O motor do PC ganhou duas rotas só de leitura: `GET /api/nexus/dados` (o `D` inteiro, sem `acesso`) e `GET /api/nexus/janela` (`ultimo`, `welcome`, `pub`, `huntKey`, linhas do HUD, estado da venda). São a fonte da sombra até a A2.
+- **Foto do início do ciclo.** As regras do legado mudam o estado da conta durante o ciclo (`cons`, `ouroMax`, `huntDesde`). Para o Nexus decidir sobre o mesmo estado, o motor do PC tira uma foto de cada conta logo depois da checagem de pausa (`nexusFoto`) e a janela devolve `ciclo` (instante e estado do laço) e `antes` por conta. Sem ela, a sombra via o estado já alterado e dava falso acerto.
+- **Versão de referência.** O motor do PC e a cópia do servidor tinham divergido; foram unidos (merge de três vias, um conflito resolvido a favor do servidor). As regras são portadas da versão unida.
+- **Fixtures.** Capturas do mesmo instante de `nexus/dados`, `nexus/janela` e `estado`, com quatro contas. Todos os planos (`planoCompra`, `planoHunt`, `planoVender` com hash, pedras, rodízio, equipe, builds, combate, raros) batem com o que o legado calculou. Ficam fora do repositório (dados das contas); os testes que as usam ficam `#[ignore]`.
+- As funções `motorX` têm testes de unidade; a prova delas é a sombra (etapa 5).
 
-### Etapa 5: escrita e laço
+### Etapa 5: laço em sombra e escrita atrás de flag
 
-Rotas de escrita e o laço de 30 s atrás de `NEXUS_ESCRITA_MOTOR` (desligada). Com a flag desligada, o laço roda em **sombra**: calcula as decisões e grava em `nexus.motor_decisao`, sem enfileirar comando. O comparador confronta essas decisões com as `acoes` do legado no mesmo período.
+`nexus-api paridade-continua` roda também o laço do motor quando `NEXUS_MOTOR_SOMBRA_URL` aponta para o motor do legado (`NEXUS_MOTOR_SOMBRA_S`, padrão 30 s). A cada ciclo:
 
-### Etapa 6: cutover
+1. lê `GET /api/nexus/dados` e `GET /api/nexus/janela` do legado e grava as ações novas;
+2. só segue se o legado fechou um ciclo novo (`ciclo.t`); usa esse instante como `agora`, tira do `D` as ações do próprio ciclo e pega o antiflood e a última hunt do estado do laço do legado;
+3. acumula as linhas do HUD de cada conta (a rota manda as últimas 500; o espelho acha a sobreposição e acrescenta o resto, como o vetor do legado, que só cresce);
+4. roda as regras (`laco::ciclo`, com `catch_unwind`: um pânico perde o ciclo, não o laço; nada com `D.pausa`);
+5. grava as decisões em `nexus.motor_decisao` (com as ações que o legado gravaria). As ações do legado ficam em `nexus.motor_acao_legado` (o legado guarda só 300; aqui acumulam sem repetir, chave com `md5` do texto). Poda de hora em hora: 14 dias de decisões, 30 de ações.
 
-Na etapa 6, depois da paridade.
+`nexus-api motor-sombra-relatorio [--desde <horas>]` confronta as duas: uma decisão bate com uma ação da mesma conta e tipo, com o mesmo texto (ou o começo do de falha, que traz a resposta do jogo), a até dois ciclos mais um minuto. Só entram os tipos que o Nexus já decide.
+
+Com `NEXUS_ESCRITA_MOTOR=true`, os comandos do ciclo vão também para a fila da fase 3 (`nexus.comando`, origem `motor`, tipo `motor.<t>`, validade de dois ciclos, chave de idempotência `motor:<ciclo>:<i>`), para o app executar. Fica desligada até o cutover; ligada, só nos testes de integração.
+
+**O que a sombra ainda não reproduz:** o que acontece depois da resposta do jogo dentro da própria regra (ex.: a conferência de estoque 15 s depois da compra, que desliga a compra automática). Em sombra o Nexus assume resposta `ok`; a consequência do lado do legado chega no `D` do ciclo seguinte, e é ela que o Nexus passa a ver.
+
+### Etapa 6: plano de cutover
+
+Tudo nasce desligado; cada passo volta atrás desligando a flag e reiniciando o container.
+
+**Sombra (já possível):**
+
+1. Motor do PC com as rotas `/api/nexus/*` (versão unida) e alcançável pela Tailscale.
+2. `NEXUS_MOTOR_SOMBRA_URL` no `nexus-paridade`, com `NEXUS_MOTOR_SOMBRA_FUSO_MIN=-180` (o `NEXUS_MOTOR_FUSO_MIN` segue o do comparador).
+3. `motor-sombra-relatorio` por 7 dias de uso normal: o critério é nenhuma decisão só de um lado, fora as explicadas (primeira hora depois de subir, ações feitas na mão).
+4. Comparador `motor.*` contra o PC, com o estado importado de `/api/nexus/dados`.
+
+**Cutover (decisão do dono do projeto, numa janela só, depois da A2):**
+
+1. O app da A2 conectado no `/ws` executa os comandos `motor.*` e manda o estado da janela (substitui a rota `/api/nexus/janela`).
+2. Importar o `D` do PC uma última vez; o estado do motor passa a ser só do Nexus (`nexus.motor_*`), e as rotas de escrita do motor (config, builds, pausa, venda) passam a gravar lá.
+3. Ligar `NEXUS_ESCRITA_MOTOR` e, na mesma janela, desligar o laço do motor do legado no PC, para nunca haver dois executores.
+4. Ligar `NEXUS_MELHORIAS` para o que foi guardado atrás dela.
+
+**Volta atrás:** desligar `NEXUS_ESCRITA_MOTOR` e religar o laço do legado; o `D` do legado continua de pé até a fase de desligamento.
 
 ## Perguntas em aberto
 
-Respondidas: o motor ativo é o Electron do PC (perguntas 1 e 2). Falta liberar a porta dele na Tailscale para a VPS e combinar a cópia do arquivo. O `GET /api/backup` não serve para isso: traz só parte do `D` (sem `saldo`, `horas`, `carimbos`).
-
-1. **Onde o motor roda de verdade hoje?** Na VPS ele está sem navegador e sem contas. Se o motor ativo é o Electron do PC, o `holodex-dados.json` de referência está lá, e a sombra precisa de uma cópia periódica desse arquivo e de acesso ao `/api/estado` dele (pelo Tailscale, só leitura).
-2. **Importar qual arquivo:** o da VPS (parado há ~40 h) ou o do PC?
-3. **`motorExtras` e `motorRadar`** não foram detalhados no levantamento; entram na etapa 4.
+Respondidas: o motor ativo é o Electron do PC, alcançável pela Tailscale (só leitura). A sombra lê o `D` dele pela rota `/api/nexus/dados`; o `GET /api/backup` não serve (traz só parte do `D`). `motorExtras` e `motorRadar` foram portados na etapa 4.
