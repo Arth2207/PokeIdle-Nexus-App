@@ -67,6 +67,13 @@ O `seq` é global do processo e cresce a cada mensagem do servidor com `seq`. El
 | `comando.cancelado` | Um comando pendente expirou ou foi cancelado |
 | `bolsa.atualizada` | Os tickers foram recalculados |
 | `alvos.atualizados` | A lista de alvos de coleta mudou |
+| `evento.ack` | Resposta a um `evento.lote` (ver abaixo) |
+| `erro` | Uma mensagem do cliente falhou: `{motivo, seq_cliente?}`, com `motivo` em `limite_taxa`, `ingestao_desligada`, `conta_proibida`, `conta_obrigatoria` ou `banco_indisponivel` |
+| `raro.novo` | `NEXUS_MELHORIAS`. Item novo no estado de raros: `{id, nome, conta}`. Um aviso por conta dona do item; item sem conta só chega a tokens globais |
+| `shiny.novo` | `NEXUS_MELHORIAS`. Shiny registrado: `{nick, dia, quantidade, total_dia}` |
+| `comando.estado` | `NEXUS_MELHORIAS`. `{id, conta, estado}` com `estado` em `criado`, `entregue`, `confirmado` ou `expirado` (vem do NOTIFY da fila; comando que esgota tentativas não gera aviso) |
+
+Os informativos novos têm `seq`, entram no buffer do `retomar` e respeitam o escopo: token de conta só recebe os da própria conta.
 
 **Cliente → servidor**
 
@@ -75,6 +82,15 @@ O `seq` é global do processo e cresce a cada mensagem do servidor com `seq`. El
 | `retomar` | Ao reconectar, com `{ "desde": <ultimo seq recebido> }` |
 | `comando.resultado` | Resultado da execução de um comando no jogo |
 | `ack` | Confirma o recebimento até um `seq` |
+| `evento.lote` | Eventos do jogo: `{seq_cliente, conta?, eventos[]}` |
+
+### `evento.lote` e `evento.ack`
+
+O lote é gravado pela mesma função do `POST /ingest` (mesma validação, mesmo escopo de conta, mesma flag `NEXUS_ESCRITA_INGESTAO`). `conta` é o nick do lote: opcional em token preso a uma conta, obrigatório em token global. O servidor responde `evento.ack` `{seq_cliente, ok, duplicados, erros}`: `ok` é `true` quando o lote foi processado, `duplicados` conta eventos que já estavam gravados e `erros` os rejeitados pela validação. O `seq_cliente` só volta no ack; a dedup é pelo conteúdo, igual ao `POST /ingest`: o mesmo evento por HTTP ou WS, ou com o contador zerado, é uma linha só. Token de várias contas precisa mandar `conta` dentro do escopo. Com `NEXUS_MELHORIAS` há limite de taxa por token (`NEXUS_LIMITE_INGESTAO_*`); estourado, vem `erro` com `limite_taxa`.
+
+### Compressão
+
+`permessage-deflate` não é negociado: o `tungstenite` usado pelo axum não o implementa. Mensagens seguem sem compressão (o nginx pode comprimir o tráfego, se for o caso).
 
 ## Origem dos eventos
 

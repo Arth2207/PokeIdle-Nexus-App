@@ -167,6 +167,14 @@ Quatro flags, todas desligadas por padrão. Enquanto estiverem assim, o relay se
 
 A migration `20261114000001_fase3.sql` é só aditiva (schema `nexus`); aplica no deploy como as outras. Métricas da fila: `nexus_comandos_entregues_total{origem}`, `nexus_comandos_duplicados_total` (2ª entrega ao mesmo relay), `nexus_comandos_confirmados_total{sombra}`, `nexus_comandos_perdidos_total` (expirou sem ninguém receber), `nexus_comandos_devolvidos_total` e `nexus_comandos_sem_confirmacao_total`. O `GET /ws` (veja [websocket](websocket.md)) responde 503 se `NEXUS_ESCRITA_COMANDOS` e `NEXUS_ESPELHO_COMANDOS` estiverem desligadas; o nginx precisa liberar o upgrade nessa rota. O comparador passou a incluir `raros2`, `raros2.cartas` e `shiny`; só compara quando os dois lados têm o mesmo `dadosEm`.
 
+### Timescale em `nexus.evento` e observabilidade da fase 3
+
+A migration `20261115000001_timescale_evento.sql` (sem transação, só com a extensão) liga compressão de `nexus.evento` (segmentada por conta e tipo, ordenada por `em DESC`, após 7 dias) e cria o agregado contínuo `nexus.evento_hora` (contagem por hora, conta e tipo, em tempo real, refresh a cada 30 min). O `evento_hora` materializa só os últimos 3 dias (`start_offset` da policy); lote atrasado mais antigo só aparece na leitura em tempo real. `Idempotency-Key` com payload diferente devolve o id antigo (a chave manda, o corpo não é comparado). **Sem retenção:** apagar dados exige autorização. Se um dia for autorizado: `SELECT add_retention_policy('nexus.evento', interval '180 days')` (qualificando pelo schema da extensão). A `20261115000002_comando_melhorias.sql` acrescenta `chave_idem`, `executar_em` e `agendado_avisado` em `nexus.comando` e amplia o trigger de aviso.
+
+Flags novas: `NEXUS_LIMITE_INGESTAO_RPS` (50) e `NEXUS_LIMITE_INGESTAO_RAJADA` (200), limite por token da ingestão, **aplicado só com `NEXUS_MELHORIAS=true`** (sem ela nunca há `429`, como no legado). O push ao vivo (`raro.novo`, `shiny.novo`, `comando.estado`), `/api/comandos/falhos`, `/reenviar`, `executar_em` e `/api/eventos` ficam atrás de `NEXUS_MELHORIAS`. O webhook do Discord não foi feito: o `reqwest` do workspace está sem TLS.
+
+Métricas novas: `nexus_comandos_pendentes{idade=ate_1m|ate_5m|mais_5m}`, `nexus_comando_pendente_mais_antigo_segundos`, `nexus_espelho_comandos_lag_ids`, `nexus_ws_lotes_limitados_total`, `nexus_comandos_agendados_liberados_total` (e `nexus_ws_conexoes_abertas`, que já existia). Dashboard e alertas de referência (não aplicados): `docs/observabilidade/fase3-grafana.json` e `fase3-alertas.yml`.
+
 ### Melhorias e tokens por conta
 
 `NEXUS_MELHORIAS=true` liga o que diverge do legado de propósito ([ADR 0010](adr/0010-paridade-primeiro-melhorias-depois.md)): seleção exata nos perfis de equipe, chance de vitória, ordem de compra, preços típicos corrigidos e a tabela de tipos do servidor. Só no cutover da fase 2.

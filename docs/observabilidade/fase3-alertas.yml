@@ -1,0 +1,48 @@
+# Regras de alerta da fase 3 (Prometheus). Arquivo de referência: não é aplicado pelo repo;
+# quem opera copia para o Prometheus. Métricas vêm do `nexus-api` (porta de métricas).
+groups:
+  - name: nexus-fase3
+    rules:
+      - alert: NexusComandoPendenteMuitoTempo
+        expr: nexus_comando_pendente_mais_antigo_segundos > 300
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: "Comando pendente há mais de 5 minutos"
+          description: "Há comando na fila sem ser entregue. Confira se o relay está conectado."
+
+      - alert: NexusWsSemConexao
+        expr: nexus_ws_conexoes_abertas == 0
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Nenhuma conexão WebSocket há 10 minutos"
+          description: "Nenhum relay conectado em /ws."
+
+      - alert: NexusIngestaoParada
+        # Havia ingestão na última hora e nada foi aceito nos últimos 15 minutos.
+        expr: |
+          sum(increase(nexus_ingest_eventos_total{resultado="aceito"}[15m])) == 0
+          and
+          sum(increase(nexus_ingest_eventos_total{resultado="aceito"}[1h] offset 15m)) > 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Ingestão de eventos parada há 15 minutos"
+          description: "Nenhum evento novo aceito em POST /ingest nem em evento.lote."
+
+      - alert: NexusEspelhoAtrasado
+        expr: nexus_espelho_comandos_lag_ids > 50
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Espelho da fila de comandos atrasado"
+          description: "O espelho está mais de 50 ids atrás de public.comando_fila."
+
+      - alert: NexusWsLotesLimitados
+        expr: increase(nexus_ws_lotes_limitados_total[10m]) > 0
+        for: 10m
+        labels: { severity: info }
+        annotations:
+          summary: "Lotes de eventos do WebSocket sendo limitados"
+          description: "Um token está estourando o limite NEXUS_LIMITE_INGESTAO_*."
