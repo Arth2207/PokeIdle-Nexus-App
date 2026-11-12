@@ -11,6 +11,11 @@ ignore = [
     # integração (dev-dependency): não entra no binário nem na imagem. Revisar quando o
     # testcontainers trocar de crate de tar.
     { id = "RUSTSEC-2026-0440", reason = "só em dev-dependency (testcontainers); fora da imagem" },
+    # SQLite < 3.54.0: retorna memória não inicializada quando WAL tem page size diferente do DB.
+    # Vetor local — requer WAL crafted por terceiro. Não aplicável: lemos mapa.db do próprio
+    # servidor (holodex). rusqlite 0.41 (fix) conflita com libsqlite3-sys exigido pelo sqlx 0.9.
+    # Reavaliar quando sqlx 0.10 relaxar o pin de libsqlite3-sys.
+    { id = "RUSTSEC-2026-0459", reason = "vetor não aplicável (mapa.db local/confiável); upgrade bloqueado por conflito sqlx-sqlite 0.9 × libsqlite3-sys" },
 ]
 
 [licenses]
