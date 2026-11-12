@@ -18,6 +18,8 @@
 //!   nexus-api paridade [url]                   uma rodada de comparação com o legado
 //!   nexus-api paridade-continua                comparador em loop, gravando em nexus.paridade
 //!   nexus-api paridade-motor <url>             compara só as rotas GET do motor (motor.*)
+//!   nexus-api motor-sombra <url> [--ciclos n]   roda n ciclos do motor em sombra e sai
+//!   nexus-api motor-sombra-relatorio [--desde h] decisões do motor em sombra × ações do legado
 //!   nexus-api avaliar-fichas <agora_ms>        diagnóstico: valor justo de fichas (stdin)
 //!   nexus-api sombra                           cliente sombra do WebSocket (NEXUS_SOMBRA_URL, NEXUS_SOMBRA_TOKEN_FILE)
 //!   nexus-api sombra-relatorio [--desde <h>] [--origem espelho|sintetico|todas]   relatório da sombra (só SELECT; padrão 168 h, todas)
@@ -35,6 +37,7 @@ mod etag;
 mod limite;
 mod metricas;
 mod motor;
+mod motor_sombra;
 mod raros;
 mod rotas;
 mod sombra;
@@ -58,7 +61,7 @@ use crate::estado::Estado;
 const USO: &str = "uso: nexus-api [migrar | token criar <nome> <escopos> [conta] | \
 importar itens|especies|base|meus-itens|pokedex|equipes|wiki|faltas|welcome|raros|motor|motor-contas | \
 comparar-motor motor|motor-contas | paridade [url] | \
-paridade-continua | paridade-motor <url> | sombra | sombra-relatorio [--desde <horas>] [--origem espelho|sintetico|todas] | avaliar-fichas <agora_ms> | pokedex-divergencias | healthcheck]";
+paridade-continua | paridade-motor <url> | motor-sombra <url> [--ciclos <n>] | motor-sombra-relatorio [--desde <horas>] | sombra | sombra-relatorio [--desde <horas>] [--origem espelho|sintetico|todas] | avaliar-fichas <agora_ms> | pokedex-divergencias | healthcheck]";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -91,6 +94,37 @@ async fn main() -> anyhow::Result<()> {
             telemetria::iniciar(cfg.log_formato).context("não consegui iniciar os logs")?;
             let estado = Estado::novo(&cfg).context("NEXUS_DATABASE_URL inválida")?;
             sombra::executar(estado.db.clone()).await
+        }
+        ["motor-sombra", url, args @ ..] => {
+            let ciclos: u64 = match args {
+                ["--ciclos", n] => n.parse().context("--ciclos precisa de um número")?,
+                [] => 1,
+                _ => anyhow::bail!("uso: motor-sombra <url> [--ciclos <n>]"),
+            };
+            let estado = Estado::novo(&cfg).context("NEXUS_DATABASE_URL inválida")?;
+            let mut sombra =
+                motor_sombra::Sombra::nova(url, estado.motor_fuso_ms, cfg.escrita_motor)?;
+            for i in 0..ciclos {
+                if i > 0 {
+                    tokio::time::sleep(Duration::from_secs(cfg.motor_sombra_s.max(10))).await;
+                }
+                let (decisoes, acoes) = sombra.ciclo(&estado.db).await?;
+                println!(
+                    "ciclo {}: {decisoes} decisões, {acoes} ações novas do legado",
+                    i + 1
+                );
+            }
+            Ok(())
+        }
+        ["motor-sombra-relatorio", args @ ..] => {
+            let horas = match args {
+                ["--desde", h] => h.parse().context("--desde precisa de um número de horas")?,
+                [] => 24,
+                _ => anyhow::bail!("uso: motor-sombra-relatorio [--desde <horas>]"),
+            };
+            let estado = Estado::novo(&cfg).context("NEXUS_DATABASE_URL inválida")?;
+            // Duas vezes o ciclo do legado, mais um minuto de folga.
+            motor_sombra::relatorio(&estado.db, horas, 2 * 30_000 + 60_000).await
         }
         ["sombra-relatorio", args @ ..] => {
             let (mut horas, mut origem) = (168, "todas");
@@ -470,6 +504,18 @@ async fn paridade_continua(cfg: Configuracao) -> anyhow::Result<()> {
         .com_equipes(estado.clone(), cfg.paridade_equipe)
         .com_motor(cfg.paridade_motor_url.as_deref());
     tracing::info!(%url, ciclo_s = ciclo.as_secs(), "comparador de paridade iniciado");
+    // Fase 4: o laço do motor em sombra roda ao lado do comparador (mesma rede do host).
+    let parar_sombra = tokio_util::sync::CancellationToken::new();
+    if let Some(url_motor) = &cfg.motor_sombra_url {
+        let sombra =
+            motor_sombra::Sombra::nova(url_motor, estado.motor_fuso_ms, cfg.escrita_motor)?;
+        tokio::spawn(sombra.rodar(
+            estado.db.clone(),
+            Duration::from_secs(cfg.motor_sombra_s.max(10)),
+            parar_sombra.clone(),
+        ));
+    }
+    let _cancelar_sombra = parar_sombra.drop_guard();
     let parar = desligamento::sinal_de_parada();
     tokio::pin!(parar);
     loop {

@@ -123,6 +123,16 @@ pub struct Configuracao {
     /// locais. UTC−3 no PC (padrão), 0 na VPS.
     #[serde(default = "motor_fuso_padrao")]
     pub motor_fuso_min: i64,
+    /// Motor do legado que a sombra do motor lê (`/api/nexus/dados` e `/api/nexus/janela`).
+    /// Sem ela, a sombra não roda.
+    pub motor_sombra_url: Option<String>,
+    /// Intervalo do laço do motor em sombra, em segundos (o legado roda a cada 30).
+    #[serde(default = "motor_sombra_padrao")]
+    pub motor_sombra_s: u64,
+    /// Fase 4: o laço do motor enfileira os comandos que decide (`nexus.comando`, origem
+    /// `motor`), para o app executar. Desligada: só grava as decisões (sombra).
+    #[serde(default)]
+    pub escrita_motor: bool,
 }
 
 impl Configuracao {
@@ -163,6 +173,10 @@ fn limite_ingestao_rajada_padrao() -> f64 {
 
 fn bolsa_ciclo_padrao() -> u64 {
     180
+}
+
+fn motor_sombra_padrao() -> u64 {
+    30
 }
 
 fn motor_fuso_padrao() -> i64 {
