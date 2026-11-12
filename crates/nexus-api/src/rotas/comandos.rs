@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 
 use axum::body::Bytes;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
@@ -137,6 +138,7 @@ pub async fn confirmar(
 pub async fn inserir(
     State(estado): State<Estado>,
     cliente: Option<Extension<Cliente>>,
+    cabecalhos: HeaderMap,
     corpo: Bytes,
 ) -> Response {
     if let Some(r) = desligada(&estado) {
@@ -180,7 +182,35 @@ pub async fn inserir(
         // Melhoria: o prazo fica sempre entre 1 minuto e 24 horas.
         minutos = minutos.clamp(1.0, 1440.0);
     }
-    let expira_ms = agora_ms().saturating_add((minutos * 60_000.0) as i64);
+    // Chave de idempotência: header `Idempotency-Key` ou campo `chave`. Sem chave, igual ao legado.
+    let chave = cabecalhos
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+        .or_else(|| texto("chave"));
+    if chave.as_ref().is_some_and(|k| k.chars().count() > 200) {
+        return erro(400, "chave de idempotência muito longa (max 200)");
+    }
+    // Agendamento (só com NEXUS_MELHORIAS): `executar_em` em ms desde 1970, até 30 dias à frente.
+    let agora = agora_ms();
+    let executar_ms = match corpo.get("executar_em").filter(|_| estado.melhorias) {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let ms = nucleo::js::mais(Some(v));
+            if ms.is_nan() || ms < 0.0 || ms > (agora + JANELA_AGENDAMENTO_MS) as f64 {
+                return erro(
+                    400,
+                    "executar_em inválido (ms desde 1970, até 30 dias à frente)",
+                );
+            }
+            // Instante já passado: executa já, sem agendar.
+            Some(ms as i64).filter(|ms| *ms > agora)
+        }
+    };
+    // O prazo conta a partir da hora agendada.
+    let base = executar_ms.unwrap_or(agora);
+    let expira_ms = base.saturating_add((minutos * 60_000.0) as i64);
     let novo = NovoComando {
         conta: &nick,
         tipo: &cmd,
@@ -189,8 +219,87 @@ pub async fn inserir(
         origem: &origem,
         expira_ms,
     };
-    match fila::inserir(&estado.db, &novo).await {
-        Ok(id) => Json(json!({ "ok": true, "id": id })).into_response(),
+    match fila::inserir_ext(&estado.db, &novo, chave.as_deref(), executar_ms).await {
+        Ok((id, false)) => Json(json!({ "ok": true, "id": id })).into_response(),
+        Ok((id, true)) => Json(json!({ "ok": true, "id": id, "repetido": true })).into_response(),
+        Err(e) => indisponivel(&e),
+    }
+}
+
+/// Máximo de agendamento à frente (30 dias).
+const JANELA_AGENDAMENTO_MS: i64 = 30 * 86_400_000;
+
+fn sem_melhorias(estado: &Estado) -> Option<Response> {
+    (!estado.melhorias).then(|| erro(404, "rota disponível só com NEXUS_MELHORIAS"))
+}
+
+/// `GET /api/comandos/falhos?nick=&limite=` (`NEXUS_MELHORIAS`): comandos que esgotaram as
+/// tentativas. Token de conta vê só a própria conta; token global vê todas (ou filtra por `nick`).
+pub async fn falhos(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Query(p): Query<HashMap<String, String>>,
+) -> Response {
+    if let Some(r) = sem_melhorias(&estado) {
+        return r;
+    }
+    let contas: Vec<String> = match p.get("nick").filter(|n| !n.is_empty()) {
+        Some(n) => match nick_permitido(cliente.as_ref(), n) {
+            Ok(n) => vec![n],
+            Err(()) => return proibido(),
+        },
+        None => cliente
+            .as_ref()
+            .and_then(|Extension(c)| c.conta.clone())
+            .into_iter()
+            .collect(),
+    };
+    let limite = p
+        .get("limite")
+        .and_then(|l| l.parse::<i64>().ok())
+        .unwrap_or(100)
+        .clamp(1, 500);
+    match fila::falhos(&estado.db, &contas, limite).await {
+        Ok(v) => Json(json!({
+            "falhos": v.into_iter().map(|c| json!({
+                "id": c.id, "conta": c.conta, "cmd": c.tipo, "params": c.params,
+                "origem": c.origem, "tentativas": c.tentativas, "criadoEm": c.criado_ms,
+            })).collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(e) => indisponivel(&e),
+    }
+}
+
+/// `POST /api/comandos/{id}/reenviar` (`NEXUS_MELHORIAS`): volta um falho para pendente.
+pub async fn reenviar(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Path(id): Path<i64>,
+) -> Response {
+    if let Some(r) = sem_melhorias(&estado) {
+        return r;
+    }
+    if let Some(r) = desligada(&estado) {
+        return r;
+    }
+    let dono = match fila::conta_de(&estado.db, id).await {
+        Ok(d) => d,
+        Err(e) => return indisponivel(&e),
+    };
+    let Some(dono) = dono else {
+        return erro(404, "comando não encontrado");
+    };
+    if cliente
+        .as_ref()
+        .and_then(|Extension(c)| c.conta.as_deref())
+        .is_some_and(|propria| !propria.eq_ignore_ascii_case(&dono))
+    {
+        return proibido();
+    }
+    match fila::reenviar(&estado.db, id).await {
+        Ok(true) => Json(json!({ "ok": true, "id": id })).into_response(),
+        Ok(false) => erro(409, "o comando não está na lista de falhos"),
         Err(e) => indisponivel(&e),
     }
 }

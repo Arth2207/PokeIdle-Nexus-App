@@ -39,6 +39,8 @@ pub struct Estado {
     /// `NEXUS_MELHORIAS`.
     pub melhorias: bool,
     pub limitador: Arc<Limitador>,
+    /// Limite à parte para `POST /ingest`, `/api/hunt-sync` e `evento.lote` (por token).
+    pub limite_ingestao: Arc<Limitador>,
     pub origens_cors: Arc<Vec<String>>,
     /// Serializa as gravações do inventário (ler, aplicar, gravar).
     pub meus_itens_lock: Arc<tokio::sync::Mutex<()>>,
@@ -67,6 +69,10 @@ impl Estado {
             )),
             equipe_bolsa: Arc::new(ServicoEquipeBolsa::novo(cfg.cpu_threads)),
             limitador: Arc::new(Limitador::novo(cfg.limite_rps, cfg.limite_rajada)),
+            limite_ingestao: Arc::new(Limitador::novo(
+                cfg.limite_ingestao_rps,
+                cfg.limite_ingestao_rajada,
+            )),
             origens_cors: Arc::new(cfg.origens_cors()),
             ..Self::com_pool(db)
         })
@@ -92,6 +98,7 @@ impl Estado {
             bolsa,
             escrita_bolsa: false,
             limitador: Arc::new(Limitador::novo(10.0, 40.0)),
+            limite_ingestao: Arc::new(Limitador::novo(50.0, 200.0)),
             origens_cors: Arc::new(Vec::new()),
             meus_itens_lock: Arc::new(tokio::sync::Mutex::new(())),
         }

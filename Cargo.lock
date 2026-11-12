@@ -2092,6 +2092,7 @@ name = "persistencia"
 version = "0.1.0"
 dependencies = [
  "nucleo",
+ "proptest",
  "serde",
  "serde_json",
  "sha2 0.11.1",

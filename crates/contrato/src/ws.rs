@@ -52,6 +52,21 @@ pub enum MensagemServidor {
     AlvosAtualizados(Atualizacao),
     #[serde(rename = "sessao.ressincronizar")]
     SessaoRessincronizar(Ressincronizar),
+    /// Resposta a um `evento.lote`.
+    #[serde(rename = "evento.ack")]
+    EventoAck(EventoAck),
+    /// Falha de uma mensagem do cliente (limite de taxa, ingestão desligada, conta proibida).
+    #[serde(rename = "erro")]
+    Erro(ErroWs),
+    /// Informativo (`NEXUS_MELHORIAS`): item raro novo no estado de raros.
+    #[serde(rename = "raro.novo")]
+    RaroNovo(RaroNovo),
+    /// Informativo (`NEXUS_MELHORIAS`): shiny registrado.
+    #[serde(rename = "shiny.novo")]
+    ShinyNovo(ShinyNovo),
+    /// Informativo (`NEXUS_MELHORIAS`): mudança de estado de um comando.
+    #[serde(rename = "comando.estado")]
+    ComandoEstado(ComandoEstado),
 }
 
 /// Cliente para servidor.
@@ -64,6 +79,9 @@ pub enum MensagemCliente {
     ComandoResultado(ComandoResultado),
     #[serde(rename = "ack")]
     Ack(Ack),
+    /// Lote de eventos do jogo, gravado como o `POST /ingest`.
+    #[serde(rename = "evento.lote")]
+    EventoLote(EventoLote),
 }
 
 /// `seq` atual do servidor, para o cliente saber de onde partir.
@@ -122,6 +140,63 @@ pub struct ComandoResultado {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Ack {
     pub seq: u64,
+}
+
+/// Lote de eventos. `seq_cliente` identifica o lote: reenviar o mesmo lote com o mesmo
+/// `seq_cliente` não grava de novo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EventoLote {
+    pub seq_cliente: u64,
+    /// Conta (nick) do lote. Opcional em token preso a uma conta; obrigatória em token global.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conta: Option<String>,
+    pub eventos: Vec<Value>,
+}
+
+/// Resposta a um `evento.lote`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EventoAck {
+    pub seq_cliente: u64,
+    pub ok: bool,
+    /// Eventos que já estavam gravados.
+    pub duplicados: u64,
+    /// Eventos rejeitados pela validação.
+    pub erros: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ErroWs {
+    /// `limite_taxa`, `ingestao_desligada`, `conta_proibida`, `conta_obrigatoria`,
+    /// `banco_indisponivel`.
+    pub motivo: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq_cliente: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RaroNovo {
+    pub id: Value,
+    pub nome: Value,
+    /// Conta dona do item; `null` se o item não tem conta (só tokens globais recebem).
+    pub conta: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShinyNovo {
+    pub nick: String,
+    pub dia: String,
+    /// Quantos shiny entraram neste registro.
+    pub quantidade: f64,
+    /// Total do dia depois do registro.
+    pub total_dia: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComandoEstado {
+    pub id: i64,
+    pub conta: String,
+    /// `criado`, `entregue`, `confirmado` ou `expirado`.
+    pub estado: String,
 }
 
 #[cfg(test)]
@@ -236,6 +311,38 @@ mod testes {
         ida_e_volta(
             &Envelope::novo(None, ts, MensagemCliente::Ack(Ack { seq: 12 })),
             &json!({"v":1,"tipo":"ack","ts":ts,"dados":{"seq":12}}),
+        );
+    }
+
+    #[test]
+    fn evento_lote_e_ack() {
+        let ts = 7_i64;
+        ida_e_volta(
+            &Envelope::novo(
+                None,
+                ts,
+                MensagemCliente::EventoLote(EventoLote {
+                    seq_cliente: 3,
+                    conta: Some("ash".into()),
+                    eventos: vec![json!({"k": "kill"})],
+                }),
+            ),
+            &json!({"v":1,"tipo":"evento.lote","ts":ts,
+                    "dados":{"seq_cliente":3,"conta":"ash","eventos":[{"k":"kill"}]}}),
+        );
+        ida_e_volta(
+            &Envelope::novo(
+                Some(1),
+                ts,
+                MensagemServidor::EventoAck(EventoAck {
+                    seq_cliente: 3,
+                    ok: true,
+                    duplicados: 1,
+                    erros: 0,
+                }),
+            ),
+            &json!({"v":1,"tipo":"evento.ack","seq":1,"ts":ts,
+                    "dados":{"seq_cliente":3,"ok":true,"duplicados":1,"erros":0}}),
         );
     }
 

@@ -3,7 +3,8 @@
 mod bolsa;
 mod comandos;
 mod equipes;
-mod ingestao;
+mod eventos;
+pub(crate) mod ingestao;
 mod raros;
 mod saude;
 
@@ -56,6 +57,7 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/bolsa/equipe-hibrida", get(equipes::equipe_hibrida))
         .route("/api/raros2", get(raros::raros2))
         .route("/api/shiny", get(raros::shiny))
+        .route("/api/eventos", get(eventos::historico))
         .route_layer(middleware::from_fn(|req, next| {
             auth::exigir_escopo(LEITURA, req, next)
         }))
@@ -76,6 +78,8 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/comandos", get(comandos::listar))
         .route("/api/confirmar-comando", post(comandos::confirmar))
         .route("/api/inserir-comando", post(comandos::inserir))
+        .route("/api/comandos/falhos", get(comandos::falhos))
+        .route("/api/comandos/{id}/reenviar", post(comandos::reenviar))
         .route_layer(middleware::from_fn(|req, next| {
             auth::exigir_escopo(INGESTAO, req, next)
         }))

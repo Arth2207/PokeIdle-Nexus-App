@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use contrato::ws::{
-    ComandoResultado, Envelope, MensagemCliente, MensagemServidor, Retomar, SUBPROTOCOLO,
+    ComandoResultado, Envelope, EventoLote, MensagemCliente, MensagemServidor, Retomar,
+    SUBPROTOCOLO,
 };
 use futures_util::{SinkExt, StreamExt};
 use persistencia::comandos::{inserir, NovoComando};
@@ -60,7 +61,22 @@ async fn banco() -> (ContainerAsync<GenericImage>, PgPool) {
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::migrate!("../../migrations").run(&pool).await.unwrap();
+    // Como em produção: o role do Nexus tem search_path=nexus e a extensão mora em public.
+    // Migration que chamar função do Timescale sem qualificar falha aqui.
+    let opcoes = url
+        .parse::<sqlx::postgres::PgConnectOptions>()
+        .unwrap()
+        .options([("search_path", "nexus")]);
+    let pool_migracao = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(opcoes)
+        .await
+        .unwrap();
+    sqlx::migrate!("../../migrations")
+        .run(&pool_migracao)
+        .await
+        .unwrap();
+    pool_migracao.close().await;
     (container, pool)
 }
 
@@ -72,10 +88,29 @@ struct Servidor {
 
 /// Sobe a API numa porta livre. `ligado`: NEXUS_ESCRITA_COMANDOS (com o listener).
 async fn servir(db: &PgPool, ligado: bool) -> Servidor {
+    servir_com(db, ligado, false, (50.0, 200.0)).await
+}
+
+/// `melhorias`: NEXUS_MELHORIAS; `limite`: (por segundo, rajada) da ingestão.
+async fn servir_com(db: &PgPool, ligado: bool, melhorias: bool, limite: (f64, f64)) -> Servidor {
+    servir_completo(db, ligado, ligado, melhorias, limite).await
+}
+
+/// `ingestao`: NEXUS_ESCRITA_INGESTAO, separada da fila de comandos.
+async fn servir_completo(
+    db: &PgPool,
+    ligado: bool,
+    ingestao: bool,
+    melhorias: bool,
+    limite: (f64, f64),
+) -> Servidor {
     let parar = CancellationToken::new();
     let mut estado = Estado::com_pool(db.clone());
+    estado.melhorias = melhorias;
+    estado.escrita_raros = ligado;
+    estado.limite_ingestao = Arc::new(crate::limite::Limitador::novo(limite.0, limite.1));
     estado.escrita_comandos = ligado;
-    estado.escrita_ingestao = ligado;
+    estado.escrita_ingestao = ingestao;
     estado.ws = Arc::new(Hub::novo(parar.clone()));
     if ligado {
         iniciar_listener(estado.clone(), parar.clone());
@@ -508,9 +543,25 @@ async fn confirmacao_segura_corpo(db: PgPool) {
 
 /// POST com Bearer e corpo JSON; devolve o status HTTP e o corpo da resposta.
 async fn post(addr: SocketAddr, token: &str, caminho: &str, corpo: &str) -> (u16, String) {
+    http(addr, "POST", token, caminho, "", corpo).await
+}
+
+async fn get(addr: SocketAddr, token: &str, caminho: &str) -> (u16, String) {
+    http(addr, "GET", token, caminho, "", "").await
+}
+
+/// `extra`: cabeçalhos adicionais, cada um terminado em `\r\n`.
+async fn http(
+    addr: SocketAddr,
+    metodo: &str,
+    token: &str,
+    caminho: &str,
+    extra: &str,
+    corpo: &str,
+) -> (u16, String) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let req = format!(
-        "POST {caminho} HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{corpo}",
+        "{metodo} {caminho} HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {token}\r\n{extra}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{corpo}",
         corpo.len()
     );
     let mut c = TcpStream::connect(addr).await.unwrap();
@@ -646,6 +697,370 @@ async fn ingestao_e_insercao_corpo(db: PgPool) {
     .unwrap();
     assert_eq!(nulos, 1);
     s.parar.cancel();
+}
+
+async fn lote(c: &mut Cli, seq: u64, conta: Option<&str>, evs: Vec<serde_json::Value>) {
+    enviar(
+        c,
+        MensagemCliente::EventoLote(EventoLote {
+            seq_cliente: seq,
+            conta: conta.map(str::to_owned),
+            eventos: evs,
+        }),
+    )
+    .await;
+}
+
+async fn total_eventos(db: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM nexus.evento")
+        .fetch_one(db)
+        .await
+        .unwrap()
+}
+
+/// Lote 2x = 1 gravação, ack correto, escopo de conta e limite de taxa.
+async fn evento_lote_corpo(db: PgPool) {
+    let s = servir_com(&db, true, true, (0.0, 5.0)).await;
+    let t_ash = criar_token(&db, "ash", &[Escopo::Relay], Some("ash"))
+        .await
+        .unwrap();
+    let mut c = conectar_ok(&s, &t_ash).await;
+    assert!(matches!(
+        proxima(&mut c).await.msg,
+        MensagemServidor::SessaoPronta(_)
+    ));
+    let ev = vec![
+        json!({"k": "kill", "ts": 1_800_000_000_000_i64, "nome": "R"}),
+        json!({"k": "tipo_invalido"}),
+    ];
+    lote(&mut c, 1, None, ev.clone()).await;
+    let MensagemServidor::EventoAck(a) = proxima(&mut c).await.msg else {
+        panic!("esperava evento.ack")
+    };
+    assert_eq!(
+        (a.seq_cliente, a.ok, a.duplicados, a.erros),
+        (1, true, 0, 1)
+    );
+    assert_eq!(total_eventos(&db).await, 1);
+    // Mesmo lote, mesmo seq_cliente: nada novo, 1 duplicado.
+    lote(&mut c, 1, None, ev.clone()).await;
+    let MensagemServidor::EventoAck(a) = proxima(&mut c).await.msg else {
+        panic!("esperava evento.ack")
+    };
+    assert_eq!((a.duplicados, a.erros), (1, 1));
+    assert_eq!(total_eventos(&db).await, 1);
+    // Contador zerado (outro seq_cliente) e o mesmo evento por HTTP: continua 1 linha.
+    lote(&mut c, 2, None, ev.clone()).await;
+    let MensagemServidor::EventoAck(a) = proxima(&mut c).await.msg else {
+        panic!("esperava evento.ack")
+    };
+    assert_eq!((a.seq_cliente, a.duplicados), (2, 1));
+    let http = "{\"conta_id\":\"ash\",\"nick\":\"ash\",\"eventos\":[{\"k\":\"kill\",\"ts\":1800000000000,\"nome\":\"R\"}]}";
+    assert_eq!(post(s.addr, &t_ash, "/ingest", http).await.0, 200);
+    assert_eq!(total_eventos(&db).await, 1);
+    // Conta de outro nick: erro, nada gravado.
+    lote(&mut c, 3, Some("misty"), ev.clone()).await;
+    let MensagemServidor::Erro(e) = proxima(&mut c).await.msg else {
+        panic!("esperava erro")
+    };
+    assert_eq!(
+        (e.motivo.as_str(), e.seq_cliente),
+        ("conta_proibida", Some(3))
+    );
+    assert_eq!(total_eventos(&db).await, 1);
+    // Rajada 5 (sem reposição), por token: 4 lotes WS + 1 POST gastaram tudo.
+    lote(&mut c, 4, None, ev).await;
+    let MensagemServidor::Erro(e) = proxima(&mut c).await.msg else {
+        panic!("esperava erro")
+    };
+    assert_eq!(e.motivo, "limite_taxa");
+    s.parar.cancel();
+
+    // NEXUS_ESCRITA_INGESTAO desligada: `erro` e nada gravado.
+    let s = servir_completo(&db, true, false, false, (50.0, 200.0)).await;
+    let mut c = conectar_ok(&s, &t_ash).await;
+    assert!(matches!(
+        proxima(&mut c).await.msg,
+        MensagemServidor::SessaoPronta(_)
+    ));
+    lote(
+        &mut c,
+        9,
+        None,
+        vec![json!({"k": "kill", "ts": 1_800_000_050_000_i64})],
+    )
+    .await;
+    let MensagemServidor::Erro(e) = proxima(&mut c).await.msg else {
+        panic!("esperava erro")
+    };
+    assert_eq!(e.motivo, "ingestao_desligada");
+    assert_eq!(total_eventos(&db).await, 1);
+    s.parar.cancel();
+}
+
+/// Push (NEXUS_MELHORIAS): `comando.estado` e `raro.novo`/`shiny.novo` respeitam a conta.
+async fn push_ao_vivo_corpo(db: PgPool) {
+    let s = servir_com(&db, true, true, (50.0, 200.0)).await;
+    let t_ash = criar_token(&db, "ash", &[Escopo::Relay], Some("ash"))
+        .await
+        .unwrap();
+    let t_misty = criar_token(&db, "misty", &[Escopo::Relay], Some("misty"))
+        .await
+        .unwrap();
+    let t_glob = criar_token(&db, "glob", &[Escopo::Relay, Escopo::Escrita], None)
+        .await
+        .unwrap();
+    let mut ash = conectar_ok(&s, &t_ash).await;
+    let mut misty = conectar_ok(&s, &t_misty).await;
+    let mut glob = conectar_ok(&s, &t_glob).await;
+    for c in [&mut ash, &mut misty, &mut glob] {
+        assert!(matches!(
+            proxima(c).await.msg,
+            MensagemServidor::SessaoPronta(_)
+        ));
+    }
+    let id = novo_cmd(&db, "ash", 0).await;
+    // ash recebe `comando.estado` criado (e o comando); misty não recebe nada de ash.
+    let mut estados = Vec::new();
+    for _ in 0..6 {
+        match tentar(&mut ash, Duration::from_millis(800)).await {
+            Some(Envelope {
+                msg: MensagemServidor::ComandoEstado(e),
+                ..
+            }) => estados.push((e.id, e.estado)),
+            Some(_) => {}
+            None => break,
+        }
+    }
+    assert!(estados.contains(&(id, "criado".to_string())), "{estados:?}");
+    let ouviu_misty = loop {
+        match tentar(&mut misty, Duration::from_millis(500)).await {
+            Some(Envelope {
+                msg: MensagemServidor::ComandoEstado(_),
+                ..
+            }) => break true,
+            Some(_) => {}
+            None => break false,
+        }
+    };
+    assert!(!ouviu_misty);
+
+    // Raros: o 1º ingest só carrega; o 2º traz o item novo, dono "ash".
+    let corpo = |itens: &str| format!("{{\"raros\":{{\"itens\":{itens}}}}}");
+    let (c1, _) = post(
+        s.addr,
+        &t_glob,
+        "/api/raros/ingest",
+        &corpo("[{\"id\":1,\"nome\":\"A\"}]"),
+    )
+    .await;
+    assert_eq!(c1, 200);
+    let (c2, _) = post(
+        s.addr,
+        &t_glob,
+        "/api/raros/ingest",
+        &corpo("[{\"id\":1,\"nome\":\"A\"},{\"id\":2,\"nome\":\"B\",\"contas\":{\"ash\":1}}]"),
+    )
+    .await;
+    assert_eq!(c2, 200);
+    let (c3, _) = post(
+        s.addr,
+        &t_glob,
+        "/api/shiny/registrar",
+        "{\"nick\":\"ash\",\"shiny\":1}",
+    )
+    .await;
+    assert_eq!(c3, 200);
+    let mut vistos_ash = Vec::new();
+    while let Some(e) = tentar(&mut ash, Duration::from_millis(800)).await {
+        vistos_ash.push(conta_tipo(&e.msg));
+    }
+    assert!(vistos_ash.contains(&"raro.novo"), "{vistos_ash:?}");
+    assert!(vistos_ash.contains(&"shiny.novo"), "{vistos_ash:?}");
+    let mut vistos_misty = Vec::new();
+    while let Some(e) = tentar(&mut misty, Duration::from_millis(500)).await {
+        vistos_misty.push(conta_tipo(&e.msg));
+    }
+    assert!(!vistos_misty.contains(&"raro.novo") && !vistos_misty.contains(&"shiny.novo"));
+    let mut vistos_glob = Vec::new();
+    while let Some(e) = tentar(&mut glob, Duration::from_millis(500)).await {
+        vistos_glob.push(conta_tipo(&e.msg));
+    }
+    assert!(vistos_glob.contains(&"raro.novo"), "{vistos_glob:?}");
+    s.parar.cancel();
+}
+
+fn conta_tipo(m: &MensagemServidor) -> &'static str {
+    match m {
+        MensagemServidor::RaroNovo(_) => "raro.novo",
+        MensagemServidor::ShinyNovo(_) => "shiny.novo",
+        MensagemServidor::ComandoEstado(_) => "comando.estado",
+        _ => "outro",
+    }
+}
+
+fn json_de(r: &(u16, String)) -> serde_json::Value {
+    serde_json::from_str(&r.1).unwrap()
+}
+
+/// Idempotência, dead-letter, agendamento, histórico e limite de taxa HTTP.
+async fn comandos_e_historico_corpo(db: PgPool) {
+    let s = servir_com(&db, true, true, (0.0, 3.0)).await;
+    let t_ash = criar_token(&db, "ash", &[Escopo::Relay], Some("ash"))
+        .await
+        .unwrap();
+    let t_misty = criar_token(&db, "misty", &[Escopo::Relay], Some("misty"))
+        .await
+        .unwrap();
+    let t_glob = criar_token(&db, "glob", &[Escopo::Relay, Escopo::Leitura], None)
+        .await
+        .unwrap();
+    let ins = "{\"nick\":\"ash\",\"cmd\":\"hunt\"}";
+
+    // 8. Idempotência: mesma chave = mesmo id; sem chave, ids novos; chave velha libera.
+    let h = "Idempotency-Key: k1\r\n";
+    let a = json_de(&http(s.addr, "POST", &t_glob, "/api/inserir-comando", h, ins).await);
+    let b = json_de(&http(s.addr, "POST", &t_glob, "/api/inserir-comando", h, ins).await);
+    assert_eq!(a["id"], b["id"]);
+    assert_eq!(b["repetido"], json!(true));
+    let c = json_de(&post(s.addr, &t_glob, "/api/inserir-comando", ins).await);
+    let d = json_de(&post(s.addr, &t_glob, "/api/inserir-comando", ins).await);
+    assert!(c["id"] != d["id"] && c["id"] != a["id"]);
+    let por_campo = "{\"nick\":\"ash\",\"cmd\":\"hunt\",\"chave\":\"k2\"}";
+    let e1 = json_de(&post(s.addr, &t_glob, "/api/inserir-comando", por_campo).await);
+    let e2 = json_de(&post(s.addr, &t_glob, "/api/inserir-comando", por_campo).await);
+    assert_eq!(e1["id"], e2["id"]);
+    sqlx::query("UPDATE nexus.comando SET criado_em = now() - interval '25 hours' WHERE id = $1")
+        .bind(a["id"].as_i64().unwrap())
+        .execute(&db)
+        .await
+        .unwrap();
+    let a2 = json_de(&http(s.addr, "POST", &t_glob, "/api/inserir-comando", h, ins).await);
+    assert!(a2["id"] != a["id"]);
+    sqlx::query("DELETE FROM nexus.comando")
+        .execute(&db)
+        .await
+        .unwrap();
+
+    // 9. Dead-letter: lista com escopo e reenvia.
+    let id = novo_cmd(&db, "ash", agora_ms() + 600_000).await;
+    sqlx::query(
+        "UPDATE nexus.comando SET executado_em = now(), resultado = 'erro:sem confirmacao', tentativas = 5 WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&db)
+    .await
+    .unwrap();
+    let f = json_de(&get(s.addr, &t_ash, "/api/comandos/falhos").await);
+    assert_eq!(f["falhos"][0]["id"], json!(id));
+    let f = json_de(&get(s.addr, &t_misty, "/api/comandos/falhos").await);
+    assert_eq!(f["falhos"], json!([]));
+    let caminho = format!("/api/comandos/{id}/reenviar");
+    assert_eq!(post(s.addr, &t_misty, &caminho, "").await.0, 403);
+    assert_eq!(post(s.addr, &t_ash, &caminho, "").await.0, 200);
+    assert_eq!(post(s.addr, &t_ash, &caminho, "").await.0, 409);
+    let (fim, tent): (bool, i32) = sqlx::query_as(
+        "SELECT executado_em IS NOT NULL, tentativas FROM nexus.comando WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!((fim, tent), (false, 0));
+    sqlx::query("DELETE FROM nexus.comando")
+        .execute(&db)
+        .await
+        .unwrap();
+
+    // 10. Agendamento: não entrega antes da hora; ao chegar, avisa e entrega pelo WS.
+    let mut ws = conectar_ok(&s, &t_ash).await;
+    assert!(matches!(
+        proxima(&mut ws).await.msg,
+        MensagemServidor::SessaoPronta(_)
+    ));
+    let futuro = agora_ms() + 3_600_000;
+    let corpo = format!("{{\"nick\":\"ash\",\"cmd\":\"hunt\",\"executar_em\":{futuro}}}");
+    let ag = json_de(&post(s.addr, &t_glob, "/api/inserir-comando", &corpo).await);
+    let agid = ag["id"].as_i64().unwrap();
+    assert!(tentar(&mut ws, Duration::from_millis(800)).await.is_none());
+    let http_lista = json_de(&get(s.addr, &t_ash, "/api/comandos?nick=ash").await);
+    assert_eq!(http_lista["comandos"], json!([]));
+    sqlx::query("UPDATE nexus.comando SET executar_em = now() - interval '1 second' WHERE id = $1")
+        .bind(agid)
+        .execute(&db)
+        .await
+        .unwrap();
+    assert_eq!(
+        persistencia::comandos::liberar_agendados(&db)
+            .await
+            .unwrap(),
+        1
+    );
+    // Antes do `comando.novo` pode vir o `comando.estado` informativo.
+    let mut recebido = proxima(&mut ws).await;
+    while matches!(recebido.msg, MensagemServidor::ComandoEstado(_)) {
+        recebido = proxima(&mut ws).await;
+    }
+    assert_eq!(id_do_novo(&recebido), agid);
+    s.parar.cancel();
+
+    // 11. Histórico com escopo (servidor novo: o limite de taxa anterior já se esgotou).
+    let s = servir_com(&db, true, true, (50.0, 200.0)).await;
+    let lote_ash = "{\"conta_id\":\"ash\",\"nick\":\"ash\",\"eventos\":[{\"k\":\"kill\",\"ts\":1800000000000,\"n\":1},{\"k\":\"kill\",\"ts\":1800000001000,\"n\":2}]}";
+    let lote_misty = "{\"conta_id\":\"misty\",\"nick\":\"misty\",\"eventos\":[{\"k\":\"kill\",\"ts\":1800000000000,\"n\":1}]}";
+    assert_eq!(post(s.addr, &t_ash, "/ingest", lote_ash).await.0, 200);
+    assert_eq!(post(s.addr, &t_misty, "/ingest", lote_misty).await.0, 200);
+    let bruto = json_de(&get(s.addr, &t_glob, "/api/eventos?tipo=kill").await);
+    assert_eq!(bruto["eventos"].as_array().unwrap().len(), 3);
+    let t_leitura_ash = criar_token(&db, "lash", &[Escopo::Leitura], Some("ash"))
+        .await
+        .unwrap();
+    let so_ash = json_de(&get(s.addr, &t_leitura_ash, "/api/eventos").await);
+    assert_eq!(so_ash["eventos"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        get(s.addr, &t_leitura_ash, "/api/eventos?conta=misty")
+            .await
+            .0,
+        403
+    );
+    let horas = json_de(&get(s.addr, &t_glob, "/api/eventos?agrupar=hora&conta=ash").await);
+    assert_eq!(horas["horas"][0]["total"], json!(2));
+    assert_eq!(
+        get(s.addr, &t_glob, "/api/eventos?agrupar=dia").await.0,
+        400
+    );
+    s.parar.cancel();
+
+    // 12. Limite de taxa no HTTP: sem NEXUS_MELHORIAS nunca dá 429.
+    let s = servir_com(&db, true, false, (0.0, 3.0)).await;
+    let lote = "{\"conta_id\":\"ash\",\"nick\":\"ash\",\"eventos\":[{\"k\":\"kill\",\"ts\":1800000009000}]}";
+    for _ in 0..5 {
+        assert_eq!(post(s.addr, &t_ash, "/ingest", lote).await.0, 200);
+    }
+    s.parar.cancel();
+    // Com NEXUS_MELHORIAS: rajada 3, sem reposição.
+    let s = servir_com(&db, true, true, (0.0, 3.0)).await;
+    let lote = "{\"conta_id\":\"ash\",\"nick\":\"ash\",\"eventos\":[{\"k\":\"kill\",\"ts\":1800000009000}]}";
+    for _ in 0..3 {
+        assert_eq!(post(s.addr, &t_ash, "/ingest", lote).await.0, 200);
+    }
+    assert_eq!(post(s.addr, &t_ash, "/ingest", lote).await.0, 429);
+    s.parar.cancel();
+}
+
+#[tokio::test]
+async fn comandos_e_historico() {
+    com_limite(comandos_e_historico_corpo).await;
+}
+
+#[tokio::test]
+async fn evento_lote() {
+    com_limite(evento_lote_corpo).await;
+}
+
+#[tokio::test]
+async fn push_ao_vivo() {
+    com_limite(push_ao_vivo_corpo).await;
 }
 
 #[tokio::test]

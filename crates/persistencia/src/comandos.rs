@@ -83,9 +83,56 @@ pub struct NovoComando<'a> {
 }
 
 pub async fn inserir(db: &PgPool, c: &NovoComando<'_>) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar(
-        "INSERT INTO nexus.comando (conta, tipo, params, prioridade, origem, expira_em)
-         VALUES ($1, $2, $3, $4, $5, to_timestamp($6 / 1000.0)) RETURNING id",
+    inserir_ext(db, c, None, None).await.map(|(id, _)| id)
+}
+
+/// Insere com chave de idempotência e/ou agendamento. Devolve `(id, repetido)`: com a mesma
+/// `chave` e conta nas últimas 24 h, não insere de novo e devolve o id já criado. Chave mais
+/// velha que a janela é liberada e o comando entra como novo. `executar_ms`: instante (ms)
+/// antes do qual o comando não é entregue.
+pub async fn inserir_ext(
+    db: &PgPool,
+    c: &NovoComando<'_>,
+    chave: Option<&str>,
+    executar_ms: Option<i64>,
+) -> Result<(i64, bool), sqlx::Error> {
+    // Se a chave for liberada por outra transação entre o conflito e a leitura, tenta o
+    // INSERT uma vez mais em vez de falhar.
+    for _ in 0..2 {
+        if let Some(r) = tentar_inserir(db, c, chave, executar_ms).await? {
+            return Ok(r);
+        }
+    }
+    Err(sqlx::Error::RowNotFound)
+}
+
+async fn tentar_inserir(
+    db: &PgPool,
+    c: &NovoComando<'_>,
+    chave: Option<&str>,
+    executar_ms: Option<i64>,
+) -> Result<Option<(i64, bool)>, sqlx::Error> {
+    let mut tx = db.begin().await?;
+    if let Some(k) = chave {
+        // Chave fora da janela de 24 h: libera para o índice único aceitar a nova.
+        sqlx::query(
+            "UPDATE nexus.comando SET chave_idem = NULL
+             WHERE conta = $1 AND chave_idem = $2
+               AND criado_em <= now() - interval '24 hours'",
+        )
+        .bind(c.conta)
+        .bind(k)
+        .execute(&mut *tx)
+        .await?;
+    }
+    let novo: Option<i64> = sqlx::query_scalar(
+        "INSERT INTO nexus.comando
+             (conta, tipo, params, prioridade, origem, expira_em, chave_idem,
+              executar_em, agendado_avisado)
+         VALUES ($1, $2, $3, $4, $5, to_timestamp($6 / 1000.0), $7,
+                 to_timestamp($8 / 1000.0), $8::bigint IS NULL)
+         ON CONFLICT (conta, chave_idem) WHERE chave_idem IS NOT NULL DO NOTHING
+         RETURNING id",
     )
     .bind(c.conta)
     .bind(c.tipo)
@@ -93,8 +140,107 @@ pub async fn inserir(db: &PgPool, c: &NovoComando<'_>) -> Result<i64, sqlx::Erro
     .bind(c.prioridade)
     .bind(c.origem)
     .bind(c.expira_ms)
-    .fetch_one(db)
+    .bind(chave)
+    .bind(executar_ms)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let resultado = match (novo, chave) {
+        (Some(id), _) => (id, false),
+        (None, Some(k)) => {
+            let id: Option<i64> = sqlx::query_scalar(
+                "SELECT id FROM nexus.comando WHERE conta = $1 AND chave_idem = $2",
+            )
+            .bind(c.conta)
+            .bind(k)
+            .fetch_optional(&mut *tx)
+            .await?;
+            match id {
+                Some(id) => (id, true),
+                None => return Ok(None),
+            }
+        }
+        (None, None) => return Ok(None),
+    };
+    tx.commit().await?;
+    Ok(Some(resultado))
+}
+
+/// Marca como liberados os agendados cuja hora chegou; o trigger avisa como comando novo.
+/// Devolve quantos foram liberados.
+pub async fn liberar_agendados(db: &PgPool) -> Result<u64, sqlx::Error> {
+    sqlx::query(
+        "UPDATE nexus.comando SET agendado_avisado = true
+         WHERE NOT agendado_avisado AND executar_em <= now()",
+    )
+    .execute(db)
     .await
+    .map(|r| r.rows_affected())
+}
+
+/// Um comando que esgotou as tentativas (dead-letter).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Falho {
+    pub id: i64,
+    pub conta: String,
+    pub tipo: String,
+    pub params: Value,
+    pub origem: String,
+    pub tentativas: i32,
+    pub criado_ms: i64,
+}
+
+/// Lista os comandos encerrados por falta de confirmação (mais recentes primeiro). `contas`
+/// vazio = todas.
+pub async fn falhos(
+    db: &PgPool,
+    contas: &[String],
+    limite: i64,
+) -> Result<Vec<Falho>, sqlx::Error> {
+    let linhas = sqlx::query(
+        "SELECT id, conta, tipo, params, origem, tentativas,
+                (extract(epoch FROM criado_em) * 1000)::bigint AS criado_ms
+         FROM nexus.comando
+         WHERE executado_em IS NOT NULL AND resultado = $3
+           AND (cardinality($1::text[]) = 0 OR conta = ANY($1))
+         ORDER BY id DESC LIMIT $2",
+    )
+    .bind(contas)
+    .bind(limite)
+    .bind(RESULTADO_SEM_CONFIRMACAO)
+    .fetch_all(db)
+    .await?;
+    linhas
+        .iter()
+        .map(|l| {
+            Ok(Falho {
+                id: l.try_get("id")?,
+                conta: l.try_get("conta")?,
+                tipo: l.try_get("tipo")?,
+                params: l.try_get("params")?,
+                origem: l.try_get("origem")?,
+                tentativas: l.try_get("tentativas")?,
+                criado_ms: l.try_get("criado_ms")?,
+            })
+        })
+        .collect()
+}
+
+/// Volta um comando falho para pendente (zera tentativas). Se o prazo já passou, ganha 5
+/// minutos para não expirar na hora. `false` se o id não é um falho.
+pub async fn reenviar(db: &PgPool, id: i64) -> Result<bool, sqlx::Error> {
+    sqlx::query(
+        "UPDATE nexus.comando SET
+             executado_em = NULL, resultado = NULL, reservado_em = NULL, reservado_por = NULL,
+             tentativas = 0,
+             expira_em = CASE WHEN expira_em IS NOT NULL AND expira_em < now() + interval '5 minutes'
+                              THEN now() + interval '5 minutes' ELSE expira_em END
+         WHERE id = $1 AND executado_em IS NOT NULL AND resultado = $2",
+    )
+    .bind(id)
+    .bind(RESULTADO_SEM_CONFIRMACAO)
+    .execute(db)
+    .await
+    .map(|r| r.rows_affected() > 0)
 }
 
 /// Devolve à fila os comandos reservados cujo lease venceu e encerra os que esgotaram as
@@ -147,6 +293,7 @@ pub async fn pendentes(
              WHERE (cardinality($1::text[]) = 0 OR conta = ANY($1))
                AND executado_em IS NULL AND reservado_em IS NULL
                AND (expira_em IS NULL OR expira_em > now())
+               AND (executar_em IS NULL OR executar_em <= now())
              ORDER BY CASE WHEN $4 THEN -prioridade ELSE prioridade END, id
              LIMIT $3
              FOR UPDATE SKIP LOCKED)

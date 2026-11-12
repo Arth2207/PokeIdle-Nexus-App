@@ -58,7 +58,22 @@ async fn banco() -> (ContainerAsync<GenericImage>, PgPool) {
     .execute(&pool)
     .await
     .unwrap();
-    sqlx::migrate!("../../migrations").run(&pool).await.unwrap();
+    // Como em produção: o role do Nexus tem search_path=nexus e a extensão mora em public.
+    // Migration que chamar função do Timescale sem qualificar falha aqui.
+    let opcoes = url
+        .parse::<sqlx::postgres::PgConnectOptions>()
+        .unwrap()
+        .options([("search_path", "nexus")]);
+    let pool_migracao = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(opcoes)
+        .await
+        .unwrap();
+    sqlx::migrate!("../../migrations")
+        .run(&pool_migracao)
+        .await
+        .unwrap();
+    pool_migracao.close().await;
     (container, pool)
 }
 
@@ -93,6 +108,7 @@ async fn bolsa_no_banco_de_teste() {
     equipes_no_banco(&db).await;
     equipe_da_bolsa_no_banco(&db).await;
     fase3_eventos_e_hunt(&db).await;
+    timescale_evento(&db).await;
     fase3_comandos(&db).await;
     fase3_raros_e_tentativas(&db).await;
 }
@@ -693,4 +709,46 @@ async fn fase3_raros_e_tentativas(db: &PgPool) {
         .await
         .unwrap();
     assert_eq!(n, 4);
+}
+
+/// Compressão e agregado contínuo de `nexus.evento` existem (quando há Timescale).
+async fn timescale_evento(db: &PgPool) {
+    let ext: Option<String> =
+        sqlx::query_scalar("SELECT extname::text FROM pg_extension WHERE extname = 'timescaledb'")
+            .fetch_optional(db)
+            .await
+            .unwrap();
+    if ext.is_none() {
+        return;
+    }
+    let comprime: bool = sqlx::query_scalar(
+        "SELECT compression_enabled FROM timescaledb_information.hypertables \
+         WHERE hypertable_schema = 'nexus' AND hypertable_name = 'evento'",
+    )
+    .fetch_one(db)
+    .await
+    .unwrap();
+    assert!(comprime);
+    let jobs: Vec<String> = sqlx::query_scalar(
+        "SELECT proc_name::text FROM timescaledb_information.jobs \
+         WHERE hypertable_schema = 'nexus' ORDER BY 1",
+    )
+    .fetch_all(db)
+    .await
+    .unwrap();
+    assert!(jobs.contains(&"policy_compression".to_string()), "{jobs:?}");
+    assert!(
+        jobs.contains(&"policy_refresh_continuous_aggregate".to_string()),
+        "{jobs:?}"
+    );
+    let cagg: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM timescaledb_information.continuous_aggregates \
+         WHERE view_schema = 'nexus' AND view_name = 'evento_hora'",
+    )
+    .fetch_one(db)
+    .await
+    .unwrap();
+    assert_eq!(cagg, 1);
+    // Sem política de retenção (apagar dados exige autorização).
+    assert!(!jobs.contains(&"policy_retention".to_string()));
 }

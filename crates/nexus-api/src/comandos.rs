@@ -123,6 +123,12 @@ pub async fn manter(estado: &Estado, marca: &mut Option<(i64, i64)>) -> Result<(
             }
         }
     }
+    if estado.melhorias {
+        let n = comandos::liberar_agendados(&estado.db).await?;
+        if n > 0 {
+            metrics::counter!("nexus_comandos_agendados_liberados_total").increment(n);
+        }
+    }
     for entregue in comandos::expirar(&estado.db).await? {
         if entregue {
             metrics::counter!("nexus_comandos_expirados_total").increment(1);
@@ -133,6 +139,42 @@ pub async fn manter(estado: &Estado, marca: &mut Option<(i64, i64)>) -> Result<(
     let (devolvidos, encerrados) = comandos::devolver_vencidos(&estado.db, LEASE_PADRAO_S).await?;
     metrics::counter!("nexus_comandos_devolvidos_total").increment(devolvidos);
     metrics::counter!("nexus_comandos_sem_confirmacao_total").increment(encerrados);
+    // Gauges são só observação: uma falha aqui não derruba a manutenção.
+    if let Err(e) = atualizar_gauges(estado).await {
+        tracing::warn!(erro = %e, "gauges da fila de comandos falharam");
+    }
+    Ok(())
+}
+
+/// Pendentes por faixa de idade, o mais antigo e o atraso do espelho (em ids do legado).
+async fn atualizar_gauges(estado: &Estado) -> Result<(), sqlx::Error> {
+    // Agendado ainda não vencido não é "pendente atrasado".
+    let (ate_1m, ate_5m, mais_5m, mais_antigo): (i64, i64, i64, f64) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE criado_em > now() - interval '1 minute'),
+                count(*) FILTER (WHERE criado_em <= now() - interval '1 minute'
+                                   AND criado_em > now() - interval '5 minutes'),
+                count(*) FILTER (WHERE criado_em <= now() - interval '5 minutes'),
+                coalesce(max(extract(epoch FROM now() - coalesce(executar_em, criado_em))), 0)::float8
+         FROM nexus.comando
+         WHERE executado_em IS NULL AND reservado_em IS NULL
+           AND (executar_em IS NULL OR executar_em <= now())",
+    )
+    .fetch_one(&estado.db)
+    .await?;
+    for (faixa, n) in [("ate_1m", ate_1m), ("ate_5m", ate_5m), ("mais_5m", mais_5m)] {
+        metrics::gauge!("nexus_comandos_pendentes", "idade" => faixa).set(n as f64);
+    }
+    metrics::gauge!("nexus_comando_pendente_mais_antigo_segundos").set(mais_antigo);
+    if estado.espelho_comandos {
+        let (legado, espelhado): (Option<i32>, Option<i64>) = sqlx::query_as(
+            "SELECT (SELECT max(id) FROM public.comando_fila),
+                    (SELECT max(id_legado) FROM nexus.comando)",
+        )
+        .fetch_one(&estado.db)
+        .await?;
+        let lag = legado.map_or(0, i64::from) - espelhado.unwrap_or(0);
+        metrics::gauge!("nexus_espelho_comandos_lag_ids").set(lag.max(0) as f64);
+    }
     Ok(())
 }
 

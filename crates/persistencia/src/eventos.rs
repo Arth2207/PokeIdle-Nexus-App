@@ -6,7 +6,7 @@
 
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 
 /// Tipos de evento que o legado conhece (`ev.k`).
 pub const TIPOS: &[&str] = &[
@@ -197,6 +197,94 @@ pub async fn gravar_hunt(
     Ok(n)
 }
 
+/// Filtros do histórico de eventos. Instantes em ms desde 1970 (`de` inclusivo, `ate` exclusivo).
+#[derive(Debug, Default, Clone)]
+pub struct FiltroHistorico<'a> {
+    pub conta: Option<&'a str>,
+    pub tipo: Option<&'a str>,
+    pub de_ms: Option<i64>,
+    pub ate_ms: Option<i64>,
+}
+
+/// Um evento gravado.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventoGravado {
+    pub conta: String,
+    pub tipo: String,
+    pub em_ms: i64,
+    pub dados: Value,
+}
+
+/// Eventos brutos, do mais recente para o mais antigo, até `limite` linhas.
+pub async fn listar(
+    db: &PgPool,
+    f: &FiltroHistorico<'_>,
+    limite: i64,
+) -> Result<Vec<EventoGravado>, sqlx::Error> {
+    let linhas = sqlx::query(
+        "SELECT conta, tipo, (extract(epoch FROM em) * 1000)::bigint AS em_ms, dados
+         FROM nexus.evento
+         WHERE ($1::text IS NULL OR conta = $1) AND ($2::text IS NULL OR tipo = $2)
+           AND ($3::bigint IS NULL OR em >= to_timestamp($3 / 1000.0))
+           AND ($4::bigint IS NULL OR em < to_timestamp($4 / 1000.0))
+         ORDER BY em DESC LIMIT $5",
+    )
+    .bind(f.conta)
+    .bind(f.tipo)
+    .bind(f.de_ms)
+    .bind(f.ate_ms)
+    .bind(limite)
+    .fetch_all(db)
+    .await?;
+    linhas
+        .iter()
+        .map(|l| {
+            Ok(EventoGravado {
+                conta: l.try_get("conta")?,
+                tipo: l.try_get("tipo")?,
+                em_ms: l.try_get("em_ms")?,
+                dados: l.try_get("dados")?,
+            })
+        })
+        .collect()
+}
+
+/// Contagem por hora, conta e tipo. Lê o agregado contínuo `nexus.evento_hora` quando existe
+/// (Timescale); sem ele, agrega `nexus.evento` na hora. Devolve `(hora_ms, conta, tipo, total)`.
+pub async fn por_hora(
+    db: &PgPool,
+    f: &FiltroHistorico<'_>,
+    limite: i64,
+) -> Result<Vec<(i64, String, String, i64)>, sqlx::Error> {
+    let existe: bool = sqlx::query_scalar("SELECT to_regclass('nexus.evento_hora') IS NOT NULL")
+        .fetch_one(db)
+        .await?;
+    let sql = if existe {
+        "SELECT (extract(epoch FROM hora) * 1000)::bigint, conta, tipo, total::bigint
+         FROM nexus.evento_hora
+         WHERE ($1::text IS NULL OR conta = $1) AND ($2::text IS NULL OR tipo = $2)
+           AND ($3::bigint IS NULL OR hora >= to_timestamp($3 / 1000.0))
+           AND ($4::bigint IS NULL OR hora < to_timestamp($4 / 1000.0))
+         ORDER BY hora DESC, conta, tipo LIMIT $5"
+    } else {
+        "SELECT (extract(epoch FROM date_trunc('hour', em)) * 1000)::bigint AS h, conta, tipo,
+                count(*)::bigint
+         FROM nexus.evento
+         WHERE ($1::text IS NULL OR conta = $1) AND ($2::text IS NULL OR tipo = $2)
+           AND ($3::bigint IS NULL OR em >= to_timestamp($3 / 1000.0))
+           AND ($4::bigint IS NULL OR em < to_timestamp($4 / 1000.0))
+         GROUP BY h, conta, tipo ORDER BY h DESC, conta, tipo LIMIT $5"
+    };
+    sqlx::query_as(sql)
+        .bind(f.conta)
+        .bind(f.tipo)
+        .bind(f.de_ms)
+        .bind(f.ate_ms)
+        .bind(limite)
+        .fetch_all(db)
+        .await
+}
+
 #[cfg(test)]
 mod testes {
     use serde_json::json;
@@ -235,5 +323,63 @@ mod testes {
         let evs = vec![json!({"k": "kill", "ts": TS_SENTINELA})];
         assert_eq!(validar("c", &evs, 1, false).eventos.len(), 1);
         assert_eq!(validar("c", &evs, 1, true).erros, vec!["kill"]);
+    }
+
+    mod propriedades {
+        use proptest::prelude::*;
+        use serde_json::{Map, Value};
+
+        use super::super::*;
+
+        /// Campos de negócio (nunca os voláteis `ts`, `k`, `recebido_em`).
+        fn campos() -> impl Strategy<Value = Vec<(String, i64)>> {
+            proptest::collection::vec(("[a-j]{1,4}", -1000_i64..1000), 0..6)
+        }
+
+        fn monta(campos: &[(String, i64)], ts: i64, ordem_inversa: bool) -> Value {
+            let mut pares: Vec<_> = campos.to_vec();
+            // Chaves repetidas: vale a última, igual para as duas ordens.
+            pares.sort_by(|a, b| a.0.cmp(&b.0));
+            pares.dedup_by(|b, a| {
+                let igual = a.0 == b.0;
+                if igual {
+                    a.1 = b.1;
+                }
+                igual
+            });
+            if ordem_inversa {
+                pares.reverse();
+            }
+            let mut m = Map::new();
+            m.insert("k".into(), Value::from("kill"));
+            m.insert("ts".into(), Value::from(ts));
+            for (k, v) in pares {
+                m.insert(k, Value::from(v));
+            }
+            Value::Object(m)
+        }
+
+        proptest! {
+            #[test]
+            fn mesmo_evento_mesma_chave(c in campos(), em in 0_i64..4_000_000_000_000) {
+                let a = monta(&c, em, false);
+                prop_assert_eq!(chave("c", "kill", em, &a), chave("c", "kill", em, &a.clone()));
+            }
+
+            #[test]
+            fn campo_volatil_e_ordem_nao_mudam_a_chave(
+                c in campos(),
+                em in 0_i64..4_000_000_000_000,
+                outro_ts in any::<i64>(),
+                recebido in any::<i64>(),
+            ) {
+                let a = monta(&c, em, false);
+                let mut b = monta(&c, outro_ts, true);
+                if let Some(o) = b.as_object_mut() {
+                    o.insert("recebido_em".into(), Value::from(recebido));
+                }
+                prop_assert_eq!(chave("c", "kill", em, &a), chave("c", "kill", em, &b));
+            }
+        }
     }
 }

@@ -4,13 +4,14 @@
 //! As duas de escrita só gravam com `NEXUS_ESCRITA_RAROS=true`; desligada, o estado vem da
 //! importação (`nexus-api importar raros`). O `fato_cofre` continua sendo do legado.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use axum::body::Bytes;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
+use contrato::ws::{MensagemServidor, RaroNovo, ShinyNovo};
 use contrato::Erro;
 use nucleo::js;
 use nucleo::raros as nr;
@@ -21,6 +22,7 @@ use crate::bolsa::agora_ms;
 use crate::estado::Estado;
 use crate::raros::{self, ErroRaros};
 use crate::rotas::corpo_json;
+use crate::ws::Destino;
 
 type Params = Query<HashMap<String, String>>;
 
@@ -60,6 +62,101 @@ fn nick_de(cliente: Option<&Extension<Cliente>>, pedido: &str) -> Result<String,
             .map_err(|_| ()),
         None => Ok(pedido),
     }
+}
+
+/// Identificadores (`id` em JSON) dos itens do estado de raros.
+pub(crate) fn ids_dos_itens(estado: &Value) -> HashSet<String> {
+    itens(estado)
+        .filter_map(|i| i.get("id"))
+        .map(Value::to_string)
+        .collect()
+}
+
+fn itens(estado: &Value) -> impl Iterator<Item = &Value> {
+    estado
+        .pointer("/raros/itens")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+}
+
+/// Itens cujo `id` não estava no estado anterior. Estado anterior vazio (primeira carga) não
+/// gera novidade: seria uma enxurrada de avisos sem sentido.
+pub(crate) fn itens_novos(antes: &HashSet<String>, depois: &Value) -> Vec<Value> {
+    if antes.is_empty() {
+        return Vec::new();
+    }
+    itens(depois)
+        .filter(|i| {
+            i.get("id")
+                .is_some_and(|id| !antes.contains(&id.to_string()))
+        })
+        .cloned()
+        .collect()
+}
+
+/// No máximo de mensagens `raro.novo` por ingestão.
+const MAX_AVISOS_RAROS: usize = 20;
+
+/// `raro.novo` por conta dona do item (item sem conta vai só para tokens globais).
+fn publicar_raros(estado: &Estado, novos: &[Value]) {
+    let mut enviados = 0;
+    for item in novos {
+        let id = item.get("id").cloned().unwrap_or(Value::Null);
+        let nome = item.get("nome").cloned().unwrap_or(Value::Null);
+        let donos: Vec<&String> = item
+            .get("contas")
+            .and_then(Value::as_object)
+            .map(|c| c.keys().collect())
+            .unwrap_or_default();
+        let destinos: Vec<Option<String>> = if donos.is_empty() {
+            vec![None]
+        } else {
+            donos.into_iter().map(|c| Some(c.to_lowercase())).collect()
+        };
+        for conta in destinos {
+            if enviados >= MAX_AVISOS_RAROS {
+                return;
+            }
+            enviados += 1;
+            let destino = conta.clone().map_or(Destino::Global, Destino::Conta);
+            estado.ws.publicar_para(
+                destino,
+                MensagemServidor::RaroNovo(RaroNovo {
+                    id: id.clone(),
+                    nome: nome.clone(),
+                    conta,
+                }),
+            );
+        }
+    }
+}
+
+/// `shiny.novo` quando o registro soma shiny.
+fn publicar_shiny(estado: &Estado, corpo: &Value, resposta: &Value) {
+    let quantidade = js::mais(corpo.get("shiny"));
+    if quantidade.is_nan() || quantidade <= 0.0 {
+        return;
+    }
+    let (Some(nick), Some(dia)) = (
+        resposta.get("nick").and_then(Value::as_str),
+        resposta.get("dia").and_then(Value::as_str),
+    ) else {
+        return;
+    };
+    let total = resposta
+        .get("shiny")
+        .and_then(Value::as_f64)
+        .unwrap_or(quantidade);
+    estado.ws.publicar_para(
+        Destino::Conta(nick.to_owned()),
+        MensagemServidor::ShinyNovo(ShinyNovo {
+            nick: nick.to_owned(),
+            dia: dia.to_owned(),
+            quantidade,
+            total_dia: total,
+        }),
+    );
 }
 
 /// `GET /api/raros2?nick=&notaMin=&meta=`.
@@ -127,8 +224,19 @@ pub async fn ingest(
     }
     let corpo = corpo_json(&corpo);
     let agora = agora_ms();
-    match persistencia::raros::modificar(&estado.db, |r| nr::ingerir(r, &corpo, agora)).await {
-        Ok(Ok(n)) => Json(json!({ "ok": true, "itens": n })).into_response(),
+    let r = persistencia::raros::modificar(&estado.db, |r| {
+        let antes = ids_dos_itens(r);
+        let n = nr::ingerir(r, &corpo, agora)?;
+        Ok((n, itens_novos(&antes, r)))
+    })
+    .await;
+    match r {
+        Ok(Ok((n, novos))) => {
+            if estado.melhorias {
+                publicar_raros(&estado, &novos);
+            }
+            Json(json!({ "ok": true, "itens": n })).into_response()
+        }
         Ok(Err(msg)) => erro(400, msg),
         Err(e) => falha(&e.into()),
     }
@@ -157,7 +265,12 @@ pub async fn registrar(
     match persistencia::raros::modificar(&estado.db, |r| nr::registrar_shiny(r, &corpo, &hoje))
         .await
     {
-        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Ok(v)) => {
+            if estado.melhorias {
+                publicar_shiny(&estado, &corpo, &v);
+            }
+            Json(v).into_response()
+        }
         Ok(Err(msg)) => erro(400, msg),
         Err(e) => falha(&e.into()),
     }

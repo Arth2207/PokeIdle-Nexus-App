@@ -811,4 +811,42 @@ mod testes {
         let agora = 1_794_495_600_000;
         assert_eq!(dias_no_mes(agora), (30, 12));
     }
+
+    /// O merge do `ingerir` é idempotente: reaplicar o mesmo corpo (mesma leitura bruta) soma
+    /// diferença zero. `registrar_shiny` soma de propósito e não entra aqui.
+    mod propriedades {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        fn corpo() -> impl Strategy<Value = Value> {
+            let dia = (0_u32..500, 0_u32..50).prop_map(|(b, s)| json!({"bolas": b, "shiny": s}));
+            let dias = proptest::collection::btree_map("2026-01-0[1-3]", dia, 0..3);
+            let contas = proptest::collection::btree_map("[A-C][a-c]{0,2}", dias, 0..3);
+            let itens =
+                proptest::collection::vec((0_u32..20).prop_map(|id| json!({"id": id})), 0..5);
+            (itens, contas).prop_map(
+                |(itens, contas)| json!({"raros": {"itens": itens}, "historico": {"dia": contas}}),
+            )
+        }
+
+        proptest! {
+            #[test]
+            fn ingerir_repetido_e_idempotente(
+                inicial in proptest::option::of(corpo()),
+                c in corpo(),
+                agora in 0_i64..4_000_000_000_000,
+            ) {
+                let mut base = json!({});
+                if let Some(i) = inicial {
+                    let _ = ingerir(&mut base, &i, agora);
+                }
+                let mut uma = base.clone();
+                let _ = ingerir(&mut uma, &c, agora);
+                let mut duas = uma.clone();
+                let _ = ingerir(&mut duas, &c, agora);
+                prop_assert_eq!(uma, duas);
+            }
+        }
+    }
 }

@@ -19,6 +19,8 @@
 //! | `NEXUS_CORS_ORIGENS`  | não         | (nenhuma)   |
 //! | `NEXUS_LIMITE_RPS`    | não         | `10`        |
 //! | `NEXUS_LIMITE_RAJADA` | não         | `40`        |
+//! | `NEXUS_LIMITE_INGESTAO_RPS` | não | `50`        |
+//! | `NEXUS_LIMITE_INGESTAO_RAJADA` | não | `200`   |
 //! | `NEXUS_BOLSA_CICLO_S` | não         | `180`       |
 //! | `NEXUS_PARIDADE_URL`  | não         | (desligado) |
 //! | `NEXUS_PARIDADE_CICLO_S` | não      | `600`       |
@@ -38,12 +40,17 @@
 //!   `nexus.comando` (só lê a tabela do legado). É o modo sombra da fila.
 //! - `NEXUS_MELHORIAS`: liga o que diverge do legado de propósito: busca exata nos perfis de
 //!   equipe, chance de vitória, ordem de compra e preços típicos corrigidos. Quebra a paridade
-//!   (o comparador vai acusar), então só depois do cutover da fase 2.
+//!   (o comparador vai acusar), então só depois do cutover da fase 2. Também liga o push ao vivo
+//!   do WebSocket (`raro.novo`, `shiny.novo`, `comando.estado`), `GET /api/comandos/falhos`,
+//!   `POST /api/comandos/{id}/reenviar`, o agendamento (`executar_em`) e `GET /api/eventos`.
 //! - `NEXUS_MODELO`: modelo de combate das respostas (`legado` ou `jogo`). O outro roda ao
 //!   lado só nas métricas. Trocar para `jogo` só com lutas reais suficientes para calibrar.
 //! - `NEXUS_CPU_THREADS`: tamanho do pool de CPU do cálculo de equipes (fora do tokio).
 //! - `NEXUS_CORS_ORIGENS`: origens do painel web, separadas por vírgula.
 //! - `NEXUS_LIMITE_*`: rate limit por token (requisições por segundo e rajada).
+//! - `NEXUS_LIMITE_INGESTAO_*`: limite à parte (por token) para `POST /ingest`, `/api/hunt-sync`
+//!   e `evento.lote` do WebSocket. Padrão generoso (50/s, rajada 200). Excesso: `429` no HTTP
+//!   e mensagem `erro` no WebSocket.
 //! - `NEXUS_PARIDADE_URL`: URL do legado (ex.: `http://host:8181`). Liga o comparador.
 //! - `NEXUS_PARIDADE_EQUIPE`: o comparador também chama `/api/bolsa/equipe` e
 //!   `/equipe-propria` no legado, o que dispara o cálculo pesado dele. Desligado por padrão.
@@ -93,6 +100,10 @@ pub struct Configuracao {
     pub limite_rps: f64,
     #[serde(default = "limite_rajada_padrao")]
     pub limite_rajada: f64,
+    #[serde(default = "limite_ingestao_rps_padrao")]
+    pub limite_ingestao_rps: f64,
+    #[serde(default = "limite_ingestao_rajada_padrao")]
+    pub limite_ingestao_rajada: f64,
     #[serde(default = "bolsa_ciclo_padrao")]
     pub bolsa_ciclo_s: u64,
     #[serde(default)]
@@ -127,6 +138,14 @@ fn limite_rps_padrao() -> f64 {
 
 fn limite_rajada_padrao() -> f64 {
     40.0
+}
+
+fn limite_ingestao_rps_padrao() -> f64 {
+    50.0
+}
+
+fn limite_ingestao_rajada_padrao() -> f64 {
+    200.0
 }
 
 fn bolsa_ciclo_padrao() -> u64 {

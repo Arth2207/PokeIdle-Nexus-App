@@ -48,7 +48,7 @@ fn conta_liberada(cliente: Option<&Extension<Cliente>>, conta: &str) -> bool {
 
 /// Rótulo de métrica: tipos fora da lista conhecida viram `desconhecido` (o rótulo vem do
 /// cliente, e não pode criar séries sem limite).
-fn rotulo(tipo: &str) -> String {
+pub(crate) fn rotulo(tipo: &str) -> String {
     if TIPOS.contains(&tipo) {
         tipo
     } else {
@@ -63,40 +63,51 @@ fn texto(v: Option<&Value>) -> Option<String> {
         .map(|v| nucleo::js::texto(Some(v)))
 }
 
-/// `POST /ingest` `{conta_id, eventos[], nick?}` → `{ok, erros, total}`.
-pub async fn ingest(
-    State(estado): State<Estado>,
-    cliente: Option<Extension<Cliente>>,
-    corpo: Bytes,
-) -> Response {
-    if let Some(r) = desligada(&estado) {
-        return r;
+/// Resultado de gravar um lote de eventos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResultadoLote {
+    /// Eventos válidos (gravados agora ou já existentes).
+    pub ok: usize,
+    /// Eventos rejeitados pela validação.
+    pub erros: usize,
+    /// Eventos que já estavam gravados.
+    pub duplicados: usize,
+    pub total: usize,
+}
+
+/// Por que um lote não foi gravado.
+#[derive(Debug)]
+pub enum ErroLote {
+    Desligada,
+    /// Token preso a outra conta.
+    ContaProibida,
+    Banco(sqlx::Error),
+}
+
+/// Grava um lote: o caminho único do `POST /ingest` e do `evento.lote` do WebSocket (mesma
+/// validação, mesmo escopo de conta, mesma flag `NEXUS_ESCRITA_INGESTAO`, mesmas métricas).
+/// `conta_token`: conta a que o token está preso (`None` = token global).
+pub async fn gravar_lote(
+    estado: &Estado,
+    conta_token: Option<&str>,
+    conta_id: &str,
+    nick: Option<&str>,
+    eventos_brutos: &[Value],
+) -> Result<ResultadoLote, ErroLote> {
+    if !estado.escrita_ingestao {
+        return Err(ErroLote::Desligada);
     }
-    let corpo = corpo_json(&corpo);
-    let eventos_brutos = corpo
-        .get("eventos")
-        .and_then(Value::as_array)
-        .filter(|e| !e.is_empty());
-    let (Some(conta_id), Some(eventos_brutos)) = (texto(corpo.get("conta_id")), eventos_brutos)
-    else {
-        return erro(400, "falta conta_id ou eventos[]");
-    };
-    let nick = texto(corpo.get("nick"))
-        .map(|n| normalizar(&n))
-        .filter(|n| !n.is_empty());
-    let conta_id = normalizar(&conta_id);
-    // `conta` é o nick quando vier; sem nick, é o próprio `conta_id`. Grava-se também o
-    // `conta_id`. Token de conta só aceita lote cujo nick é a conta dele; lote sem nick (conta
-    // global) exige token global.
+    let conta_id = normalizar(conta_id);
+    let nick = nick.map(normalizar).filter(|n| !n.is_empty());
+    // `conta` é o nick quando vier; sem nick, é o próprio `conta_id`. Token de conta só aceita
+    // lote cujo nick é a conta dele; lote sem nick (conta global) exige token global.
     let conta = nick.clone().unwrap_or_else(|| conta_id.clone());
-    if let Some(Extension(c)) = cliente.as_ref() {
-        if let Some(propria) = &c.conta {
-            if nick
-                .as_deref()
-                .is_none_or(|n| !propria.eq_ignore_ascii_case(n))
-            {
-                return erro(403, "este token só grava a própria conta");
-            }
+    if let Some(propria) = conta_token {
+        if nick
+            .as_deref()
+            .is_none_or(|n| !propria.eq_ignore_ascii_case(n))
+        {
+            return Err(ErroLote::ContaProibida);
         }
     }
     let lote = eventos::validar(&conta, eventos_brutos, agora_ms(), estado.melhorias);
@@ -104,11 +115,9 @@ pub async fn ingest(
     if sem_ts > 0 {
         metrics::counter!("nexus_ingestao_sem_ts_total").increment(sem_ts as u64);
     }
-    let inseridos = match eventos::gravar(&estado.db, &conta, Some(&conta_id), &lote.eventos).await
-    {
-        Ok(t) => t,
-        Err(e) => return indisponivel(&e),
-    };
+    let inseridos = eventos::gravar(&estado.db, &conta, Some(&conta_id), &lote.eventos)
+        .await
+        .map_err(ErroLote::Banco)?;
     for tipo in TIPOS.iter().copied().chain(["desconhecido"]) {
         let aceitos = lote
             .eventos
@@ -127,12 +136,56 @@ pub async fn ingest(
         conta_metrica("duplicado", aceitos.saturating_sub(novos));
         conta_metrica("erro", erros);
     }
-    Json(json!({
-        "ok": lote.eventos.len(),
-        "erros": lote.erros.len(),
-        "total": eventos_brutos.len(),
-    }))
-    .into_response()
+    if !inseridos.is_empty() {
+        metrics::gauge!("nexus_ingestao_ultima_gravacao_segundos").set(agora_ms() as f64 / 1000.0);
+    }
+    Ok(ResultadoLote {
+        ok: lote.eventos.len(),
+        erros: lote.erros.len(),
+        duplicados: lote.eventos.len().saturating_sub(inseridos.len()),
+        total: eventos_brutos.len(),
+    })
+}
+
+/// `POST /ingest` `{conta_id, eventos[], nick?}` → `{ok, erros, total}`.
+pub async fn ingest(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    corpo: Bytes,
+) -> Response {
+    if let Some(r) = desligada(&estado) {
+        return r;
+    }
+    if let Some(Extension(c)) = cliente.as_ref() {
+        if estado.melhorias && !estado.limite_ingestao.permitir(&c.nome) {
+            return erro(429, "limite de ingestão excedido");
+        }
+    }
+    let corpo = corpo_json(&corpo);
+    let eventos_brutos = corpo
+        .get("eventos")
+        .and_then(Value::as_array)
+        .filter(|e| !e.is_empty());
+    let (Some(conta_id), Some(eventos_brutos)) = (texto(corpo.get("conta_id")), eventos_brutos)
+    else {
+        return erro(400, "falta conta_id ou eventos[]");
+    };
+    let nick = texto(corpo.get("nick"));
+    let conta_token = cliente.as_ref().and_then(|Extension(c)| c.conta.as_deref());
+    match gravar_lote(
+        &estado,
+        conta_token,
+        &conta_id,
+        nick.as_deref(),
+        eventos_brutos,
+    )
+    .await
+    {
+        Ok(r) => Json(json!({ "ok": r.ok, "erros": r.erros, "total": r.total })).into_response(),
+        Err(ErroLote::Desligada) => desligada(&estado).unwrap_or_else(|| erro(503, "desligada")),
+        Err(ErroLote::ContaProibida) => erro(403, "este token só grava a própria conta"),
+        Err(ErroLote::Banco(e)) => indisponivel(&e),
+    }
 }
 
 /// `POST /api/hunt-sync` `{eventos: [{nick, hunt_slug}]}` → `{atualizados}`.
@@ -143,6 +196,11 @@ pub async fn hunt_sync(
 ) -> Response {
     if let Some(r) = desligada(&estado) {
         return r;
+    }
+    if let Some(Extension(c)) = cliente.as_ref() {
+        if estado.melhorias && !estado.limite_ingestao.permitir(&c.nome) {
+            return erro(429, "limite de ingestão excedido");
+        }
     }
     let corpo = corpo_json(&corpo);
     // Sem nick ou sem hunt, o evento é pulado em silêncio, como no legado. Se o mesmo nick

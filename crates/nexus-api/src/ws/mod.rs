@@ -24,8 +24,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use contrato::ws::{
-    Atualizacao, ComandoCancelado, ComandoNovo, Envelope, MensagemCliente, MensagemServidor,
-    Ressincronizar, SessaoPronta, SUBPROTOCOLO,
+    Atualizacao, ComandoCancelado, ComandoEstado, ComandoNovo, Envelope, ErroWs, EventoAck,
+    EventoLote, MensagemCliente, MensagemServidor, Ressincronizar, SessaoPronta, SUBPROTOCOLO,
 };
 use contrato::Erro;
 use futures_util::stream::SplitSink;
@@ -41,6 +41,7 @@ use crate::auth::Cliente;
 use crate::bolsa::agora_ms;
 use crate::comandos::{self, Confirmada, MAX_RESULTADO};
 use crate::estado::Estado;
+use crate::rotas::ingestao::{gravar_lote, ErroLote};
 
 #[cfg(test)]
 mod testes;
@@ -85,6 +86,28 @@ struct Notificacao {
     evento: Evento,
 }
 
+/// Quem recebe um evento informativo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Destino {
+    /// Todas as conexões.
+    Todos,
+    /// Só tokens globais (o evento não pertence a uma conta).
+    Global,
+    /// Tokens globais e o token preso a esta conta.
+    Conta(String),
+}
+
+impl Destino {
+    /// `contas`: as contas do token (vazio = token global).
+    fn alcanca(&self, contas: &[String]) -> bool {
+        match self {
+            Destino::Todos => true,
+            Destino::Global => contas.is_empty(),
+            Destino::Conta(c) => comandos::no_escopo(contas, c),
+        }
+    }
+}
+
 /// O que circula no `broadcast`.
 #[derive(Debug, Clone)]
 pub enum Aviso {
@@ -94,14 +117,18 @@ pub enum Aviso {
         evento: Evento,
     },
     /// Evento informativo já serializado (com o `seq` dele).
-    Info { seq: u64, texto: Arc<str> },
+    Info {
+        seq: u64,
+        texto: Arc<str>,
+        destino: Destino,
+    },
     /// O listener reconectou (ou o canal transbordou): conferir a fila inteira.
     Conferir,
 }
 
 #[derive(Default)]
 struct Buffer {
-    eventos: VecDeque<(u64, Arc<str>)>,
+    eventos: VecDeque<(u64, Arc<str>, Destino)>,
     /// Maior `seq` já descartado do buffer.
     descartado_ate: u64,
 }
@@ -154,24 +181,33 @@ impl Hub {
     /// Publica um evento informativo (`bolsa.atualizada`, `alvos.atualizados`): ganha `seq`,
     /// entra no buffer circular e vai a todas as conexões.
     pub fn publicar_info(&self, msg: MensagemServidor) {
+        self.publicar_para(Destino::Todos, msg);
+    }
+
+    /// Como [`Hub::publicar_info`], restrito a quem pode ver o `destino`.
+    pub fn publicar_para(&self, destino: Destino, msg: MensagemServidor) {
         let mut b = self.buffer();
         let seq = self.proximo_seq();
         let Ok(texto) = serde_json::to_string(&Envelope::novo(Some(seq), agora_ms(), msg)) else {
             return;
         };
         let texto: Arc<str> = texto.into();
-        b.eventos.push_back((seq, texto.clone()));
+        b.eventos.push_back((seq, texto.clone(), destino.clone()));
         while b.eventos.len() > BUFFER {
-            if let Some((velho, _)) = b.eventos.pop_front() {
+            if let Some((velho, _, _)) = b.eventos.pop_front() {
                 b.descartado_ate = velho;
             }
         }
         // Sem nenhuma conexão ouvindo o envio falha, e tudo bem: o buffer já guardou.
-        let _ = self.avisos.send(Aviso::Info { seq, texto });
+        let _ = self.avisos.send(Aviso::Info {
+            seq,
+            texto,
+            destino,
+        });
     }
 
     /// O que reenviar a quem pede `retomar` com `desde`.
-    pub fn retomar(&self, desde: u64) -> Retomada {
+    pub fn retomar(&self, desde: u64, contas: &[String]) -> Retomada {
         let b = self.buffer();
         if desde > self.seq_atual() {
             // O cliente viu um seq maior que o nosso: o servidor reiniciou.
@@ -183,8 +219,8 @@ impl Hub {
         Retomada::Eventos(
             b.eventos
                 .iter()
-                .filter(|(s, _)| *s > desde)
-                .cloned()
+                .filter(|(s, _, d)| *s > desde && d.alcanca(contas))
+                .map(|(s, t, _)| (*s, t.clone()))
                 .collect(),
         )
     }
@@ -241,6 +277,9 @@ pub fn iniciar_listener(estado: Estado, parar: CancellationToken) {
                                 r = l.try_recv() => match r {
                                     Ok(Some(n)) => {
                                         if let Ok(n) = serde_json::from_str::<Notificacao>(n.payload()) {
+                                            if estado.melhorias {
+                                                publicar_estado_comando(&estado, &n);
+                                            }
                                             estado.ws.avisar(Aviso::Comando {
                                                 id: n.id,
                                                 conta: n.conta,
@@ -271,6 +310,26 @@ pub fn iniciar_listener(estado: Estado, parar: CancellationToken) {
             espera = (espera * 2).min(Duration::from_secs(30));
         }
     });
+}
+
+/// `comando.estado` a partir do NOTIFY da fila (só com `NEXUS_MELHORIAS`). `devolvido` não
+/// muda o estado visível (volta a pendente) e não gera mensagem.
+fn publicar_estado_comando(estado: &Estado, n: &Notificacao) {
+    let nome = match n.evento {
+        Evento::Novo => "criado",
+        Evento::Reservado => "entregue",
+        Evento::Executado => "confirmado",
+        Evento::Expirado => "expirado",
+        Evento::Devolvido => return,
+    };
+    estado.ws.publicar_para(
+        Destino::Conta(n.conta.clone()),
+        MensagemServidor::ComandoEstado(ComandoEstado {
+            id: n.id,
+            conta: n.conta.clone(),
+            estado: nome.into(),
+        }),
+    );
 }
 
 /// Quando o mercado é remontado, avisa os clientes com `bolsa.atualizada`.
@@ -401,6 +460,11 @@ fn conta_msg(m: &MensagemServidor) -> &'static str {
         MensagemServidor::BolsaAtualizada(_) => "bolsa.atualizada",
         MensagemServidor::AlvosAtualizados(_) => "alvos.atualizados",
         MensagemServidor::SessaoRessincronizar(_) => "sessao.ressincronizar",
+        MensagemServidor::EventoAck(_) => "evento.ack",
+        MensagemServidor::Erro(_) => "erro",
+        MensagemServidor::RaroNovo(_) => "raro.novo",
+        MensagemServidor::ShinyNovo(_) => "shiny.novo",
+        MensagemServidor::ComandoEstado(_) => "comando.estado",
     }
 }
 
@@ -530,7 +594,7 @@ impl Conexao {
             MensagemCliente::Ack(_) => self.recebida("ack"),
             MensagemCliente::Retomar(r) => {
                 self.recebida("retomar");
-                match self.hub().retomar(r.desde) {
+                match self.hub().retomar(r.desde, &self.contas) {
                     Retomada::Ressincronizar(motivo) => {
                         self.enviar(
                             None,
@@ -554,8 +618,66 @@ impl Conexao {
                 self.recebida("comando.resultado");
                 self.confirmar(r.id, &r.resultado).await;
             }
+            MensagemCliente::EventoLote(l) => {
+                self.recebida("evento.lote");
+                self.lote(l).await?;
+            }
         }
         Ok(())
+    }
+
+    fn erro_ws(&self, motivo: &str, seq_cliente: Option<u64>) -> Result<(), Fim> {
+        self.enviar(
+            None,
+            MensagemServidor::Erro(ErroWs {
+                motivo: motivo.into(),
+                seq_cliente,
+            }),
+        )
+    }
+
+    /// `evento.lote`: grava pela mesma função do `POST /ingest` e responde `evento.ack`.
+    async fn lote(&self, l: EventoLote) -> Result<(), Fim> {
+        let seq = Some(l.seq_cliente);
+        if self.estado.melhorias && !self.estado.limite_ingestao.permitir(&self.por) {
+            metrics::counter!("nexus_ws_lotes_limitados_total").increment(1);
+            return self.erro_ws("limite_taxa", seq);
+        }
+        // Token de uma conta: o lote vai para ela se `conta` faltar. Token de várias contas ou
+        // global exige `conta`, e ela precisa estar no escopo do token.
+        let unica = (self.contas.len() == 1)
+            .then(|| self.contas.first().map(String::as_str))
+            .flatten();
+        let Some(conta) = l.conta.as_deref().or(unica) else {
+            return self.erro_ws("conta_obrigatoria", seq);
+        };
+        if !comandos::no_escopo(&self.contas, conta) {
+            return self.erro_ws("conta_proibida", seq);
+        }
+        let conta_token = (!self.contas.is_empty()).then_some(conta);
+        let r = tokio::time::timeout(
+            BANCO,
+            gravar_lote(&self.estado, conta_token, conta, Some(conta), &l.eventos),
+        )
+        .await;
+        match r {
+            Ok(Ok(r)) => self.enviar(
+                None,
+                MensagemServidor::EventoAck(EventoAck {
+                    seq_cliente: l.seq_cliente,
+                    ok: true,
+                    duplicados: r.duplicados as u64,
+                    erros: r.erros as u64,
+                }),
+            ),
+            Ok(Err(ErroLote::Desligada)) => self.erro_ws("ingestao_desligada", seq),
+            Ok(Err(ErroLote::ContaProibida)) => self.erro_ws("conta_proibida", seq),
+            Ok(Err(ErroLote::Banco(e))) => {
+                tracing::warn!(erro = %e, "ws: lote de eventos falhou");
+                self.erro_ws("banco_indisponivel", seq)
+            }
+            Err(_) => self.erro_ws("banco_indisponivel", seq),
+        }
     }
 
     fn recebida(&self, tipo: &'static str) {
@@ -611,7 +733,15 @@ impl Conexao {
                     }
                 }
                 Ok(Aviso::Comando { .. }) => {}
-                Ok(Aviso::Info { seq, texto }) => self.enviar_info(seq, &texto)?,
+                Ok(Aviso::Info {
+                    seq,
+                    texto,
+                    destino,
+                }) => {
+                    if destino.alcanca(&self.contas) {
+                        self.enviar_info(seq, &texto)?;
+                    }
+                }
                 Ok(Aviso::Conferir) => tudo = true,
                 Err(RecvError::Lagged(_)) => {
                     tudo = true;
