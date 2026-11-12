@@ -11,6 +11,7 @@ pub mod busca_exata;
 pub mod combate;
 pub mod equipes;
 pub mod js;
+pub mod motor;
 pub mod otimizador;
 pub mod precificador;
 pub mod raros;

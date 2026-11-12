@@ -5,6 +5,7 @@ mod comandos;
 mod equipes;
 mod eventos;
 pub(crate) mod ingestao;
+mod motor;
 mod raros;
 mod saude;
 
@@ -58,6 +59,7 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/raros2", get(raros::raros2))
         .route("/api/shiny", get(raros::shiny))
         .route("/api/eventos", get(eventos::historico))
+        .merge(motor::rotas())
         .route_layer(middleware::from_fn(|req, next| {
             auth::exigir_escopo(LEITURA, req, next)
         }))

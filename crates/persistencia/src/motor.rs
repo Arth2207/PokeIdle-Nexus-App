@@ -22,6 +22,8 @@ pub enum ErroMotor {
     Formato(&'static str),
     #[error(transparent)]
     Banco(#[from] sqlx::Error),
+    #[error("JSON do estado inválido: {0}")]
+    Json(serde_json::Error),
 }
 
 /// Substitui todo o estado do motor pelo do arquivo, numa transação.
@@ -60,6 +62,24 @@ pub async fn importar_dados(db: &PgPool, d: &Value, sha256: &str) -> Result<Cont
         return Err(ErroMotor::Formato("ação sem `t` numérico"));
     }
 
+    // Cada pedaço vai como texto, na ordem do arquivo: `texto` (json) guarda a ordem das
+    // chaves, `dados` (jsonb) serve para consultas.
+    let texto = |v: &Value| serde_json::to_string(v).map_err(ErroMotor::Json);
+    let (mut nicks, mut secoes, mut textos) = (Vec::new(), Vec::new(), Vec::new());
+    for (n, s, d) in &linhas_config {
+        nicks.push(n.clone());
+        secoes.push(s.clone());
+        textos.push(texto(d)?);
+    }
+    let textos_acoes = acoes.iter().map(texto).collect::<Result<Vec<_>, _>>()?;
+    let (mut chaves, mut textos_estado) = (Vec::new(), Vec::new());
+    for (k, v) in topo {
+        if !matches!(k.as_str(), "config" | "acoes") && !CHAVES_FORA.contains(&k.as_str()) {
+            chaves.push(k.clone());
+            textos_estado.push(texto(v)?);
+        }
+    }
+
     let mut tx = db.begin().await?;
     for apagar in [
         "DELETE FROM nexus.motor_config",
@@ -68,50 +88,38 @@ pub async fn importar_dados(db: &PgPool, d: &Value, sha256: &str) -> Result<Cont
     ] {
         sqlx::query(apagar).execute(&mut *tx).await?;
     }
-    let (nicks, secoes, dados): (Vec<String>, Vec<String>, Vec<Value>) =
-        linhas_config.into_iter().fold(
-            (Vec::new(), Vec::new(), Vec::new()),
-            |(mut n, mut s, mut d), (a, b, c)| {
-                n.push(a);
-                s.push(b);
-                d.push(c);
-                (n, s, d)
-            },
-        );
     let n_config = sqlx::query(
-        "INSERT INTO nexus.motor_config (nick, secao, dados)
-         SELECT n, s, d FROM unnest($1::text[], $2::text[]) WITH ORDINALITY AS a(n, s, o)
-         JOIN jsonb_array_elements($3) WITH ORDINALITY AS b(d, o2) ON o = o2",
+        "INSERT INTO nexus.motor_config (nick, secao, dados, texto, ordem)
+         SELECT n, s, t::jsonb, t::json, o::int
+         FROM unnest($1::text[], $2::text[], $3::text[]) WITH ORDINALITY AS a(n, s, t, o)",
     )
     .bind(&nicks)
     .bind(&secoes)
-    .bind(Value::Array(dados))
+    .bind(&textos)
     .execute(&mut *tx)
     .await?
     .rows_affected();
     // O arquivo guarda da mais nova para a mais antiga; o id cresce no sentido do tempo.
     let n_acoes = sqlx::query(
-        "INSERT INTO nexus.motor_acao (nick, t, tipo, ok, dados)
+        "INSERT INTO nexus.motor_acao (nick, t, tipo, ok, dados, texto)
          SELECT a->>'nick', (a->>'t')::bigint, a->>'tipo',
-                CASE jsonb_typeof(a->'ok') WHEN 'boolean' THEN (a->>'ok')::boolean END, a
-         FROM jsonb_array_elements($1) WITH ORDINALITY AS x(a, o)
+                CASE jsonb_typeof(a->'ok') WHEN 'boolean' THEN (a->>'ok')::boolean END,
+                a, x.t::json
+         FROM unnest($1::text[]) WITH ORDINALITY AS x(t, o)
+         CROSS JOIN LATERAL (SELECT x.t::jsonb AS a) j
          ORDER BY o DESC",
     )
-    .bind(Value::Array(acoes))
+    .bind(&textos_acoes)
     .execute(&mut *tx)
     .await?
     .rows_affected();
-    let resto: Map<String, Value> = topo
-        .iter()
-        .filter(|(k, _)| {
-            !matches!(k.as_str(), "config" | "acoes") && !CHAVES_FORA.contains(&k.as_str())
-        })
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
     let n_estado = sqlx::query(
-        "INSERT INTO nexus.motor_estado (chave, dados) SELECT key, value FROM jsonb_each($1)",
+        "INSERT INTO nexus.motor_estado (chave, dados, texto, ordem)
+         SELECT k, t::jsonb, t::json, o::int
+         FROM unnest($1::text[], $2::text[]) WITH ORDINALITY AS a(k, t, o)",
     )
-    .bind(Value::Object(resto))
+    .bind(&chaves)
+    .bind(&textos_estado)
     .execute(&mut *tx)
     .await?
     .rows_affected();
@@ -125,19 +133,52 @@ pub async fn importar_dados(db: &PgPool, d: &Value, sha256: &str) -> Result<Cont
     })
 }
 
-/// Monta de volta o objeto do `holodex-dados.json` (sem as [`CHAVES_FORA`]).
-pub async fn carregar_dados(db: &PgPool) -> Result<Value, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT jsonb_build_object(
-            'config', coalesce((SELECT jsonb_object_agg(nick, secoes) FROM (
-                SELECT nick, coalesce(jsonb_object_agg(secao, dados) FILTER (WHERE secao <> ''), '{}')
-                       AS secoes
-                FROM nexus.motor_config GROUP BY nick) c), '{}'),
-            'acoes', coalesce((SELECT jsonb_agg(dados ORDER BY id DESC) FROM nexus.motor_acao), '[]'))
-         || coalesce((SELECT jsonb_object_agg(chave, dados) FROM nexus.motor_estado), '{}')",
+/// Monta de volta o objeto do `holodex-dados.json` (sem as [`CHAVES_FORA`]), com as chaves
+/// na ordem do arquivo. Linhas sem `texto` (importadas antes da ordem) saem na do jsonb.
+pub async fn carregar_dados(db: &PgPool) -> Result<Value, ErroMotor> {
+    let ler = |t: &str| serde_json::from_str::<Value>(t).map_err(ErroMotor::Json);
+    // Três leituras do mesmo instante: uma importação no meio não mistura dois arquivos.
+    let mut tx = db.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let linhas: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT nick, secao, coalesce(texto::text, dados::text) FROM nexus.motor_config
+         ORDER BY ordem NULLS LAST, nick, secao",
     )
-    .fetch_one(db)
-    .await
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut config = Map::new();
+    for (nick, secao, t) in linhas {
+        let conta = config
+            .entry(nick)
+            .or_insert_with(|| Value::Object(Map::new()));
+        if let (false, Value::Object(c)) = (secao.is_empty(), conta) {
+            c.insert(secao, ler(&t)?);
+        }
+    }
+    let acoes: Vec<String> = sqlx::query_scalar(
+        "SELECT coalesce(texto::text, dados::text) FROM nexus.motor_acao ORDER BY id DESC",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let estado: Vec<(String, String)> = sqlx::query_as(
+        "SELECT chave, coalesce(texto::text, dados::text) FROM nexus.motor_estado
+         ORDER BY ordem NULLS LAST, chave",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let mut d = Map::new();
+    d.insert("config".into(), Value::Object(config));
+    d.insert(
+        "acoes".into(),
+        Value::Array(acoes.iter().map(|t| ler(t)).collect::<Result<_, _>>()?),
+    );
+    for (k, t) in estado {
+        d.insert(k, ler(&t)?);
+    }
+    Ok(Value::Object(d))
 }
 
 /// Substitui as contas do motor pelas do `contas.json`.
@@ -240,6 +281,28 @@ pub fn primeira_diferenca(a: &Value, b: &Value, caminho: &str) -> Option<String>
         }
         _ if a == b => None,
         _ => Some(format!("{caminho}: {} ≠ {}", resumo(a), resumo(b))),
+    }
+}
+
+/// Primeiro objeto (abaixo do topo) cujas chaves estão em outra ordem. O legado itera na
+/// ordem de inserção, então a ordem faz parte do estado.
+pub fn primeira_diferenca_de_ordem(a: &Value, b: &Value, caminho: &str) -> Option<String> {
+    match (a, b) {
+        (Value::Object(x), Value::Object(y)) => {
+            if !caminho.is_empty() && !x.keys().eq(y.keys()) {
+                return Some(format!("{caminho}: chaves em outra ordem"));
+            }
+            x.iter().find_map(|(k, p)| {
+                y.get(k)
+                    .and_then(|q| primeira_diferenca_de_ordem(p, q, &format!("{caminho}.{k}")))
+            })
+        }
+        (Value::Array(x), Value::Array(y)) => {
+            x.iter().zip(y).enumerate().find_map(|(i, (p, q))| {
+                primeira_diferenca_de_ordem(p, q, &format!("{caminho}[{i}]"))
+            })
+        }
+        _ => None,
     }
 }
 

@@ -38,6 +38,8 @@ pub struct Estado {
     pub raros: Arc<crate::raros::ServicoRaros>,
     /// `NEXUS_MELHORIAS`.
     pub melhorias: bool,
+    /// Fuso do motor do legado em ms (veja `Configuracao::motor_fuso_min`).
+    pub motor_fuso_ms: i64,
     /// `NEXUS_DISCORD_WEBHOOK` (só com `NEXUS_MELHORIAS`).
     pub webhook: Option<crate::webhook::Webhook>,
     pub limitador: Arc<Limitador>,
@@ -64,6 +66,7 @@ impl Estado {
             escrita_comandos: cfg.escrita_comandos,
             espelho_comandos: cfg.espelho_comandos,
             melhorias: cfg.melhorias,
+            motor_fuso_ms: cfg.motor_fuso_min.saturating_mul(60_000),
             webhook: cfg
                 .discord_webhook
                 .as_ref()
@@ -101,6 +104,7 @@ impl Estado {
             espelho_comandos: false,
             raros: Arc::new(crate::raros::ServicoRaros::novo()),
             melhorias: false,
+            motor_fuso_ms: -3 * 3_600_000,
             webhook: None,
             db,
             bolsa,

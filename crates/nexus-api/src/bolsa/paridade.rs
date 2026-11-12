@@ -154,6 +154,8 @@ pub struct Comparador<R> {
     /// Compara também `/api/bolsa/equipe` e `/equipe-propria`, que disparam o cálculo pesado
     /// do legado.
     equipe_bolsa: bool,
+    /// Motor do legado (`motor.*`); sem URL, o motor fica de fora.
+    motor_url: Option<String>,
 }
 
 /// `R: RepoMercado + RepoIngestao`: o comparador lê o mercado e o inventário, então o
@@ -169,6 +171,7 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
             rodada: Default::default(),
             estado: None,
             equipe_bolsa: false,
+            motor_url: None,
         })
     }
 
@@ -177,6 +180,84 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
         self.estado = Some(estado);
         self.equipe_bolsa = equipe_bolsa;
         self
+    }
+
+    /// Liga a comparação das rotas `GET` do motor (`motor.*`) com o motor do legado.
+    pub fn com_motor(mut self, url: Option<&str>) -> Self {
+        self.motor_url = url.map(|u| u.trim_end_matches('/').to_owned());
+        self
+    }
+
+    /// Só a comparação do motor (comando `paridade-motor`).
+    pub async fn rodada_motor(&self) -> Result<Relatorio, String> {
+        let estado = self.estado.as_ref().ok_or("comparador sem estado")?;
+        let base = self
+            .motor_url
+            .as_deref()
+            .ok_or("comparador sem URL do motor")?;
+        let mut rel = Relatorio::new();
+        self.comparar_motor(estado, base, &mut rel).await?;
+        Ok(rel)
+    }
+
+    /// Rotas `GET` do motor: cada uma sem `nick` e, as que recebem conta, com cada nick do
+    /// estado guardado. Comparação exata: status e corpo. O Nexus calcula no `agora` que o
+    /// legado devolveu, para a data e a hora locais serem as mesmas.
+    async fn comparar_motor(
+        &self,
+        estado: &crate::estado::Estado,
+        base: &str,
+        rel: &mut Relatorio,
+    ) -> Result<(), String> {
+        use crate::motor::{responder, Rota};
+        let d = persistencia::motor::carregar_dados(&estado.db)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut nicks: Vec<Option<String>> = vec![None];
+        if let Some(Value::Object(c)) = d.get("config") {
+            nicks.extend(c.keys().cloned().map(Some));
+        }
+        let sem_nick = [None];
+        for rota in Rota::TODAS {
+            let pedidos: &[Option<String>] = if rota.por_conta() { &nicks } else { &sem_nick };
+            for nick in pedidos {
+                let url = format!("{base}{}", rota.caminho());
+                let params: Vec<(&str, &str)> =
+                    nick.as_deref().map(|n| ("nick", n)).into_iter().collect();
+                let url =
+                    reqwest::Url::parse_with_params(&url, &params).map_err(|e| e.to_string())?;
+                let req = self.http.get(url);
+                let r = req.send().await.map_err(|e| e.to_string())?;
+                let status = r.status().as_u16();
+                let legado: Value = r.json().await.map_err(|e| e.to_string())?;
+                let agora = legado
+                    .get("agora")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_else(super::agora_ms);
+                let (n_status, n_corpo) = match responder(
+                    &estado.db,
+                    estado.motor_fuso_ms,
+                    agora,
+                    rota,
+                    nick.as_deref(),
+                )
+                .await
+                .map_err(|e| e.to_string())?
+                {
+                    Ok(x) => (x.status, x.corpo),
+                    Err(_) => (500, serde_json::json!({ "erro": "erro interno" })),
+                };
+                let diff = if status == n_status {
+                    persistencia::motor::primeira_diferenca(&legado, &n_corpo, "")
+                } else {
+                    Some(format!("status {status} ≠ {n_status}"))
+                };
+                rel.entry(rota.nome())
+                    .or_default()
+                    .registrar(nick.as_deref().unwrap_or("sem nick"), diff);
+            }
+        }
+        Ok(())
     }
 
     /// `/api/bolsa/equipe-propria` (conta padrão, próximo boss) e `/api/bolsa/alvos-coleta`:
@@ -674,6 +755,14 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
                     .or_default()
                     .exemplos
                     .push(format!("falhou: {e}"));
+            }
+            if let Some(base) = &self.motor_url {
+                if let Err(e) = self.comparar_motor(estado, base, &mut rel).await {
+                    rel.entry("motor")
+                        .or_default()
+                        .exemplos
+                        .push(format!("falhou: {e}"));
+                }
             }
         }
 

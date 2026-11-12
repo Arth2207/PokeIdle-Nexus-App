@@ -1,6 +1,6 @@
 # Fase 4: motor de automação
 
-Plano da fase. Etapa 1 (levantamento) concluída; nada de código ainda.
+Plano da fase. Etapas 1 (levantamento), 2 (estado no Postgres) e 3 (rotas de leitura) feitas.
 
 ## O que existe hoje
 
@@ -135,11 +135,19 @@ nexus-api comparar-motor motor-contas < contas.json
 
 A importação substitui tudo numa transação e valida o arquivo antes de tocar no banco. A comparação é exata (números pelo valor, como no JS; inteiros sem passar por `f64`) e para na primeira diferença. Com o arquivo real da VPS, num banco descartável: 70 seções de config, 300 ações, 16 chaves de estado e 4 contas, e arquivo e banco iguais.
 
-Em produção, a importação roda depois do deploy da migration e da resposta à pergunta 2.
+Em produção, o estado importado hoje é o do arquivo da VPS, provisório: é o que o motor da VPS lê, então serve de referência para o comparador. O motor ativo é o do PC; quando a cópia periódica do arquivo dele existir, a importação passa a usá-la (ela substitui tudo).
 
-### Etapa 3: rotas de leitura
+**Ordem das chaves.** O legado itera objetos na ordem de inserção, e isso decide resultados (empates nos drops do dia, a ordem das contas no financeiro; no arquivo real há empates). O `jsonb` reordena as chaves, e o `serde_json` padrão também. Por isso o workspace usa o `serde_json` com `preserve_order`, e a migration `20261117000001_motor_ordem.sql` (aditiva) acrescenta `texto json` (o tipo `json` guarda o texto como veio) e `ordem`. O import grava os dois; a leitura monta o objeto em Rust, na ordem do arquivo. O `comparar-motor` confere valores e ordem.
 
-As rotas **D** de `GET` com o mesmo contrato, no comparador (`motor.*`). A ordem segue o que tem menos dependência do estado ao vivo: `builds`, `historico`, `financeiro`, `raros`, `pedras/plano`, `vender/previa`, depois `equipe/melhor`, `builds/prioridade`, `combate`, `estado`.
+### Etapa 3: rotas de leitura (feita)
+
+18 rotas `GET` no caminho e com o contrato do legado: `builds`, `builds/prioridade`, `builds/sugerir`, `builds/teorica`, `equipe/melhor`, `equipe/melhor/todas`, `raros`, `espolio`, `pedras/plano`, `pedras/diag`, `vender/previa`, `historico`, `financeiro`, `combate`, `cache-linhas`, `diagnostico`, `estado`, `backup`. Regra em `nucleo::motor` (`config`: `CONFIG_PADRAO`, `cfgBase`, `cfg`, a carga do `D`; `leitura`: as rotas), I/O em `nexus-api` (`motor::responder`, `rotas/motor.rs`).
+
+- **Sem conta ao vivo.** As janelas do jogo (`ultimo`, `welcome`) só existem no app. Até a A2 mandar esse estado, o Nexus responde como o legado sem nenhuma conta conectada: rotas com `nick` dão 404 `{erro: "conta"}`, e as que agregam contas usam só o `D`. O financeiro e o histórico já saem completos (dia, saldo, semana, comparação com ontem); o que depende da janela (ouro agora, preços de poção e bola, ritmo) entra com a A2.
+- **Relógio.** O legado usa data e hora locais. `NEXUS_MOTOR_FUSO_MIN`: -180 (PC, padrão) ou 0 (VPS).
+- **Token preso a conta.** Rotas com `nick` só respondem sobre a própria conta; as que juntam todas as contas respondem 403.
+- **Erro.** Onde o JS lançaria `TypeError` (campo ausente lido como lista), 500 `{erro: "erro interno"}`, como o legado.
+- **Comparador `motor.*`.** `NEXUS_PARIDADE_MOTOR_URL` liga a comparação no `paridade-continua`; `nexus-api paridade-motor <url>` roda uma vez. Cada rota sem `nick` e, as por conta, com cada nick do estado. Comparação exata (status e corpo), sem tolerância: o Nexus calcula no `agora` que o legado devolveu. Contra o motor da VPS, num banco descartável com o arquivo dela: 58 de 58 iguais.
 
 ### Etapa 4: regras no `nucleo`
 
@@ -154,6 +162,8 @@ Rotas de escrita e o laço de 30 s atrás de `NEXUS_ESCRITA_MOTOR` (desligada). 
 Na etapa 6, depois da paridade.
 
 ## Perguntas em aberto
+
+Respondidas: o motor ativo é o Electron do PC (perguntas 1 e 2). Falta liberar a porta dele na Tailscale para a VPS e combinar a cópia do arquivo. O `GET /api/backup` não serve para isso: traz só parte do `D` (sem `saldo`, `horas`, `carimbos`).
 
 1. **Onde o motor roda de verdade hoje?** Na VPS ele está sem navegador e sem contas. Se o motor ativo é o Electron do PC, o `holodex-dados.json` de referência está lá, e a sombra precisa de uma cópia periódica desse arquivo e de acesso ao `/api/estado` dele (pelo Tailscale, só leitura).
 2. **Importar qual arquivo:** o da VPS (parado há ~40 h) ou o do PC?

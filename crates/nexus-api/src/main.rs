@@ -17,6 +17,7 @@
 //!   nexus-api pokedex-divergencias             diagnóstico: pokédex do motor × catálogo do precificador
 //!   nexus-api paridade [url]                   uma rodada de comparação com o legado
 //!   nexus-api paridade-continua                comparador em loop, gravando em nexus.paridade
+//!   nexus-api paridade-motor <url>             compara só as rotas GET do motor (motor.*)
 //!   nexus-api avaliar-fichas <agora_ms>        diagnóstico: valor justo de fichas (stdin)
 //!   nexus-api sombra                           cliente sombra do WebSocket (NEXUS_SOMBRA_URL, NEXUS_SOMBRA_TOKEN_FILE)
 //!   nexus-api sombra-relatorio [--desde <h>] [--origem espelho|sintetico|todas]   relatório da sombra (só SELECT; padrão 168 h, todas)
@@ -57,7 +58,7 @@ use crate::estado::Estado;
 const USO: &str = "uso: nexus-api [migrar | token criar <nome> <escopos> [conta] | \
 importar itens|especies|base|meus-itens|pokedex|equipes|wiki|faltas|welcome|raros|motor|motor-contas | \
 comparar-motor motor|motor-contas | paridade [url] | \
-paridade-continua | sombra | sombra-relatorio [--desde <horas>] [--origem espelho|sintetico|todas] | avaliar-fichas <agora_ms> | pokedex-divergencias | healthcheck]";
+paridade-continua | paridade-motor <url> | sombra | sombra-relatorio [--desde <horas>] [--origem espelho|sintetico|todas] | avaliar-fichas <agora_ms> | pokedex-divergencias | healthcheck]";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -83,6 +84,7 @@ async fn main() -> anyhow::Result<()> {
         ["pokedex-divergencias"] => pokedex_divergencias(&cfg).await,
         ["avaliar-fichas", agora] => avaliar_fichas(&cfg, agora).await,
         ["paridade-continua"] => paridade_continua(cfg).await,
+        ["paridade-motor", url] => paridade_motor(&cfg, url).await,
         ["paridade"] => paridade(&cfg, None).await,
         ["paridade", url] => paridade(&cfg, Some(url)).await,
         ["sombra"] => {
@@ -143,7 +145,8 @@ async fn servir(cfg: Configuracao) -> anyhow::Result<()> {
     if let Some(url) = &cfg.paridade_url {
         let comparador = bolsa::paridade::Comparador::novo(Arc::clone(&estado.bolsa), url)
             .context("não consegui criar o cliente HTTP do comparador")?
-            .com_equipes(estado.clone(), cfg.paridade_equipe);
+            .com_equipes(estado.clone(), cfg.paridade_equipe)
+            .com_motor(cfg.paridade_motor_url.as_deref());
         Arc::new(comparador).iniciar(
             Duration::from_secs(cfg.paridade_ciclo_s.max(60)),
             parar_tarefas.clone(),
@@ -428,9 +431,27 @@ async fn paridade(cfg: &Configuracao, url: Option<&str>) -> anyhow::Result<()> {
         .context("informe a URL do legado (argumento ou NEXUS_PARIDADE_URL)")?;
     let estado = Estado::novo(cfg).context("NEXUS_DATABASE_URL inválida")?;
     let comparador = bolsa::paridade::Comparador::novo(Arc::clone(&estado.bolsa), &url)?
-        .com_equipes(estado.clone(), cfg.paridade_equipe);
+        .com_equipes(estado.clone(), cfg.paridade_equipe)
+        .com_motor(cfg.paridade_motor_url.as_deref());
     let relatorio = comparador.rodada().await.map_err(anyhow::Error::msg)?;
     println!("{}", serde_json::to_string_pretty(&relatorio)?);
+    Ok(())
+}
+
+/// Compara só as rotas `GET` do motor com o motor do legado em `url`. Sai com erro se alguma
+/// resposta diferir.
+async fn paridade_motor(cfg: &Configuracao, url: &str) -> anyhow::Result<()> {
+    let estado = Estado::novo(cfg).context("NEXUS_DATABASE_URL inválida")?;
+    let comparador = bolsa::paridade::Comparador::novo(Arc::clone(&estado.bolsa), url)?
+        .com_equipes(estado.clone(), false)
+        .com_motor(Some(url));
+    let rel = comparador
+        .rodada_motor()
+        .await
+        .map_err(anyhow::Error::msg)?;
+    println!("{}", serde_json::to_string_pretty(&rel)?);
+    let diferentes: u64 = rel.values().map(|r| r.comparados - r.iguais).sum();
+    anyhow::ensure!(diferentes == 0, "{diferentes} respostas do motor diferem");
     Ok(())
 }
 
@@ -446,7 +467,8 @@ async fn paridade_continua(cfg: Configuracao) -> anyhow::Result<()> {
     let ciclo = Duration::from_secs(cfg.paridade_ciclo_s.max(60));
     let estado = Estado::novo(&cfg).context("NEXUS_DATABASE_URL inválida")?;
     let comparador = bolsa::paridade::Comparador::novo(Arc::clone(&estado.bolsa), &url)?
-        .com_equipes(estado.clone(), cfg.paridade_equipe);
+        .com_equipes(estado.clone(), cfg.paridade_equipe)
+        .com_motor(cfg.paridade_motor_url.as_deref());
     tracing::info!(%url, ciclo_s = ciclo.as_secs(), "comparador de paridade iniciado");
     let parar = desligamento::sinal_de_parada();
     tokio::pin!(parar);

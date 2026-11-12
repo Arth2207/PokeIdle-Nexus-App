@@ -117,6 +117,12 @@ pub struct Configuracao {
     pub paridade_url: Option<String>,
     #[serde(default = "paridade_ciclo_padrao")]
     pub paridade_ciclo_s: u64,
+    /// URL do motor do legado para o comparador (`motor.*`). Sem ela, o motor fica de fora.
+    pub paridade_motor_url: Option<String>,
+    /// Fuso, em minutos, do computador onde o motor do legado roda: ele usa a data e a hora
+    /// locais. UTC−3 no PC (padrão), 0 na VPS.
+    #[serde(default = "motor_fuso_padrao")]
+    pub motor_fuso_min: i64,
 }
 
 impl Configuracao {
@@ -157,6 +163,10 @@ fn limite_ingestao_rajada_padrao() -> f64 {
 
 fn bolsa_ciclo_padrao() -> u64 {
     180
+}
+
+fn motor_fuso_padrao() -> i64 {
+    -180
 }
 
 fn paridade_ciclo_padrao() -> u64 {

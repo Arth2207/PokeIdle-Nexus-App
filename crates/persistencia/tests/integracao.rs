@@ -769,7 +769,7 @@ async fn motor_estado(db: &PgPool) {
             {"nick": "Conta2", "t": 1, "tipo": "venda", "texto": "a", "prev": [1.5, null]}
         ],
         "pausa": false,
-        "dia": {"Conta1": {"2026-11-12": {"bolas": 10}}},
+        "dia": {"Conta1": {"2026-11-12": {"bolas": 10, "drops": {"z": 1, "a": 1}}}},
         "mercadoAvisos": [],
         "saldo": {"Conta1": 123.456},
         "acesso": {"emails": ["x@y"]}
@@ -791,6 +791,19 @@ async fn motor_estado(db: &PgPool) {
     esperado.as_object_mut().unwrap().remove("acesso");
     assert_eq!(motor::primeira_diferenca(&esperado, &volta, ""), None);
     assert!(volta.get("acesso").is_none());
+    // A ordem das chaves volta como no arquivo (o legado itera nessa ordem): contas, seções
+    // e os drops, que no jsonb sairiam em outra.
+    assert_eq!(
+        motor::primeira_diferenca_de_ordem(&esperado, &volta, ""),
+        None
+    );
+    let chaves = |v: &Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    assert_eq!(chaves(&volta["config"]), ["Conta1", "—", "Vazia"]);
+    assert_eq!(chaves(&volta["config"]["Conta1"]["hunt"]), ["auto", "alvo"]);
+    assert_eq!(
+        chaves(&volta["dia"]["Conta1"]["2026-11-12"]["drops"]),
+        ["z", "a"]
+    );
     // A ação mais nova tem o maior id; colunas extraídas para filtro.
     let (t, ok): (i64, Option<bool>) =
         sqlx::query_as("SELECT t, ok FROM nexus.motor_acao ORDER BY id DESC LIMIT 1")
