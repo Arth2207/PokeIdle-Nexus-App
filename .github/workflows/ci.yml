@@ -15,7 +15,7 @@ env:
   CARGO_TERM_COLOR: always
   SQLX_OFFLINE: "true"
   IMAGEM: ghcr.io/arth2207/nexus-api
-  LIMITE_IMAGEM_MB: 50
+  LIMITE_IMAGEM_MB: 65
 
 permissions:
   contents: read
@@ -80,11 +80,15 @@ jobs:
           [ "$mb" -lt "$LIMITE_IMAGEM_MB" ]
       - name: Smoke test
         run: |
-          # O binário roda na imagem final e responde ao argumento inválido com a ajuda.
           saida=$(docker run --rm -e NEXUS_DATABASE_URL=postgres://x@localhost/x \
             "$IMAGEM:$GITHUB_SHA" comando-invalido 2>&1 || true)
           echo "$saida"
           grep -q "uso: nexus-api" <<< "$saida"
+          saida_worker=$(docker run --rm --entrypoint /nexus-worker \
+            -e NEXUS_DATABASE_URL=postgres://x@localhost/x \
+            "$IMAGEM:$GITHUB_SHA" argumento-invalido 2>&1 || true)
+          echo "$saida_worker"
+          grep -q "uso: nexus-worker" <<< "$saida_worker"
       - name: Push
         run: |
           docker tag "$IMAGEM:$GITHUB_SHA" "$IMAGEM:latest"

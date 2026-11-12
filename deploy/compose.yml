@@ -110,6 +110,44 @@ services:
           memory: 64M
     logging: *logs
 
+  # Worker de ETL e jobs agendados. Sem porta pública; só /health/ready e /metrics internos.
+  # Não precisa de blue/green: o cursor é transacional no Postgres e ON CONFLICT garante
+  # idempotência — reiniciar o worker durante o deploy não duplica nem perde dados.
+  nexus-worker:
+    image: ${NEXUS_IMAGEM_WORKER:-ghcr.io/arth2207/nexus-api:inexistente}
+    command: ["/nexus-worker"]
+    environment:
+      NEXUS_LOG_FORMATO: json
+      NEXUS_DATABASE_URL_FILE: /run/secrets/database_url
+      NEXUS_PORTA_METRICAS: "9191"
+    secrets:
+      - database_url
+    volumes:
+      - /var/run/postgresql:/var/run/postgresql
+      - /opt/mapper/data/mapa.db:/opt/mapper/data/mapa.db:ro
+    networks:
+      default: {}
+      monitoring:
+        aliases: [nexus-worker]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "/nexus-worker", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    stop_grace_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    logging: *logs
+
 secrets:
   database_url:
     file: ./secrets/database_url
