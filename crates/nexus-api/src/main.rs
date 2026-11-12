@@ -108,11 +108,14 @@ async fn main() -> anyhow::Result<()> {
                 if i > 0 {
                     tokio::time::sleep(Duration::from_secs(cfg.motor_sombra_s.max(10))).await;
                 }
-                let (decisoes, acoes) = sombra.ciclo(&estado.db).await?;
-                println!(
-                    "ciclo {}: {decisoes} decisões, {acoes} ações novas do legado",
-                    i + 1
-                );
+                // Um ciclo que falha (rede lenta, legado reiniciando) não derruba os outros.
+                match sombra.ciclo(&estado.db).await {
+                    Ok((decisoes, acoes)) => println!(
+                        "ciclo {}: {decisoes} decisões, {acoes} ações novas do legado",
+                        i + 1
+                    ),
+                    Err(e) => println!("ciclo {}: falhou: {e:#}", i + 1),
+                }
             }
             Ok(())
         }
