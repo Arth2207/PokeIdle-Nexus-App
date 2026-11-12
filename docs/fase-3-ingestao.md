@@ -85,6 +85,26 @@ Feito lendo o código do legado e o SQLite do coletor em modo só leitura (novem
 
 **Pronto quando:** os testes de reconexão e backpressure passam; 7 dias sem comando perdido nem duplicado (medido com o cliente da A2 em modo sombra). As tentativas de boss chegam com a A2.
 
+## Plano de cutover (etapa 7)
+
+Todas as flags da fase 3 nascem desligadas. A ordem abaixo liga uma coisa por vez, cada passo com volta atrás imediata (desligar a flag e reiniciar o container).
+
+**Shadow (já possível depois do deploy):**
+
+1. `NEXUS_ESPELHO_COMANDOS=true`: o Nexus copia a fila do legado (só `SELECT`) para `nexus.comando`, a partir do último id existente. Nada é entregue enquanto não houver cliente conectado no `/ws`.
+2. O comparador já cobre `raros2` e `shiny`, com o estado importado a cada 10 minutos.
+3. Quando o cliente da fase A2 existir, ele conecta no `/ws` em modo sombra: recebe os comandos espelhados, não executa e confirma com `sombra`. As métricas `entregues`, `confirmados`, `duplicados` e `perdidos` medem os 7 dias do critério de pronto.
+
+**Cutover (decisão do dono do projeto, numa janela só):**
+
+1. Backup de `raros-estado.json`; `nexus-api importar raros` uma última vez.
+2. Ligar `NEXUS_ESCRITA_RAROS`, `NEXUS_ESCRITA_INGESTAO` e `NEXUS_ESCRITA_COMANDOS`; tirar `raros` do sincronizador de catálogos (o estado passa a ser só do Nexus).
+3. Apontar o cliente do PC para o Nexus (token por conta, `/ws` em modo ativo). O relay do legado é desligado no PC na mesma janela, para nunca haver dois executores.
+4. Os produtores de comando que ainda são do legado (IA, montador de boss, painel) continuam gravando em `public.comando_fila`; o espelho segue ligado e é a ponte até a fase 6. O polling `GET /api/comandos` continua como plano B (ADR 0007).
+5. `fato_cofre` e `dim_conta` continuam com o legado até as fases 5 e 7.
+
+**Volta atrás:** desligar as flags de escrita, religar o relay do legado e voltar `raros` ao sincronizador. Os eventos gravados no Nexus nesse intervalo ficam em `nexus.evento` (o SQLite do legado também os recebe se o relay antigo voltar).
+
 ## Fora desta fase
 
 - Motor de automação (builds, venda, hunts): fase 4.
