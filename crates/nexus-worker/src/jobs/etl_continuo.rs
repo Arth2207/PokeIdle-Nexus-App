@@ -151,10 +151,15 @@ fn ler_sqlite_batch(
     cursor_ms: i64,
     batch: usize,
 ) -> Result<Vec<Evento>> {
-    // OpenFlags::SQLITE_OPEN_READ_ONLY: nunca escreve no arquivo do legado
+    // immutable=1: SQLite ignora -shm/-wal (modo WAL do legado); lemos snapshot do arquivo
+    // principal — aceitável para ETL a cada 5 min. Sem isso, SQLite exige escrita no -shm
+    // mesmo com SQLITE_OPEN_READ_ONLY, o que falha no container (apenas o .db está montado).
+    let uri = format!("file:{}?immutable=1", path);
     let conn = rusqlite::Connection::open_with_flags(
-        path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        uri,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | rusqlite::OpenFlags::SQLITE_OPEN_URI,
     )
     .context("não consegui abrir o SQLite")?;
 
