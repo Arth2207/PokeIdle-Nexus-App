@@ -34,6 +34,7 @@ mod metricas;
 mod raros;
 mod rotas;
 mod telemetria;
+mod webhook;
 mod ws;
 
 use std::net::{Ipv4Addr, SocketAddr};

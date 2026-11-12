@@ -9,6 +9,8 @@ use serde_json::Value;
 
 /// Subprotocolo negociado no handshake.
 pub const SUBPROTOCOLO: &str = "nexus.v1";
+/// Subprotocolo opcional: mensagens grandes do servidor vão como frame binário deflate.
+pub const SUBPROTOCOLO_DEFLATE: &str = "nexus.v1.deflate";
 /// Versão do envelope (campo `v`).
 pub const VERSAO: u8 = 1;
 

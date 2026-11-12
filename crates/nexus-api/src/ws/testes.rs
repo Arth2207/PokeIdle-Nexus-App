@@ -5,9 +5,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use contrato::compressao;
 use contrato::ws::{
     ComandoResultado, Envelope, EventoLote, MensagemCliente, MensagemServidor, Retomar,
-    SUBPROTOCOLO,
+    SUBPROTOCOLO, SUBPROTOCOLO_DEFLATE,
 };
 use futures_util::{SinkExt, StreamExt};
 use persistencia::comandos::{inserir, NovoComando};
@@ -1086,4 +1087,122 @@ async fn fluxo_de_comandos() {
 #[tokio::test]
 async fn cliente_lento_e_fechado_com_1013() {
     com_limite(cliente_lento_e_fechado_com_1013_corpo).await;
+}
+
+/// Conecta oferecendo os subprotocolos dados; devolve o cliente e o que o servidor escolheu.
+async fn conectar_sub(s: &Servidor, token: &str, oferta: &str) -> (Cli, String) {
+    let mut req = format!("ws://{}/ws", s.addr).into_client_request().unwrap();
+    req.headers_mut()
+        .insert("Authorization", format!("Bearer {token}").parse().unwrap());
+    req.headers_mut()
+        .insert("Sec-WebSocket-Protocol", oferta.parse().unwrap());
+    let (c, resp) = tokio_tungstenite::connect_async(req).await.unwrap();
+    let escolhido = resp
+        .headers()
+        .get("Sec-WebSocket-Protocol")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    (c, escolhido)
+}
+
+/// Próximo frame de dados (ignora ping/pong).
+async fn bruta(c: &mut Cli) -> Message {
+    loop {
+        let m = tokio::time::timeout(Duration::from_secs(10), c.next())
+            .await
+            .expect("timeout")
+            .unwrap()
+            .unwrap();
+        if !matches!(m, Message::Ping(_) | Message::Pong(_)) {
+            return m;
+        }
+    }
+}
+
+fn raro(nome: &str) -> MensagemServidor {
+    MensagemServidor::RaroNovo(contrato::ws::RaroNovo {
+        id: json!(1),
+        nome: json!(nome),
+        conta: None,
+    })
+}
+
+async fn deflate_corpo(db: PgPool) {
+    let s = servir_com(&db, true, true, (50.0, 200.0)).await;
+    let t = criar_token(&db, "glob", &[Escopo::Relay, Escopo::Escrita], None)
+        .await
+        .unwrap();
+    let grande = "x".repeat(5000);
+
+    // Negociação: com a oferta dupla o servidor escolhe o deflate.
+    let (mut c, escolhido) = conectar_sub(&s, &t, "nexus.v1.deflate, nexus.v1").await;
+    assert_eq!(escolhido, SUBPROTOCOLO_DEFLATE);
+    assert!(matches!(
+        proxima(&mut c).await.msg,
+        MensagemServidor::SessaoPronta(_)
+    ));
+    s.estado
+        .ws
+        .publicar_para(super::Destino::Global, raro(&grande));
+    s.estado
+        .ws
+        .publicar_para(super::Destino::Global, raro("pequeno"));
+    // Grande: frame binário deflate, íntegro.
+    let Message::Binary(b) = bruta(&mut c).await else {
+        panic!("esperava binário");
+    };
+    assert!(b.len() < 1024);
+    let texto = compressao::descomprimir(&b, compressao::LIMITE_DESCOMPRIMIDO).unwrap();
+    let env: Envelope<MensagemServidor> = serde_json::from_str(&texto).unwrap();
+    assert_eq!(env.msg, raro(&grande));
+    // Pequena: texto.
+    let Message::Text(t2) = bruta(&mut c).await else {
+        panic!("esperava texto");
+    };
+    assert!(t2.as_str().contains("pequeno"));
+
+    // Cliente -> servidor em binário deflate: numa conexão nova (que abriu depois dos dois
+    // pushes), `retomar` desde 0 reenvia ambos.
+    let (mut c3, _) = conectar_sub(&s, &t, "nexus.v1.deflate").await;
+    assert!(matches!(
+        proxima(&mut c3).await.msg,
+        MensagemServidor::SessaoPronta(_)
+    ));
+    let env = Envelope::novo(
+        None,
+        agora_ms(),
+        MensagemCliente::Retomar(Retomar { desde: 0 }),
+    );
+    let bin = compressao::comprimir(&serde_json::to_string(&env).unwrap()).unwrap();
+    c3.send(Message::binary(bin)).await.unwrap();
+    assert!(matches!(bruta(&mut c3).await, Message::Binary(_)));
+    assert!(matches!(bruta(&mut c3).await, Message::Text(_)));
+
+    // Zip bomb: descomprimido passa do limite, a conexão é fechada.
+    let bomba = compressao::comprimir(&"0".repeat(compressao::LIMITE_DESCOMPRIMIDO + 1)).unwrap();
+    assert!(bomba.len() < 64 * 1024);
+    c3.send(Message::binary(bomba)).await.unwrap();
+    match bruta(&mut c3).await {
+        Message::Close(Some(f)) => assert_eq!(u16::from(f.code), 1011),
+        outro => panic!("esperava close, veio {outro:?}"),
+    }
+
+    // Sem o subprotocolo novo: tudo texto, como antes.
+    let (mut c2, escolhido) = conectar_sub(&s, &t, "nexus.v1").await;
+    assert_eq!(escolhido, SUBPROTOCOLO);
+    assert!(matches!(
+        proxima(&mut c2).await.msg,
+        MensagemServidor::SessaoPronta(_)
+    ));
+    s.estado
+        .ws
+        .publicar_para(super::Destino::Global, raro(&grande));
+    assert!(matches!(bruta(&mut c2).await, Message::Text(_)));
+    s.parar.cancel();
+}
+
+#[tokio::test]
+async fn deflate() {
+    com_limite(deflate_corpo).await;
 }

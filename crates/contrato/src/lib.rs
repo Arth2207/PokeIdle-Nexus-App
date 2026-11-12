@@ -1,10 +1,11 @@
 //! Tipos que o servidor e o app desktop trocam.
 //!
-//! Regra do crate: só `serde`. Nada de axum, sqlx ou tokio aqui, porque este crate também
+//! Regra do crate: só `serde` e `flate2` (backend Rust puro). Nada de axum, sqlx ou tokio aqui, porque este crate também
 //! compila para WebAssembly (interface em Leptos). Se um campo mudar de forma incompatível,
 //! o app deixa de compilar, em vez de quebrar em produção.
 
 pub mod bolsa;
+pub mod compressao;
 pub mod rotas;
 pub mod ws;
 

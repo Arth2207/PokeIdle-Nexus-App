@@ -25,6 +25,7 @@
 //! | `NEXUS_PARIDADE_URL`  | não         | (desligado) |
 //! | `NEXUS_PARIDADE_CICLO_S` | não      | `600`       |
 //! | `NEXUS_PARIDADE_EQUIPE` | não       | `false`     |
+//! | `NEXUS_DISCORD_WEBHOOK` | não       | (desligado) |
 //!
 //! - `NEXUS_ESCRITA_BOLSA`: liga as rotas de ingestão da bolsa e a limpeza de ofertas. Elas
 //!   gravam em tabelas do legado; só ligar no cutover da fase 1.
@@ -51,6 +52,10 @@
 //! - `NEXUS_LIMITE_INGESTAO_*`: limite à parte (por token) para `POST /ingest`, `/api/hunt-sync`
 //!   e `evento.lote` do WebSocket. Padrão generoso (50/s, rajada 200). Excesso: `429` no HTTP
 //!   e mensagem `erro` no WebSocket.
+//! - `NEXUS_DISCORD_WEBHOOK`: URL de webhook do Discord (segredo, nunca logada). Vazia = desligado.
+//!   Só vale com `NEXUS_MELHORIAS`: cada `raro.novo` e `shiny.novo` vira uma mensagem curta, enviada
+//!   por uma task própria (fila de 64; cheia = descarta e conta em
+//!   `nexus_discord_webhook_descartadas_total`), timeout de 5 s e até 2 repetições após `429`.
 //! - `NEXUS_PARIDADE_URL`: URL do legado (ex.: `http://host:8181`). Liga o comparador.
 //! - `NEXUS_PARIDADE_EQUIPE`: o comparador também chama `/api/bolsa/equipe` e
 //!   `/equipe-propria` no legado, o que dispara o cálculo pesado dele. Desligado por padrão.
@@ -90,6 +95,8 @@ pub struct Configuracao {
     pub paridade_equipe: bool,
     #[serde(default)]
     pub melhorias: bool,
+    #[serde(default)]
+    pub discord_webhook: Option<Segredo>,
     #[serde(default = "modelo_padrao")]
     pub modelo: String,
     #[serde(default = "cpu_threads_padrao")]

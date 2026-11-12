@@ -38,6 +38,8 @@ pub struct Estado {
     pub raros: Arc<crate::raros::ServicoRaros>,
     /// `NEXUS_MELHORIAS`.
     pub melhorias: bool,
+    /// `NEXUS_DISCORD_WEBHOOK` (só com `NEXUS_MELHORIAS`).
+    pub webhook: Option<crate::webhook::Webhook>,
     pub limitador: Arc<Limitador>,
     /// Limite à parte para `POST /ingest`, `/api/hunt-sync` e `evento.lote` (por token).
     pub limite_ingestao: Arc<Limitador>,
@@ -62,6 +64,11 @@ impl Estado {
             escrita_comandos: cfg.escrita_comandos,
             espelho_comandos: cfg.espelho_comandos,
             melhorias: cfg.melhorias,
+            webhook: cfg
+                .discord_webhook
+                .as_ref()
+                .filter(|_| cfg.melhorias)
+                .and_then(|u| crate::webhook::Webhook::iniciar(u.expor())),
             equipes: Arc::new(ServicoEquipes::novo(
                 db.clone(),
                 ModeloAtivo::de_texto(&cfg.modelo),
@@ -94,6 +101,7 @@ impl Estado {
             espelho_comandos: false,
             raros: Arc::new(crate::raros::ServicoRaros::novo()),
             melhorias: false,
+            webhook: None,
             db,
             bolsa,
             escrita_bolsa: false,

@@ -119,6 +119,9 @@ fn publicar_raros(estado: &Estado, novos: &[Value]) {
                 return;
             }
             enviados += 1;
+            if let Some(w) = &estado.webhook {
+                w.enviar(&format!("Raro novo: {}", nome.as_str().unwrap_or("?")));
+            }
             let destino = conta.clone().map_or(Destino::Global, Destino::Conta);
             estado.ws.publicar_para(
                 destino,
@@ -148,6 +151,11 @@ fn publicar_shiny(estado: &Estado, corpo: &Value, resposta: &Value) {
         .get("shiny")
         .and_then(Value::as_f64)
         .unwrap_or(quantidade);
+    if let Some(w) = &estado.webhook {
+        w.enviar(&format!(
+            "Shiny registrado: +{quantidade} (total do dia: {total})"
+        ));
+    }
     estado.ws.publicar_para(
         Destino::Conta(nick.to_owned()),
         MensagemServidor::ShinyNovo(ShinyNovo {

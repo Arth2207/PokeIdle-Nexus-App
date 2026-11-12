@@ -23,9 +23,11 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
+use contrato::compressao::{self, ErroCompressao};
 use contrato::ws::{
     Atualizacao, ComandoCancelado, ComandoEstado, ComandoNovo, Envelope, ErroWs, EventoAck,
     EventoLote, MensagemCliente, MensagemServidor, Ressincronizar, SessaoPronta, SUBPROTOCOLO,
+    SUBPROTOCOLO_DEFLATE,
 };
 use contrato::Erro;
 use futures_util::stream::SplitSink;
@@ -247,11 +249,16 @@ pub async fn handler(
             "WebSocket desligado neste servidor (NEXUS_ESCRITA_COMANDOS / NEXUS_ESPELHO_COMANDOS)",
         );
     }
-    let ws = ws.protocols([SUBPROTOCOLO]).max_message_size(MAX_MENSAGEM);
+    let ws = ws
+        .protocols([SUBPROTOCOLO_DEFLATE, SUBPROTOCOLO])
+        .max_message_size(MAX_MENSAGEM);
     if ws.selected_protocol().is_none() {
         return erro(StatusCode::BAD_REQUEST, "subprotocolo nexus.v1 obrigatório");
     }
-    ws.on_upgrade(move |socket| conexao(estado, cliente, socket))
+    let deflate = ws
+        .selected_protocol()
+        .is_some_and(|p| p == SUBPROTOCOLO_DEFLATE);
+    ws.on_upgrade(move |socket| conexao(estado, cliente, socket, deflate))
 }
 
 /// Sobe as tarefas do WebSocket: o listener do Postgres e o aviso de `bolsa.atualizada`.
@@ -403,12 +410,23 @@ impl Fim {
     }
 }
 
+/// Com `nexus.v1.deflate`, texto acima do limite vai como frame binário deflate; o resto, texto.
+fn mensagem_de_texto(t: String, deflate: bool) -> Message {
+    if deflate && t.len() > compressao::LIMITE_COMPRESSAO {
+        if let Some(c) = compressao::comprimir(&t) {
+            return Message::Binary(Bytes::from(c));
+        }
+    }
+    Message::text(t)
+}
+
 /// A task que escreve no socket. Fica separada do loop para que um cliente lento trave só ela:
 /// o loop continua enxergando a fila encher e fecha a conexão.
 async fn escrever(
     mut sink: SplitSink<WebSocket, Message>,
     mut rx: mpsc::Receiver<Saida>,
     fechamento: Arc<Fechamento>,
+    deflate: bool,
 ) {
     let pedido = loop {
         let saida = tokio::select! {
@@ -420,7 +438,7 @@ async fn escrever(
             },
         };
         let msg = match saida {
-            Saida::Texto(t) => Message::text(t),
+            Saida::Texto(t) => mensagem_de_texto(t, deflate),
             Saida::Ping => Message::Ping(Bytes::new()),
         };
         tokio::select! {
@@ -775,14 +793,14 @@ impl Conexao {
     }
 }
 
-async fn conexao(estado: Estado, cliente: Cliente, socket: WebSocket) {
+async fn conexao(estado: Estado, cliente: Cliente, socket: WebSocket, deflate: bool) {
     metrics::gauge!("nexus_ws_conexoes_abertas").increment(1.0);
-    let fim = rodar(estado, cliente, socket).await;
+    let fim = rodar(estado, cliente, socket, deflate).await;
     metrics::gauge!("nexus_ws_conexoes_abertas").decrement(1.0);
     metrics::counter!("nexus_ws_fechamentos_total", "motivo" => fim.motivo()).increment(1);
 }
 
-async fn rodar(estado: Estado, cliente: Cliente, socket: WebSocket) -> Fim {
+async fn rodar(estado: Estado, cliente: Cliente, socket: WebSocket, deflate: bool) -> Fim {
     let hub = Arc::clone(&estado.ws);
     let (sink, mut entrada) = socket.split();
     let (tx, rx) = mpsc::channel::<Saida>(FILA);
@@ -790,7 +808,7 @@ async fn rodar(estado: Estado, cliente: Cliente, socket: WebSocket) -> Fim {
         aviso: Notify::new(),
         codigo: AtomicU16::new(FECHA_SAINDO),
     });
-    let escritora = tokio::spawn(escrever(sink, rx, Arc::clone(&fechamento)));
+    let escritora = tokio::spawn(escrever(sink, rx, Arc::clone(&fechamento), deflate));
     // Lê o seq antes de assinar: um evento publicado entre as duas coisas chega de novo (e o
     // filtro por seq descarta a repetição), em vez de sumir.
     let seq_ini = hub.seq_atual();
@@ -804,7 +822,7 @@ async fn rodar(estado: Estado, cliente: Cliente, socket: WebSocket) -> Fim {
         ultimo_info: seq_ini,
     };
 
-    let fim = laco(&mut c, &hub, &mut entrada, &mut avisos).await;
+    let fim = laco(&mut c, &hub, &mut entrada, &mut avisos, deflate).await;
 
     match fim.codigo() {
         Some(codigo) => {
@@ -824,6 +842,7 @@ async fn laco(
     hub: &Hub,
     entrada: &mut futures_util::stream::SplitStream<WebSocket>,
     avisos: &mut broadcast::Receiver<Aviso>,
+    deflate: bool,
 ) -> Fim {
     let pronta = MensagemServidor::SessaoPronta(SessaoPronta {
         seq: hub.seq_atual(),
@@ -873,7 +892,15 @@ async fn laco(
                     pong_ate = None;
                     Ok(())
                 }
-                // O axum responde Ping sozinho; binário não faz parte do protocolo.
+                // Binário só existe com `nexus.v1.deflate`: JSON em deflate cru.
+                Some(Ok(Message::Binary(b))) if deflate => {
+                    match compressao::descomprimir(&b, compressao::LIMITE_DESCOMPRIMIDO) {
+                        Ok(t) => c.do_cliente(&t).await,
+                        Err(ErroCompressao::ExcedeLimite) => Err(Fim::Erro),
+                        Err(ErroCompressao::Invalido) => c.do_cliente("").await,
+                    }
+                }
+                // O axum responde Ping sozinho; binário sem o subprotocolo é ignorado.
                 Some(Ok(_)) => Ok(()),
             },
             a = avisos.recv() => c.avisos(a, avisos).await,
