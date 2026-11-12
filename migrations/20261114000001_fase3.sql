@@ -19,10 +19,18 @@ CREATE INDEX evento_conta_tipo_em ON nexus.evento (conta, tipo, em DESC);
 
 -- Hypertable de chunks de 1 dia, quando a extensão existe (sem ela, fica tabela comum).
 -- Compressão e retenção ficam para depois.
+-- A função é qualificada pelo schema da extensão: o search_path do role do Nexus
+-- é só `nexus`, e em produção a extensão mora em `public`.
 DO $$
+DECLARE
+    esquema text;
 BEGIN
-    IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN
-        PERFORM create_hypertable('nexus.evento', 'em', chunk_time_interval => interval '1 day');
+    SELECT extnamespace::regnamespace::text INTO esquema
+      FROM pg_extension WHERE extname = 'timescaledb';
+    IF esquema IS NOT NULL THEN
+        EXECUTE format(
+            'SELECT %I.create_hypertable(%L::regclass, %L::name, chunk_time_interval => interval %L)',
+            esquema, 'nexus.evento', 'em', '1 day');
     END IF;
 END
 $$;
