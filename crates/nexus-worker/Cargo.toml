@@ -16,6 +16,9 @@ metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 nucleo        = { version = "0.1.0", path = "../nucleo" }
 regex         = "1.13.1"
 reqwest       = { version = "0.13.5", default-features = false }
+# A imagem compila worker e API juntos: o reqwest vem com `rustls-no-provider` (feature
+# unificada da API) e exige instalar o provedor antes de criar o cliente.
+rustls        = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rusqlite      = { version = "0.32.1", features = ["bundled"] }
 serde         = { version = "1.0.229", features = ["derive"] }
 # Ordem de inserção das chaves, como o JSON.stringify do legado.

@@ -211,13 +211,47 @@ GRANT SELECT ON public.fato_hunt_eficiencia TO nexus_app;
 - Preços de mercado **fora da fase 5** (decisão 2026-11-13): `mercado_msg` com 0 linhas,
   `fato_preco_mercado` vazia, nenhum consumidor. Reavaliar se o relay passar a gravar.
 
-### Etapa 6 — dossiê (próxima sessão)
+### Etapa 6 — dossiê
 
-- **Hospedagem decidida:** `nexus-worker`, porta HTTP própria (só rede interna).
-- Portar: rotas de leitura; escritas (`fato_venda_mercado`, `pokemon_ficha`) em tabelas
-  sombra `nexus.*`; `montarPrecos()`; páginas estáticas com `rust-embed`
-  (embute os arquivos no binário — como servir uma pasta no Node, mas checado na compilação).
-- Comparador: mesma rota nos dois servidores, resposta comparada.
+Hospedado no `nexus-worker` (decisão 2026-11-13), módulo `crates/nexus-worker/src/dossie/`.
+Porta interna 9192, publicada só em `127.0.0.1:18899` para o comparador.
+
+**6a ✓ (sessão 6)**
+- Despacho igual ao `handler` do legado: rota exata `MÉTODO caminho` → estático (GET) → 405;
+  CORS `*` em GET, OPTIONS, limite por IP compartilhado entre rotas, chave em `x-chave`/`?chave=`.
+- Estáticos: lidos do diretório do legado montado só leitura no mesmo caminho, com a mesma
+  lista pública. Não usei `rust-embed`: o conteúdo muda fora do repositório (páginas e
+  fotos), tem ~23 MB, e embutir faria o Nexus servir uma cópia velha. Reavaliar no cutover,
+  se as páginas passarem a viver no repositório.
+- Leituras (`fichas`, `especie`, `dataset`, `cacada-medidas`, `fotos`): mesmas consultas no
+  `public`. O JSON de cada linha é montado no Postgres com `json_build_object` e casts que
+  imitam o node-pg: `bigint`/`numeric` → string, `date` → ISO à meia-noite UTC,
+  `timestamptz` → ISO com ms, `real` → texto do Postgres. Ordem de chaves preservada.
+- Escritas em sombra: `vendas` → `nexus.fato_venda_mercado_shadow`, `ficha` →
+  `nexus.pokemon_ficha_shadow` (mesmo SQL, parâmetros `$n::text::tipo` = coerção do
+  node-pg), uploads em tmpfs `/dados` (somem no restart; teto de 24 MB e um por vez, porque
+  o worker tem 256 MB com o ETL no mesmo processo; o legado aceita 200 MB no `/arquivo`).
+- Coerções do JS (`Number()`, `String()`, `||`, `??`, `slice` UTF-16, `parseInt` do SQLSTATE)
+  em `dossie/js.rs`. Diferenças só com entrada patológica estão no topo de `escrita.rs`.
+- Validação local: 32 rotas (estáticos, APIs, erros 401/404/405/500, OPTIONS) iguais byte a
+  byte ao legado.
+- Comparador `nexus-dossie-paridade` (rede do host, a cada 30 min) → `nexus.dossie_paridade`;
+  relatório `nexus-worker dossie-relatorio [--desde <horas>]`. Só GETs e POST sem chave
+  (401 antes de gravar); teste trava a lista. `POST /api/dossie/ficha` grava sem chave e
+  nunca entra.
+
+**Pendente**
+- 6b: precificador — `GET /precificador/precos.json` (`montarPrecos()`), `calc/lite`,
+  `calc/preco`. O `nucleo::precificador` já tem `preparar` e o `priceSheet` resumido; falta
+  o resultado detalhado do `priceSheet`, `PokeIdleCentral.linhas`, trava de nota e a mescla
+  com o `precos.json` base. Hoje respondem 501.
+- 6c: `calc/catalogo` e `calc/dossie` (renderizam HTML com `sim.js` + `dossie-render.js` +
+  `equipes-core`). Hoje respondem 501.
+- `/api/ia/*`: precisa de `GRANT SELECT` em `ia_memoria`, `ia_playbook`, `v_ia_performance`,
+  `config_ia`, `ia_estado` (pedir ao dono). Com chave válida responde 501.
+- Chave do dossiê no Nexus (`NEXUS_DOSSIE_CHAVE_FILE`) só no cutover; até lá rotas com chave → 401.
+- Tailscale: o legado também libera tudo para quem entra pela interface do Tailscale; no
+  cutover a porta do Tailscale passa a apontar para o worker.
 
 ### Arrumação (sessão 6)
 
@@ -244,7 +278,8 @@ na parte correspondente (janelas de 1h sem divergência e diff zero nas métrica
      `etl-cursores.json` e o `ON CONFLICT` evita duplicatas.
 2. **Eficiência** — junto do passo 1 (lê `fato_kill`). Parar o cron do pm2
    `etl-eficiencia`. Rollback: religar o cron; upsert é idempotente.
-3. **Dossiê** — depois da etapa 6 e de 7 dias do comparador de rotas igual.
+3. **Dossiê** — depois das etapas 6a–6c e de 7 dias de `dossie-relatorio` sem divergência.
+   - Antes: chave em secret, uploads em volume persistente com o limite de memória ajustado.
    - Passo: proxy da porta 8899 para o worker; escritas passam de `nexus.*` sombra para
      `public.pokemon_ficha` e `public.fato_venda_mercado` (flag própria); parar `dossie.service`.
    - Rollback: proxy de volta + `systemctl start dossie.service`; reconciliar as escritas

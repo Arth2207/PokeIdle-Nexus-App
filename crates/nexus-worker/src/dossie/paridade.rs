@@ -279,6 +279,9 @@ pub async fn ciclo(
 
 /// Laço do comparador (serviço `nexus-dossie-paridade`, rede do host).
 pub async fn rodar(db: PgPool, legado: String, nexus: String, intervalo: Duration) -> Result<()> {
+    // Sem isso o reqwest entra em pânico quando a feature `rustls-no-provider` está ligada
+    // (build da imagem junto com a API). Já instalado = Err, que pode ser ignorado.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
         .build()
