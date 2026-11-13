@@ -1,0 +1,7 @@
+{
+  "sections": {
+    "t-out": {
+      "html": "<div class=\"vs\" style=\"margin-top:4px\"><div><small>Veredito</small><b style=\"color:var(--ok)\">Seguro</b></div>\n   <div><small>Tempo por abate</small><b>10,7 s</b></div><div><small>Abates por hora</small><b>336</b></div><div><small>Pior intervalo de 5 s</small><b>25% do HP</b></div></div>\n   <p class=\"note\" style=\"margin-top:8px\">Wartortle Nv 30 contra Charmander Nv 20: bate ×2,5 com Água, apanha até ×0,333 de Fogo. Sem poção, cai em 48 s.</p>"
+    }
+  }
+}

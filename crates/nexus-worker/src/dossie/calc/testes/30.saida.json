@@ -1,0 +1,7 @@
+{
+  "sections": {
+    "t-out": {
+      "html": "<div class=\"vs\" style=\"margin-top:4px\"><div><small>Veredito</small><b style=\"color:var(--bad)\">Morre</b></div>\n   <div><small>Tempo por abate</small><b>mais de 5 min</b></div><div><small>Abates por hora</small><b>0</b></div><div><small>Pior intervalo de 5 s</small><b>95.123.942% do HP</b></div></div>\n   <p class=\"note\" style=\"margin-top:8px\">Paldean Tauros Blaze Nv 10 contra Empoleon Nv 3.500: bate ×2,5 com Lutador, apanha até ×2,5 de Água. Sem poção, cai em 0 s.</p>"
+    }
+  }
+}

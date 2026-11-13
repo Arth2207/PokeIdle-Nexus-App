@@ -1,0 +1,7 @@
+{
+  "sections": {
+    "t-out": {
+      "html": "<div class=\"vs\" style=\"margin-top:4px\"><div><small>Veredito</small><b style=\"color:var(--ok)\">Seguro</b></div>\n   <div><small>Tempo por abate</small><b>14,3 s</b></div><div><small>Abates por hora</small><b>252</b></div><div><small>Pior intervalo de 5 s</small><b>5% do HP</b></div></div>\n   <p class=\"note\" style=\"margin-top:8px\">Heatran Nv 500 contra Typhlosion Nv 200: bate ×0,333 com Fogo, apanha até ×1 de Fogo. Sem poção, cai em 372 s.</p>"
+    }
+  }
+}

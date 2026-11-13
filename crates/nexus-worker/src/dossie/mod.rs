@@ -12,6 +12,7 @@
 //! para GET, senão 405. As respostas JSON saem com `JSON.stringify(obj, null, 2)`.
 
 mod acesso;
+mod calc;
 mod escrita;
 mod estaticos;
 pub mod js;
@@ -265,10 +266,22 @@ async fn despachar(d: &Dossie, p: &Pedido, corpo: Body) -> Result<Response, Erro
         | "GET /api/ia/playbook"
         | "GET /api/ia/performance"
         | "GET /api/ia/estado" => leitura::ia(d, p),
-        "GET /api/dossie/calc/catalogo"
-        | "POST /api/dossie/calc/dossie"
-        | "GET /api/dossie/calc/lite"
-        | "POST /api/dossie/calc/preco" => Ok(pendente()),
+        "GET /api/dossie/calc/catalogo" => Ok(enviar(&calc::catalogo()?, 200)),
+        "POST /api/dossie/calc/dossie" => {
+            if !d.limites.ok(&p.ip, 120) {
+                return Ok(enviar(
+                    &json!({ "erro": "muitas requisições, tenta de novo em 1 min" }),
+                    429,
+                ));
+            }
+            let b = ler_json(corpo).await?;
+            // O cálculo é CPU puro: sai da thread do servidor para não travar outras rotas.
+            let r = tokio::task::spawn_blocking(move || calc::calcular(&b))
+                .await
+                .map_err(|e| Erro::novo(500, e.to_string()))??;
+            Ok(enviar(&r, 200))
+        }
+        "GET /api/dossie/calc/lite" | "POST /api/dossie/calc/preco" => Ok(pendente()),
         "GET /precificador/precos.json" => {
             if !acesso::privado(d, p) {
                 return Ok(cru(404, "404"));

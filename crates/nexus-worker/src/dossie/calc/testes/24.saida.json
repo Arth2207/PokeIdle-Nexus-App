@@ -1,0 +1,7 @@
+{
+  "sections": {
+    "t-out": {
+      "html": "<div class=\"vs\" style=\"margin-top:4px\"><div><small>Veredito</small><b style=\"color:var(--ok)\">Seguro</b></div>\n   <div><small>Tempo por abate</small><b>1,1 s</b></div><div><small>Abates por hora</small><b>3.336</b></div><div><small>Pior intervalo de 5 s</small><b>8% do HP</b></div></div>\n   <p class=\"note\" style=\"margin-top:8px\">Poliwhirl Nv 100 contra Spearow Nv 1: bate ×1 com Água, apanha até ×1 de Normal. Sem poção, cai em 117 s.</p>"
+    }
+  }
+}
