@@ -44,7 +44,7 @@ Plano da fase 5. Levantamento feito em novembro de 2026.
 **Limpeza:** deleta linhas com `ts_hora < NOW()-48h` onde `especie_ativa='unknown'`.  
 **Idempotência:** `ON CONFLICT DO UPDATE` (upsert total) — idempotente.
 
-> **Pergunta:** `etl-eficiencia` está parado. Entra na fase 5 ou fica de fora?
+> Parece parado no pm2, mas roda por `cron_restart` a `:05` (ver etapa 5).
 
 ---
 
@@ -172,43 +172,87 @@ GRANT SELECT ON public.fato_hunt_eficiencia TO nexus_app;
     avançado seria pulado. Se o comparador mostrar falta sistemática, trocar por montar o
     diretório e um `-shm` gravável, ou copiar o `.db` para `/tmp` antes de ler.
 
-### Etapa 4 — comparador fato × fato (código ✓, validação pendente)
+- **Bug corrigido (sessão 6):** desde 2026-11-05 15h ~99% das linhas têm `loot_boost`
+  NULL. `row.get::<i32>` falhava e `filter_map(|r| r.ok())` descartava a linha em silêncio:
+  o ETL perdeu esses abates e, quando o lote inteiro era NULL, parou de avançar.
+  Agora: `Option` + erro propagado (o ciclo falha sem avançar o cursor, nunca pula linha),
+  e `0`/`''` viram NULL como o `valor || null` do legado. Cursor recuado para 2026-11-05
+  00:00 (backup em `nexus.etl_cursor_bak_20261113`) para reprocessar.
+- Gauge `nexus_worker_etl_cursor_atraso_s{conta}`: se só cresce, o ETL travou.
+- Diferença conhecida: o Nexus descarta `ts = 1234567890000`; o legado grava (linha de
+  2009, fora de qualquer janela).
 
-- Job horário `etl_paridade`: 4 contas × janelas `1h`/`6h`/`24h`, conta linhas e soma
-  `xp_treinador + xp_pokemon` em `public.fato_kill` × `nexus.fato_kill_shadow`; grava em
-  `nexus.etl_paridade` (coluna `igual` gerada pelo banco).
-- Relatório: `nexus-worker etl-relatorio [--desde <horas>]`.
-- **Pendências:**
-  - As janelas terminam em `NOW()`; o Node e o Nexus rodam em cadências diferentes, então a
-    borda recente sempre diverge. Trocar por janela fechada com atraso (ex.: hora cheia
-    terminada há 30 min).
-  - Somar também `ouro` e publicar métricas por conta (`nexus_etl_paridade_*`).
-  - `fato_hunt_eficiencia` ainda sem comparador.
+### Etapa 4 — comparador fato × fato ✓ (validação de 7 dias em andamento)
 
-### Etapa 5 — ETL de eficiência e preços de mercado *(condicional)*
+- Job horário `etl_paridade` → `nexus.etl_paridade_janela` (a antiga `nexus.etl_paridade`
+  fica sem uso). Upsert por `(tabela, conta, janela, fim)`: recalcular dá o mesmo resultado.
+- **Janela fechada:** termina na hora cheia de `agora − atraso` (30 min no `fato_kill`,
+  2 h na eficiência). Atraso é tolerância de tempo (cadências diferentes e WAL não lido).
+- Vetor de totais `node`/`nexus` (coluna `igual` gerada = vetores iguais):
+  - `fato_kill` por conta, janelas 1h/6h/24h: linhas, xp_treinador, xp_pokemon, ouro,
+    ouro_loot_bonus, loot_boost, shiny, linhas com NULL.
+  - `fato_hunt_eficiencia`, janelas 1h/6h: linhas, xp_tr, xp_pk, ouro, kills, duracao_s.
+    Sem 24h: os dois códigos usam `ts_at >= NOW() − 24h`, então a hora mais antiga é
+    regravada parcial conforme o minuto em que cada um roda (legado `:05`). Efeito de agenda.
+- Métricas: `nexus_etl_paridade_igual{tabela,conta,janela}` e
+  `nexus_etl_paridade_diff{…,metrica}` (Node − Nexus).
+- Relatório: `nexus-worker etl-relatorio [--desde <horas>]` (mostra as posições que
+  divergem e quantas janelas de 1h divergiram no período).
+- Validação manual (sessão 6): `fato_kill` bate 100% hora a hora até 05/11 14h (antes do
+  bug); eficiência bate exato na janela de 6h.
+- **Melhoria proposta (`NEXUS_MELHORIAS`):** eficiência com
+  `ts_at >= date_trunc('hour', NOW()) − 24h` (só horas inteiras). Hoje toda linha final do
+  legado perde os primeiros ~5 min da hora.
 
-- **Status:** eficiência portada em sombra (`nexus.fato_hunt_eficiencia_shadow`, job horário).
-  Preços de mercado ainda sem decisão.
+### Etapa 5 — ETL de eficiência ✓ (sombra) · preços de mercado ✗ (fora)
 
-- ETL eficiência: se scoring ainda usa `fato_hunt_eficiencia`, porta `etl-eficiencia.js` para job horário no worker.
-- Preços de mercado: verificar `mercado_msg` no SQLite; se tiver dados, porta `etl-mercado.js`.
+- Eficiência portada em sombra (`nexus.fato_hunt_eficiencia_shadow`, job horário). O pm2
+  `etl-eficiencia` aparece `stopped` mas roda por `cron_restart` `5 * * * *`.
+- Preços de mercado **fora da fase 5** (decisão 2026-11-13): `mercado_msg` com 0 linhas,
+  `fato_preco_mercado` vazia, nenhum consumidor. Reavaliar se o relay passar a gravar.
 
-### Etapa 6 — dossiê
+### Etapa 6 — dossiê (próxima sessão)
 
-- Porta as rotas de leitura + escrita listadas acima.
-- Motor de preços: reimplementa a lógica de `montarPrecos()` em Rust, lendo de `nexus.venda_base` + `fato_venda_mercado` (já tem SELECT grant).
-- Páginas HTML servidas como arquivos estáticos embutidos no binário (`include_str!` ou `rust-embed`).
-  - **Conceito novo:** `rust-embed` inclui arquivos estáticos no binário em tempo de compilação, como o `require()` do Node mas com verificação em compile time.
-- Comparador: mesma rota chamada nos dois servidores, resultado comparado.
+- **Hospedagem decidida:** `nexus-worker`, porta HTTP própria (só rede interna).
+- Portar: rotas de leitura; escritas (`fato_venda_mercado`, `pokemon_ficha`) em tabelas
+  sombra `nexus.*`; `montarPrecos()`; páginas estáticas com `rust-embed`
+  (embute os arquivos no binário — como servir uma pasta no Node, mas checado na compilação).
+- Comparador: mesma rota nos dois servidores, resposta comparada.
+
+### Arrumação (sessão 6)
+
+- Worker roda como uid/gid 65532 (confirmado em `/proc/<pid>/status`).
+- `group_add: ["986"]` **continua necessário**: `mapa.db` é `660` do grupo `dossie`;
+  `immutable=1` não muda permissão de arquivo.
+- Pico de memória da API no boot: medido 823 MB (VmHWM) contra ~333 MB estável. Causa: duas
+  montagens do mercado em paralelo (o lock do carregador era solto antes do `montar`).
+  Corrigido com lock de montagem (`fdaa10e`): pico medido no boot seguinte 563 MB
+  (estável ~303 MB). Limite de 1G pode voltar a 768M (folga de ~200 MB).
 
 ### Etapa 7 — plano de cutover
 
-- Ligar `NEXUS_ESCRITA_ETL=true` → worker passa a escrever em `public.fato_kill`.
-- Parar pm2 `etl-continuo`; `fato_venda_mercado` e `pokemon_ficha` passam para o worker.
-- Parar `dossie.service`.
-- Verificar 7 dias de comparador verde antes de cada cutover.
+Cada passo é decidido pelo dono, um por vez, só com **7 dias seguidos de comparador verde**
+na parte correspondente (janelas de 1h sem divergência e diff zero nas métricas).
 
----
+1. **ETL contínuo (`fato_kill`)**
+   - Pré: 7 dias de `nexus_etl_paridade_igual{tabela="fato_kill"} == 1`; atraso do cursor < 15 min.
+   - Ajuste antes: ler o WAL de verdade (montar o diretório com `-shm` gravável ou copiar o
+     `.db`), porque no modo escrita o atraso do checkpoint vira atraso do dado.
+   - Passo: parar pm2 `etl-continuo` → copiar o cursor do legado para `nexus.etl_cursor`
+     → `NEXUS_ESCRITA_ETL=true` (worker grava em `public.fato_kill` e `fato_sessao_contexto`).
+   - Rollback: `NEXUS_ESCRITA_ETL=false` + `pm2 start etl-continuo`; o legado retoma do
+     `etl-cursores.json` e o `ON CONFLICT` evita duplicatas.
+2. **Eficiência** — junto do passo 1 (lê `fato_kill`). Parar o cron do pm2
+   `etl-eficiencia`. Rollback: religar o cron; upsert é idempotente.
+3. **Dossiê** — depois da etapa 6 e de 7 dias do comparador de rotas igual.
+   - Passo: proxy da porta 8899 para o worker; escritas passam de `nexus.*` sombra para
+     `public.pokemon_ficha` e `public.fato_venda_mercado` (flag própria); parar `dossie.service`.
+   - Rollback: proxy de volta + `systemctl start dossie.service`; reconciliar as escritas
+     feitas no período (chaves `ON CONFLICT`).
+4. **Melhorias** — só depois dos três: ligar `NEXUS_MELHORIAS` (eficiência em hora cheia).
+
+GRANTs de escrita em `public` para o passo 1 e 3 são pedidos ao dono na hora do cutover.
+
 
 ## Critério de pronto
 
