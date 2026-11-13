@@ -78,7 +78,7 @@ fn criar_janela(
     if let Some(w) = app.get_webview_window(rotulo) {
         return w.set_focus().map_err(|e| e.to_string());
     }
-    let url: tauri::Url = url.parse().map_err(|e| e.to_string())?;
+    let url = url.parse::<tauri::Url>().map_err(|e| e.to_string())?;
     // Perfil isolado por janela (cookies/armazenamento separados por conta).
     let dados = app
         .path()
