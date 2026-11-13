@@ -41,10 +41,13 @@ pub struct Confianca {
 
 /// `confidence(parts, weights)`.
 pub fn confianca(partes: [f64; 4], pesos: &[f64; 5]) -> Confianca {
-    let z = partes
-        .iter()
-        .enumerate()
-        .fold(pesos[0], |s, (i, v)| s + pesos[i + 1] * v);
+    // `weights[0] + x.reduce((s, v, i) => s + weights[i + 1] * v, 0)`: a soma começa em 0 e
+    // só no fim entra o intercepto. Somar a partir de `weights[0]` muda o último bit.
+    let z = pesos[0]
+        + partes
+            .iter()
+            .enumerate()
+            .fold(0.0, |s, (i, v)| s + pesos[i + 1] * v);
     let chance = 1.0 / (1.0 + js::exp(-z));
     // Maior perda primeiro; no empate, a primeira chave (ordenação estável).
     let lowest = (0..4)
@@ -112,6 +115,11 @@ impl Indice {
     pub fn total(&self) -> usize {
         self.mesmos.len()
     }
+
+    /// Venda pela posição (a que `Detalhe::influencia` aponta).
+    pub fn linha(&self, i: usize) -> Option<&LinhaMotor> {
+        self.mesmos.get(i)
+    }
 }
 
 /// A carta a avaliar.
@@ -140,6 +148,25 @@ struct Ponto {
     w: f64,
     camada: usize,
     incerta: bool,
+    /// Posição da venda em `Indice::mesmos`.
+    idx: usize,
+}
+
+/// Saída completa do `neighbors` (o que o `priceSheet` com `details` usa).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Detalhe {
+    pub estimativa: Estimativa,
+    /// `rawMedian`: mediana sem o viés.
+    pub mediana_crua: f64,
+    /// `base`: `exp(center)`.
+    pub base: f64,
+    /// `parts`: proximidade, certeza, consistencia, ampliacao.
+    pub partes: [f64; 4],
+    /// `influence`: (posição da venda, share, closeness), até 30, maior share primeiro.
+    pub influencia: Vec<(usize, f64, f64)>,
+    /// `uncertain.family` e `uncertain.market`.
+    pub incertas_familia: usize,
+    pub incertas_mercado: usize,
 }
 
 /// Quantil ponderado por peso, com interpolação (`weightedQuantile`).
@@ -164,7 +191,7 @@ fn quantil_ponderado(pontos: &[Ponto], q: f64) -> f64 {
     s.last().map_or(f64::NAN, |p| p.0)
 }
 
-/// `neighbors(target, rows, {...})`.
+/// `neighbors(target, rows, {...})`, só o resumo.
 pub fn vizinhos(
     alvo: &Alvo,
     indice: &Indice,
@@ -174,6 +201,28 @@ pub fn vizinhos(
     pesos: &[f64; 5],
     vies: f64,
 ) -> Option<Estimativa> {
+    vizinhos_detalhe(
+        alvo,
+        indice,
+        adicionais,
+        tipos_de,
+        unidade_mega,
+        pesos,
+        vies,
+    )
+    .map(|d| d.estimativa)
+}
+
+/// `neighbors(target, rows, {...})` completo.
+pub fn vizinhos_detalhe(
+    alvo: &Alvo,
+    indice: &Indice,
+    adicionais: f64,
+    tipos_de: impl Fn(i32) -> Vec<String>,
+    unidade_mega: impl Fn(bool, i64) -> f64,
+    pesos: &[f64; 5],
+    vies: f64,
+) -> Option<Detalhe> {
     let ajuste = &indice.ajuste;
     let meus = tipos_de(alvo.familia);
     let camada_de = |r: &LinhaMotor| -> usize {
@@ -212,8 +261,8 @@ pub fn vizinhos(
     };
     let mut pontos: Vec<Ponto> = posicoes
         .into_iter()
-        .map(|i| &indice.mesmos[i])
-        .flat_map(|r| {
+        .map(|i| (i, &indice.mesmos[i]))
+        .flat_map(|(idx, r)| {
             let camada = camada_de(r);
             let w = (if r.refinada { Cfg::PESO_REFINADA } else { 1.0 })
                 * Cfg::CAMADAS[camada]
@@ -232,6 +281,7 @@ pub fn vizinhos(
                     w,
                     camada,
                     incerta: false,
+                    idx,
                 });
                 return saida;
             }
@@ -249,12 +299,14 @@ pub fn vizinhos(
                 w: w * (1.0 - up),
                 camada,
                 incerta: true,
+                idx,
             });
             saida.push(Ponto {
                 v: js::ln(simples) - esperado,
                 w: w * up,
                 camada,
                 incerta: true,
+                idx,
             });
             saida
         })
@@ -291,13 +343,42 @@ pub fn vizinhos(
         js::exp(-(hi - lo)),
         soma(&|p| p.camada == 0) / total,
     ];
-    Some(Estimativa {
-        low: preco(centro + lo),
-        median: preco(centro),
-        high: preco(centro + hi),
-        familia_total: indice.por_familia.get(&alvo.familia).copied().unwrap_or(0),
-        mercado_total: indice.total(),
-        confianca: confianca(partes, pesos),
+    // `influence`: soma do peso por venda (só camada 0), na ordem em que apareceram;
+    // ordenação estável por share (o `sort` do JS também é estável).
+    let mut por_venda: Vec<(usize, f64)> = Vec::new();
+    for p in pontos.iter().filter(|p| p.camada == 0) {
+        match por_venda.iter_mut().find(|(i, _)| *i == p.idx) {
+            Some((_, w)) => *w += p.w,
+            None => por_venda.push((p.idx, p.w)),
+        }
+    }
+    let mut influencia: Vec<(usize, f64, f64)> = por_venda
+        .into_iter()
+        .map(|(i, w)| (i, w / total, w))
+        .collect();
+    influencia.sort_by(|a, b| b.1.total_cmp(&a.1));
+    influencia.truncate(30);
+    let incertas_familia = indice
+        .mesmos
+        .iter()
+        .filter(|r| r.familia == alvo.familia && r.incerta)
+        .count();
+    let incertas_mercado = indice.mesmos.iter().filter(|r| r.incerta).count();
+    Some(Detalhe {
+        estimativa: Estimativa {
+            low: preco(centro + lo),
+            median: preco(centro),
+            high: preco(centro + hi),
+            familia_total: indice.por_familia.get(&alvo.familia).copied().unwrap_or(0),
+            mercado_total: indice.total(),
+            confianca: confianca(partes, pesos),
+        },
+        mediana_crua: preco(centro + vies),
+        base: js::exp(centro),
+        partes,
+        influencia,
+        incertas_familia,
+        incertas_mercado,
     })
 }
 

@@ -90,7 +90,8 @@ const LENDARIOS: &[i32] = &[
     489, 490, 491, 492, 493, 647, 648, 649, 719, 720, 721, 801, 802, 807, 808, 809, 893, 1025,
 ];
 
-fn lendario(id: i32) -> bool {
+/// `PokeIdlePvePower.legendary(id)`: megas e formas regionais contam pela espécie base.
+pub fn lendario(id: i32) -> bool {
     let base = if id >= 13000 {
         id % 1000
     } else if (3000..4000).contains(&id) {

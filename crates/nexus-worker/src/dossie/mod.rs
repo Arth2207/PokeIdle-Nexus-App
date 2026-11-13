@@ -15,8 +15,10 @@ mod acesso;
 mod escrita;
 mod estaticos;
 pub mod js;
+mod jsonjs;
 mod leitura;
 pub mod paridade;
+mod precos;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -46,6 +48,8 @@ pub struct Dossie {
     /// `DOSSIE_KEY`. Sem chave, as rotas protegidas ficam bloqueadas (igual ao legado).
     pub chave: Option<String>,
     pub limites: Limites,
+    /// Catálogo e `precos.json` do precificador (etapa 6b).
+    pub precos: precos::Cache,
 }
 
 impl Dossie {
@@ -123,7 +127,7 @@ impl From<sqlx::Error> for Erro {
 
 /// `send(res, obj, code)` do legado.
 pub fn enviar(v: &Value, codigo: u16) -> Response {
-    let corpo = serde_json::to_string_pretty(v).unwrap_or_default();
+    let corpo = jsonjs::bonito(v);
     (
         StatusCode::from_u16(codigo).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
         [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
@@ -265,15 +269,14 @@ async fn despachar(d: &Dossie, p: &Pedido, corpo: Body) -> Result<Response, Erro
         | "GET /api/ia/playbook"
         | "GET /api/ia/performance"
         | "GET /api/ia/estado" => leitura::ia(d, p),
-        "GET /api/dossie/calc/catalogo"
-        | "POST /api/dossie/calc/dossie"
-        | "GET /api/dossie/calc/lite"
-        | "POST /api/dossie/calc/preco" => Ok(pendente()),
+        "GET /api/dossie/calc/catalogo" | "POST /api/dossie/calc/dossie" => Ok(pendente()),
+        "GET /api/dossie/calc/lite" => precos::rota_lite(d, p).await,
+        "POST /api/dossie/calc/preco" => precos::rota_preco(d, p, corpo).await,
         "GET /precificador/precos.json" => {
             if !acesso::privado(d, p) {
                 return Ok(cru(404, "404"));
             }
-            Ok(pendente())
+            precos::rota_precos(d).await
         }
         _ if p.metodo != Method::GET => Ok(cru(405, "")),
         _ => estaticos::servir(d, p).await,

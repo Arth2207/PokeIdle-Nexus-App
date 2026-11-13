@@ -22,7 +22,9 @@ rustls        = { version = "0.23.46", default-features = false, features = ["ri
 rusqlite      = { version = "0.32.1", features = ["bundled"] }
 serde         = { version = "1.0.229", features = ["derive"] }
 # Ordem de inserção das chaves, como o JSON.stringify do legado.
-serde_json    = { version = "1.0.154", features = ["preserve_order"] }
+# float_roundtrip: lê floats com arredondamento correto, como o JSON.parse (o precos.json
+# base tem preços e PvE com 17 dígitos; sem isso o último bit pode mudar).
+serde_json    = { version = "1.0.154", features = ["preserve_order", "float_roundtrip"] }
 sqlx          = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "json"] }
 chrono        = { version = "0.4", default-features = false, features = ["std", "clock"] }
 thiserror     = "2.0.21"

@@ -147,6 +147,18 @@ impl Ajuste {
         }
     }
 
+    /// `fit.level(l)`: só o efeito do nível. No plano o legado calcula
+    /// `line(0, l) - line(0, 0)` literalmente (não `c·l`), e o arredondamento importa.
+    pub fn nivel(&self, log_nivel: f64) -> f64 {
+        match self {
+            Ajuste::Plano { my, mx, ml, b, c } => {
+                let linha = |x: f64, l: f64| my + b * (x - mx) + c * (l - ml);
+                linha(0.0, log_nivel) - linha(0.0, 0.0)
+            }
+            Ajuste::Aditivo { nivel, .. } => nivel.valor(log_nivel),
+        }
+    }
+
     /// `marketFit(same)`.
     pub fn novo(mesmos: &[PontoAjuste]) -> Self {
         let com_nota: Vec<&PontoAjuste> = mesmos.iter().filter(|p| p.nota.is_some()).collect();

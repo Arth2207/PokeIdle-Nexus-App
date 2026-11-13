@@ -261,6 +261,7 @@ fn montar_dossie(
         dados_dir: cfg.dossie_dados.clone().into(),
         chave: chave.filter(|c| !c.is_empty()),
         limites: dossie::Limites::default(),
+        precos: Default::default(),
     }))
 }
 
