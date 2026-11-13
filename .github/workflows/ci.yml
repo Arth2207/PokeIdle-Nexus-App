@@ -95,6 +95,33 @@ jobs:
           docker push "$IMAGEM:$GITHUB_SHA"
           docker push "$IMAGEM:latest"
 
+  desktop:
+    name: app desktop (instalador Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop
+      - name: Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+      # app-icon.png é a fonte; os tamanhos e o .ico saem daqui (icons/ não é versionado).
+      - name: Ícones
+        working-directory: apps/desktop
+        run: cargo tauri icon app-icon.png
+      - name: Instalador NSIS e MSI
+        working-directory: apps/desktop
+        run: cargo tauri build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-desktop-windows
+          path: |
+            apps/desktop/target/release/bundle/nsis/*.exe
+            apps/desktop/target/release/bundle/msi/*.msi
+          if-no-files-found: error
+
   deploy:
     name: deploy na VPS
     needs: imagem

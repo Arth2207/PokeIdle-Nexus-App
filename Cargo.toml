@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/contrato", "crates/nucleo", "crates/persistencia", "crates/nexus-api", "crates/nexus-worker"]
+members = ["crates/a2-nucleo", "crates/contrato", "crates/nucleo", "crates/persistencia", "crates/nexus-api", "crates/nexus-worker"]
+exclude = ["apps/desktop"]
 
 [workspace.package]
 edition = "2021"
