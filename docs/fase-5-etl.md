@@ -239,6 +239,10 @@ Porta interna 9192, publicada só em `127.0.0.1:18899` para o comparador.
   relatório `nexus-worker dossie-relatorio [--desde <horas>]`. Só GETs e POST sem chave
   (401 antes de gravar); teste trava a lista. `POST /api/dossie/ficha` grava sem chave e
   nunca entra.
+- Incidente 2026-11-13 06:26–10:33: o `unattended-upgrade` reiniciou o containerd e a porta
+  publicada (18899) parou de encaminhar até o reboot automático; o worker e o ETL seguiram
+  normais. O comparador registra isso como divergência ("nexus: … timed out"); ao contar os
+  7 dias, separar falha de transporte de diferença de conteúdo.
 
 **Pendente**
 - 6b: precificador — `GET /precificador/precos.json` (`montarPrecos()`), `calc/lite`,
