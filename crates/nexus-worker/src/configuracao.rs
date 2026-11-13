@@ -10,6 +10,13 @@
 //! | `NEXUS_ETL_INTERVALO_S`    | não         | `300`                |
 //! | `NEXUS_ETL_EFIC_INTERVALO_S` | não       | `3600`               |
 //! | `NEXUS_ESCRITA_ETL`        | não         | `false`              |
+//! | `NEXUS_DOSSIE_PORTA`       | não         | `0` (desligado)      |
+//! | `NEXUS_DOSSIE_STATIC`      | não         | `/opt/mapper/data/static` |
+//! | `NEXUS_DOSSIE_DADOS`       | não         | `/dados`             |
+//! | `NEXUS_DOSSIE_CHAVE_FILE`  | não         | — (rotas com chave bloqueadas) |
+//! | `NEXUS_DOSSIE_LEGADO_URL`  | não         | `http://127.0.0.1:8899` |
+//! | `NEXUS_DOSSIE_NEXUS_URL`   | não         | `http://127.0.0.1:18899` |
+//! | `NEXUS_DOSSIE_PARIDADE_CICLO_S` | não    | `1800`               |
 //!
 //! * Uma das duas formas de DATABASE_URL é obrigatória.
 //!
@@ -40,6 +47,15 @@ pub struct Configuracao {
     pub etl_efic_intervalo: Duration,
     /// Liga a escrita nas tabelas `public` (cutover). Enquanto `false`, só shadow.
     pub escrita_etl: bool,
+    /// Porta do dossiê em sombra; 0 = não sobe.
+    pub dossie_porta: u16,
+    pub dossie_static: String,
+    pub dossie_dados: String,
+    /// Arquivo com a `DOSSIE_KEY` (o valor não fica na struct, que vai para log).
+    pub dossie_chave_arquivo: Option<String>,
+    pub dossie_legado_url: String,
+    pub dossie_nexus_url: String,
+    pub dossie_paridade_ciclo: Duration,
 }
 
 impl Configuracao {
@@ -58,6 +74,12 @@ impl Configuracao {
         let etl_intervalo = Duration::from_secs(var_u64("NEXUS_ETL_INTERVALO_S", 300)?);
         let etl_efic_intervalo = Duration::from_secs(var_u64("NEXUS_ETL_EFIC_INTERVALO_S", 3600)?);
         let escrita_etl = var_bool("NEXUS_ESCRITA_ETL", false)?;
+        let texto = |nome: &str, padrao: &str| {
+            std::env::var(nome)
+                .ok()
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| padrao.to_owned())
+        };
 
         Ok(Self {
             database_url,
@@ -67,6 +89,18 @@ impl Configuracao {
             etl_intervalo,
             etl_efic_intervalo,
             escrita_etl,
+            dossie_porta: var_u16("NEXUS_DOSSIE_PORTA", 0)?,
+            dossie_static: texto("NEXUS_DOSSIE_STATIC", "/opt/mapper/data/static"),
+            dossie_dados: texto("NEXUS_DOSSIE_DADOS", "/dados"),
+            dossie_chave_arquivo: std::env::var("NEXUS_DOSSIE_CHAVE_FILE")
+                .ok()
+                .filter(|v| !v.is_empty()),
+            dossie_legado_url: texto("NEXUS_DOSSIE_LEGADO_URL", "http://127.0.0.1:8899"),
+            dossie_nexus_url: texto("NEXUS_DOSSIE_NEXUS_URL", "http://127.0.0.1:18899"),
+            dossie_paridade_ciclo: Duration::from_secs(var_u64(
+                "NEXUS_DOSSIE_PARIDADE_CICLO_S",
+                1800,
+            )?),
         })
     }
 }

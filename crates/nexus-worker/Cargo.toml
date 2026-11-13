@@ -9,15 +9,21 @@ publish.workspace = true
 anyhow        = "1.0.104"
 axum          = { version = "0.8.9" }
 dotenvy       = "0.15.7"
+form_urlencoded = "1.2.2"
+futures-util  = { version = "0.3.34", default-features = false }
 metrics       = "0.24.6"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
+nucleo        = { version = "0.1.0", path = "../nucleo" }
+regex         = "1.13.1"
+reqwest       = { version = "0.13.5", default-features = false }
 rusqlite      = { version = "0.32.1", features = ["bundled"] }
 serde         = { version = "1.0.229", features = ["derive"] }
-serde_json    = "1.0.154"
-sqlx          = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono"] }
+# Ordem de inserção das chaves, como o JSON.stringify do legado.
+serde_json    = { version = "1.0.154", features = ["preserve_order"] }
+sqlx          = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono", "json"] }
 chrono        = { version = "0.4", default-features = false, features = ["std", "clock"] }
 thiserror     = "2.0.21"
-tokio         = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net", "signal", "time", "io-util"] }
+tokio         = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net", "signal", "time", "io-util", "fs"] }
 tokio-util    = "0.7.20"
 tracing       = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }

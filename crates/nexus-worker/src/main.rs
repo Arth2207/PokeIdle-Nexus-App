@@ -3,8 +3,13 @@
 //! Uso:
 //!   nexus-worker              sobe o worker
 //!   nexus-worker healthcheck  checa o /health/ready local (usado pelo Docker)
+//!   nexus-worker etl-relatorio [--desde <horas>]
+//!   nexus-worker dossie-paridade            comparador de rotas do dossiê (laço)
+//!   nexus-worker dossie-servir              só o servidor do dossiê (testes locais)
+//!   nexus-worker dossie-relatorio [--desde <horas>]
 
 mod configuracao;
+mod dossie;
 mod jobs;
 mod metricas;
 
@@ -22,7 +27,7 @@ use tracing::{error, info, warn};
 
 use crate::configuracao::Configuracao;
 
-const USO: &str = "uso: nexus-worker [healthcheck | etl-relatorio [--desde <horas>]]";
+const USO: &str = "uso: nexus-worker [healthcheck | etl-relatorio [--desde <horas>] | dossie-paridade | dossie-relatorio [--desde <horas>]]";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -43,6 +48,13 @@ async fn main() -> anyhow::Result<()> {
         ["etl-relatorio", "--desde", h] => {
             let horas: u32 = h.parse().context("--desde requer número inteiro")?;
             relatorio(&cfg, horas).await
+        }
+        ["dossie-paridade"] => dossie_paridade(&cfg).await,
+        ["dossie-servir"] => dossie_servir(&cfg).await,
+        ["dossie-relatorio"] => dossie_relatorio(&cfg, 24).await,
+        ["dossie-relatorio", "--desde", h] => {
+            let horas: u32 = h.parse().context("--desde requer número inteiro")?;
+            dossie_relatorio(&cfg, horas).await
         }
         _ => {
             eprintln!("{USO}");
@@ -100,6 +112,11 @@ async fn executar(cfg: Configuracao) -> anyhow::Result<()> {
         parar.clone(),
     );
     let paridade = loop_etl_paridade(db.clone(), cfg.etl_efic_intervalo, parar.clone());
+
+    if cfg.dossie_porta > 0 {
+        let d = montar_dossie(&cfg, db.clone())?;
+        tokio::spawn(dossie::servir(cfg.dossie_porta, d, parar.clone()));
+    }
 
     tokio::join!(etl, efic, paridade);
 
@@ -215,6 +232,75 @@ async fn relatorio(cfg: &Configuracao, horas: u32) -> anyhow::Result<()> {
         horas, divergentes, total
     );
     Ok(())
+}
+
+async fn conectar(cfg: &Configuracao) -> anyhow::Result<sqlx::PgPool> {
+    PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&cfg.database_url)
+        .await
+        .context("não consegui conectar ao banco")
+}
+
+fn montar_dossie(
+    cfg: &Configuracao,
+    db: sqlx::PgPool,
+) -> anyhow::Result<std::sync::Arc<dossie::Dossie>> {
+    let chave = match &cfg.dossie_chave_arquivo {
+        Some(arq) => Some(
+            std::fs::read_to_string(arq)
+                .with_context(|| format!("não consegui ler NEXUS_DOSSIE_CHAVE_FILE={arq}"))?
+                .trim()
+                .to_owned(),
+        ),
+        None => None,
+    };
+    Ok(std::sync::Arc::new(dossie::Dossie {
+        db,
+        static_dir: cfg.dossie_static.clone().into(),
+        dados_dir: cfg.dossie_dados.clone().into(),
+        chave: chave.filter(|c| !c.is_empty()),
+        limites: dossie::Limites::default(),
+    }))
+}
+
+async fn dossie_servir(cfg: &Configuracao) -> anyhow::Result<()> {
+    iniciar_logs(cfg.log_formato);
+    let db = conectar(cfg).await?;
+    let d = montar_dossie(cfg, db)?;
+    let parar = CancellationToken::new();
+    {
+        let parar = parar.clone();
+        tokio::spawn(async move {
+            tokio::signal::ctrl_c().await.ok();
+            parar.cancel();
+        });
+    }
+    dossie::servir(cfg.dossie_porta.max(1), d, parar).await;
+    Ok(())
+}
+
+async fn dossie_paridade(cfg: &Configuracao) -> anyhow::Result<()> {
+    iniciar_logs(cfg.log_formato);
+    let db = conectar(cfg).await?;
+    info!(
+        legado = %cfg.dossie_legado_url,
+        nexus = %cfg.dossie_nexus_url,
+        "comparador do dossiê iniciado"
+    );
+    dossie::paridade::rodar(
+        db,
+        cfg.dossie_legado_url.clone(),
+        cfg.dossie_nexus_url.clone(),
+        cfg.dossie_paridade_ciclo,
+    )
+    .await
+}
+
+async fn dossie_relatorio(cfg: &Configuracao, horas: u32) -> anyhow::Result<()> {
+    iniciar_logs(cfg.log_formato);
+    let db = conectar(cfg).await?;
+    dossie::paridade::relatorio(&db, horas).await
 }
 
 async fn iniciar_servidor(
