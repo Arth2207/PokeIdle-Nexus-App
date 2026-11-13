@@ -94,6 +94,9 @@ async fn processar_conta(
 ) -> Result<u64> {
     // 1. Lê cursor atual do Postgres (transacional, não do arquivo)
     let cursor_ms = ler_cursor(db, conta.conta_id).await?;
+    // Atraso do cursor: se só cresce, o ETL está travado (alerta no Grafana).
+    metrics::gauge!("nexus_worker_etl_cursor_atraso_s", "conta" => conta.conta_id)
+        .set((chrono_now_ms() - cursor_ms) as f64 / 1000.0);
 
     // 2. Lê batch do SQLite em thread bloqueante
     //    spawn_blocking: como o rayon + oneshot que você já viu — move a operação
@@ -171,47 +174,35 @@ fn ler_sqlite_batch(
           LIMIT ?3",
     )?;
 
-    let eventos: Vec<Evento> = stmt
+    // `loot_boost`/`shiny` podem ser NULL (≈99% das linhas recentes). O legado faz
+    // `r.loot_boost ? true : false` → NULL vira false; aqui `Option` + `unwrap_or(0)`.
+    // Erro de leitura derruba o ciclo (sem avançar o cursor) em vez de pular a linha:
+    // antes, `filter_map(|r| r.ok())` descartava as linhas com NULL e o ETL travava.
+    let eventos = stmt
         .query_map(
             rusqlite::params![conta_id, cursor_ms, batch as i64],
             |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,            // ts
-                    row.get::<_, Option<String>>(1)?, // hunt_slug
-                    row.get::<_, Option<i64>>(2)?,    // xp_treinador
-                    row.get::<_, Option<i64>>(3)?,    // xp_pokemon
-                    row.get::<_, Option<i64>>(4)?,    // ouro
-                    row.get::<_, Option<i64>>(5)?,    // ouro_loot_bonus
-                    row.get::<_, i32>(6)?,            // loot_boost (0/1)
-                    row.get::<_, i32>(7)?,            // shiny (0/1)
-                ))
+                // O legado grava `valor || null`: 0 e '' viram NULL. `filter` faz o mesmo
+                // (em JS: `Some(0).filter(v => v !== 0)` → None).
+                let num = |i: usize| -> rusqlite::Result<Option<i64>> {
+                    Ok(row.get::<_, Option<i64>>(i)?.filter(|v| *v != 0))
+                };
+                Ok(Evento {
+                    ts_ms: row.get(0)?,
+                    hunt_slug: row.get::<_, Option<String>>(1)?.filter(|s| !s.is_empty()),
+                    xp_treinador: num(2)?,
+                    xp_pokemon: num(3)?,
+                    ouro: num(4)?,
+                    ouro_loot_bonus: num(5)?,
+                    loot_boost: row.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0,
+                    shiny: row.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0,
+                })
             },
         )?
-        .filter_map(|r| r.ok())
-        .filter(|(ts, ..)| *ts != SENTINELA_MS)
-        .map(
-            |(
-                ts_ms,
-                hunt_slug,
-                xp_treinador,
-                xp_pokemon,
-                ouro,
-                ouro_loot_bonus,
-                loot_boost,
-                shiny,
-            )| {
-                Evento {
-                    ts_ms,
-                    hunt_slug,
-                    xp_treinador,
-                    xp_pokemon,
-                    ouro,
-                    ouro_loot_bonus,
-                    loot_boost: loot_boost != 0,
-                    shiny: shiny != 0,
-                }
-            },
-        )
+        .collect::<rusqlite::Result<Vec<Evento>>>()
+        .context("linha inválida no evento_kill")?
+        .into_iter()
+        .filter(|e| e.ts_ms != SENTINELA_MS)
         .collect();
 
     Ok(eventos)
@@ -367,4 +358,43 @@ fn chrono_now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    /// Regressão: `loot_boost`/`shiny` NULL não podem sumir do lote (travava o cursor).
+    #[test]
+    fn le_linhas_com_loot_boost_nulo() {
+        let path = std::env::temp_dir().join(format!("etl-teste-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE evento_kill (conta TEXT, ts INTEGER, hunt_slug TEXT,
+                xp_treinador INTEGER, xp_pokemon INTEGER, ouro INTEGER,
+                ouro_loot_bonus INTEGER, loot_boost INTEGER, shiny INTEGER);
+             INSERT INTO evento_kill VALUES
+                ('c', 1234567890000, NULL, 1, 1, 1, NULL, NULL, 0),
+                ('c', 10, '', 5, 0, 7, NULL, NULL, 0),
+                ('c', 20, 'h', 5, NULL, 7, 2, 1, NULL),
+                ('x', 30, 'h', 5, 6, 7, NULL, NULL, 0);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let ev = ler_sqlite_batch(path.to_str().unwrap(), "c", 0, 10).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(ev.len(), 2);
+        assert_eq!(ev[0].ts_ms, 10);
+        assert!(!ev[0].loot_boost);
+        assert!(ev[1].loot_boost);
+        assert!(!ev[1].shiny);
+        assert_eq!(ev[1].xp_pokemon, None);
+        // `valor || null` do legado: '' e 0 viram NULL
+        assert_eq!(ev[0].hunt_slug, None);
+        assert_eq!(ev[0].xp_pokemon, None);
+        assert_eq!(ev[0].xp_treinador, Some(5));
+    }
 }
