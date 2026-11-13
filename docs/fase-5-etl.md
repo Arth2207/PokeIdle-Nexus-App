@@ -295,31 +295,39 @@ como divergência de lógica no relatório.
   Corrigido com lock de montagem (`fdaa10e`): pico medido no boot seguinte 563 MB
   (estável ~303 MB). Limite de 1G pode voltar a 768M (folga de ~200 MB).
 
-### Etapa 7 — plano de cutover
+### Etapa 7 — cutover ✓ (executado em 2026-11-13, por decisão do dono)
 
-Cada passo é decidido pelo dono, um por vez, só com **7 dias seguidos de comparador verde**
-na parte correspondente (janelas de 1h sem divergência e diff zero nas métricas).
+O dono decidiu virar no mesmo dia, sem esperar 7 dias de comparador (estava verde em todas
+as janelas desde o fim do reprocessamento). Script: `/opt/nexus-deploy/cutover-fase5.sh`
+(`grants`, `etl-on`/`etl-off`, `dossie-on`/`dossie-off`, `status`).
 
-1. **ETL contínuo (`fato_kill`)**
-   - Pré: 7 dias de `nexus_etl_paridade_igual{tabela="fato_kill"} == 1`; atraso do cursor < 15 min.
-   - Ajuste antes: ler o WAL de verdade (montar o diretório com `-shm` gravável ou copiar o
-     `.db`), porque no modo escrita o atraso do checkpoint vira atraso do dado.
-   - Passo: parar pm2 `etl-continuo` → copiar o cursor do legado para `nexus.etl_cursor`
-     → `NEXUS_ESCRITA_ETL=true` (worker grava em `public.fato_kill` e `fato_sessao_contexto`).
-   - Rollback: `NEXUS_ESCRITA_ETL=false` + `pm2 start etl-continuo`; o legado retoma do
-     `etl-cursores.json` e o `ON CONFLICT` evita duplicatas.
-2. **Eficiência** — junto do passo 1 (lê `fato_kill`). Parar o cron do pm2
-   `etl-eficiencia`. Rollback: religar o cron; upsert é idempotente.
-3. **Dossiê** — depois das etapas 6a–6c e de 7 dias de `dossie-relatorio` sem divergência.
-   - Antes: chave em secret, uploads em volume persistente com o limite de memória ajustado.
-   - Passo: proxy da porta 8899 para o worker; escritas passam de `nexus.*` sombra para
-     `public.pokemon_ficha` e `public.fato_venda_mercado` (flag própria); parar `dossie.service`.
-   - Rollback: proxy de volta + `systemctl start dossie.service`; reconciliar as escritas
-     feitas no período (chaves `ON CONFLICT`).
-4. **Melhorias** — só depois dos três: ligar `NEXUS_MELHORIAS` (eficiência em hora cheia).
+1. **GRANTs** de escrita para o `nexus_app`: INSERT em `fato_kill`, `fato_sessao_contexto`,
+   `dim_hunt`, `fato_venda_mercado`; INSERT/UPDATE/DELETE em `fato_hunt_eficiencia` e
+   `pokemon_ficha`; USAGE na sequência `pokemon_ficha_id_seq`.
+2. **ETL** (`etl-on`): pm2 `etl-continuo` e `etl-eficiencia` parados (`pm2 save`); cursor do
+   Nexus recuado para o do legado (`etl-cursores.json`, backup em
+   `nexus.etl_cursor_bak_cutover`); `NEXUS_ESCRITA_ETL=true`. O comparador fato × fato
+   desliga sozinho nesse modo.
+   - Junto: o ETL passou a abrir o SQLite com `mode=ro` (lê o WAL). Com o diretório inteiro
+     montado só leitura, o SQLite abre o WAL read-only; o `immutable=1` atrasava o dado até o
+     checkpoint. Atraso agora ~1 min (era 5 min no legado).
+   - Conferido: janela da virada com contagem igual ao SQLite nas 4 contas e nenhuma duplicata.
+3. **Dossiê** (`dossie-on`): `dossie.service` desabilitado; serviço `nexus-dossie`
+   (`dossie-servir`, usuário `dossie`, perfil `cutover`) nas portas do legado: loopback
+   (cloudflared) e a interface do Tailscale, que vai para a porta privada (libera as rotas
+   protegidas sem chave, como o legado). `NEXUS_ESCRITA_DOSSIE=true`: escritas no `public`,
+   fotos e uploads na pasta do legado (único volume gravável), teto de 200 MB, 1G de memória.
+   Chave do legado copiada para `secrets/dossie_chave_legado`. O `nexus-dossie-paridade` fica
+   parado. Conferido: páginas, APIs, `precos.json` (404 público, 200 privado e com chave) e o
+   relay gravando vendas pelo Nexus.
+4. **Deploy:** o `deploy.sh` recria o `nexus-dossie` (em vez do comparador) quando existe
+   `estado/dossie-cutover`.
 
-GRANTs de escrita em `public` para o passo 1 e 3 são pedidos ao dono na hora do cutover.
+**Rollback:** `cutover-fase5.sh etl-off` e/ou `dossie-off` (religam o legado; o ETL do legado
+retoma do `etl-cursores.json` e o `ON CONFLICT` evita duplicata).
 
+**Ainda depende do legado:** o `mapa.db` é escrito pelo `mapper` (`server.js`, ingestão do
+relay). O ETL lê dele até a ingestão virar para o Nexus (Fase 3) e o SQLite sair (Fase 7).
 
 ## Critério de pronto
 
