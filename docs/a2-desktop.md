@@ -34,7 +34,10 @@ Meta com 4 contas abertas em jogo: **até 1,4 GB de RAM e 25% de CPU**. Não dá
 
 ## Pendente
 
-UI Leptos (hoje `iniciar_nucleo`, `abrir_conta` e `abrir_tracker` são comandos sem tela); keyring; coletar do jogo `inventario`, `mercado` e `perfil` (o parser em `jogo` já aceita; falta o coletor ler o DOM/estado, que o legado lia do estado do motor); `hunt_slug` nas linhas do HUD (o legado deriva de `ultimo.hunt`); expor informativos (`raro.novo` etc.) e `sessao.ressincronizar` (recarga por HTTP) à UI; TLS é `rustls` com raízes webpki; commitar o `Cargo.lock` do desktop e passar a usar `--locked`; ícone definitivo; incluir `tracker.captura` em `TIPOS` no servidor.
+- **Visual (pedido do dono, futuro):** cards de vidro mais transparentes, deixando a paisagem aparecer através deles, como no mockup.
+- Tela: fundo pelo bioma da hunt da conta ativa e tema noturno; seletores de período e moeda, ⌘K, alertas e Modo desempenho (hoje só visuais); limite de 15 fps nas janelas fora de foco (hoje só texto); demais telas da navegação (etapa 10).
+- Coletor: `hunt_slug` e HP mínimo por conta (cards mostram "—"); `inventario`, `mercado` e `perfil` (o parser em `jogo` já aceita; falta ler do DOM/estado); expor informativos (`raro.novo` etc.) e `sessao.ressincronizar` à UI.
+- Infra do app: keyring no lugar do arquivo de token; commitar o `Cargo.lock` do desktop e da UI e usar `--locked`; ícone definitivo.
 
 ## Tela (Leptos)
 
