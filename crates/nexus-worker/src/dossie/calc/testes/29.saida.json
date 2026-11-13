@@ -1,0 +1,7 @@
+{
+  "sections": {
+    "t-out": {
+      "html": "<div class=\"vs\" style=\"margin-top:4px\"><div><small>Veredito</small><b style=\"color:var(--bad)\">Morre</b></div>\n   <div><small>Tempo por abate</small><b>300 s</b></div><div><small>Abates por hora</small><b>12</b></div><div><small>Pior intervalo de 5 s</small><b>426% do HP</b></div></div>\n   <p class=\"note\" style=\"margin-top:8px\">Mega Altaria Nv 100 contra Snorunt Nv 200: bate ×1 com Dragão, apanha até ×2,5 de Gelo. Sem poção, cai em 3 s.</p>"
+    }
+  }
+}

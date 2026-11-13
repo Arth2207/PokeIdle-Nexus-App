@@ -1,0 +1,7 @@
+{
+  "sections": {
+    "t-out": {
+      "html": "<div class=\"vs\" style=\"margin-top:4px\"><div><small>Veredito</small><b style=\"color:var(--warn)\">Arriscado</b></div>\n   <div><small>Tempo por abate</small><b>mais de 5 min</b></div><div><small>Abates por hora</small><b>0</b></div><div><small>Pior intervalo de 5 s</small><b>79% do HP</b></div></div>\n   <p class=\"note\" style=\"margin-top:8px\">Bulbasaur Nv 500 contra Burmy Nv 1.000: bate ×0,333 com Planta, apanha até ×1 de Inseto. Sem poção, cai em 9 s.</p>"
+    }
+  }
+}
