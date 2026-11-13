@@ -853,7 +853,7 @@ fn qualidade_equipe(l: &Value, n: &Value) -> Option<String> {
     // O legado reaproveita um cálculo de até 5 minutos atrás (e cotações de até 30 min); com o
     // relay ativo, as ofertas mudam nesse meio tempo. Conjuntos de candidatas diferentes não
     // têm qualidade comparável (equipe e custo saem de outro conjunto): só compara com o
-    // mesmo número de candidatas. Passando de 10% (e de 15 ofertas, para conjuntos pequenos),
+    // mesmo número de candidatas. Passando de 10% do conjunto,
     // é divergência de lógica e aparece.
     let (a, b) = (
         l.pointer("/candidatas")
@@ -863,7 +863,7 @@ fn qualidade_equipe(l: &Value, n: &Value) -> Option<String> {
             .and_then(Value::as_f64)
             .unwrap_or(0.0),
     );
-    if (a - b).abs() > 0.1 * a.max(b) && (a - b).abs() > 15.0 {
+    if (a - b).abs() > 0.1 * a.max(b) {
         return Some(format!("candidatas: {a} ≠ {b} (mais de 10%)"));
     }
     if (a - b).abs() > 0.0 {
@@ -1154,7 +1154,8 @@ mod testes {
             json!({"boss": {"key": "x"}, "candidatas": c,
                 "perfis": {"max": {"indisponivel": false, "poder": 1.0, "total": tot}}})
         };
-        assert_eq!(qualidade_equipe(&perfil(18, 1000), &perfil(31, 2000)), None);
+        assert_eq!(qualidade_equipe(&perfil(30, 1000), &perfil(31, 2000)), None);
+        assert!(qualidade_equipe(&perfil(18, 1000), &perfil(31, 2000)).is_some());
         assert!(qualidade_equipe(&perfil(31, 1000), &perfil(31, 2000)).is_some());
         assert!(qualidade_equipe(&perfil(100, 1000), &perfil(200, 1000)).is_some());
     }
