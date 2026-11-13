@@ -6,8 +6,8 @@
 # legíveis pelo usuário nexus-deploy. Só lê o legado; a importação grava apenas no schema
 # nexus, pela API ativa (`nexus-api importar`).
 #
-# O catálogo de espécies é um arquivo JS. Enquanto o legado existir, ele é convertido com o
-# Node do próprio legado; sem Node na máquina, esse catálogo é pulado.
+# O catálogo de espécies é um arquivo JS: os dois .js vão concatenados para
+# `nexus-api importar especies-js`, que extrai os dados sem Node.
 
 set -euo pipefail
 
