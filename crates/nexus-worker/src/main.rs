@@ -184,27 +184,36 @@ async fn relatorio(cfg: &Configuracao, horas: u32) -> anyhow::Result<()> {
         .connect(&cfg.database_url)
         .await
         .context("não consegui conectar ao banco")?;
-    let linhas = jobs::etl_paridade::relatorio(&db, horas).await?;
+    let (linhas, total, divergentes) = jobs::etl_paridade::relatorio(&db, horas).await?;
     if linhas.is_empty() {
         println!("sem dados nas últimas {} horas", horas);
         return Ok(());
     }
     println!(
-        "{:<12} {:<6} {:>12} {:>12} {:>14} {:>14} igual",
-        "conta", "janela", "linhas_node", "linhas_nexus", "soma_xp_node", "soma_xp_nexus"
+        "{:<20} {:<9} {:<4} {:<17} {:>16} igual / diferenças",
+        "tabela", "conta", "jan", "fim (UTC)", "linhas node/nexus"
     );
     for l in &linhas {
+        let linhas_n = l.node.first().copied().unwrap_or(0);
+        let linhas_x = l.nexus.first().copied().unwrap_or(0);
         println!(
-            "{:<12} {:<6} {:>12} {:>12} {:>14} {:>14} {}",
+            "{:<20} {:<9} {:<4} {:<17} {:>16} {}",
+            l.tabela,
             l.conta_id,
             l.janela,
-            l.linhas_node,
-            l.linhas_nexus,
-            l.soma_xp_node,
-            l.soma_xp_nexus,
-            if l.igual { "✓" } else { "✗ DIVERGE" }
+            l.fim.format("%Y-%m-%d %H:%M"),
+            format!("{linhas_n}/{linhas_x}"),
+            if l.igual {
+                "✓".to_owned()
+            } else {
+                format!("✗ {}", l.diferencas())
+            }
         );
     }
+    println!(
+        "janelas de 1h nas últimas {}h: {} divergentes de {}",
+        horas, divergentes, total
+    );
     Ok(())
 }
 
