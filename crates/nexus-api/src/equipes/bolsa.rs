@@ -7,8 +7,9 @@
 //!
 //! Cada pedido vira um "job" com chave (boss, moeda, nick, idade, n), como no legado: pedidos
 //! iguais esperam o mesmo job; um resultado vale 5 minutos; enquanto o job roda, a rota
-//! responde `202` com o resultado anterior. Quando o painel troca de boss, o job antigo da
-//! mesma conta é cancelado (cancelamento cooperativo: ele confere o sinal entre as etapas).
+//! responde `202` com o resultado anterior. Com melhorias (ADR 0010), quando o painel troca de
+//! boss, o job antigo da mesma conta é cancelado (cancelamento cooperativo: ele confere o sinal
+//! entre as etapas); sem melhorias, como no legado, todo job vai até o fim.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -310,12 +311,13 @@ impl ServicoEquipeBolsa {
             return ocupado;
         }
         // O painel trocou de boss: o cálculo antigo do mesmo painel deixa de interessar.
+        // Só com melhorias (ADR 0010): o legado (`trabalhoEquipe`) nunca cancela, a fila vai
+        // até o fim. Cancelar matava a compra da `equipe-propria` (mesmo grupo, outro boss)
+        // e a sugestão de custo ficava sem valor.
         let grupo = p.grupo();
         for (k, j) in jobs.iter() {
-            if *k != chave
-                && j.grupo == grupo
-                && j.estado.lock().map(|e| e.fim.is_none()).unwrap_or(false)
-            {
+            let em_curso = j.estado.lock().map(|e| e.fim.is_none()).unwrap_or(false);
+            if cancela_ao_trocar(estado.melhorias, *k == chave, j.grupo == grupo, em_curso) {
                 j.cancelar.cancel();
             }
         }
@@ -548,10 +550,11 @@ impl ServicoEquipeBolsa {
                     .get("slots")
                     .and_then(Value::as_array)
                     .map_or(0, Vec::len);
+                // JS: `!eco.indisponivel`; campo ausente conta como disponível.
                 let ok = !eco
                     .get("indisponivel")
                     .and_then(Value::as_bool)
-                    .unwrap_or(true)
+                    .unwrap_or(false)
                     && slots > 0;
                 ok.then(|| {
                     (
@@ -836,4 +839,33 @@ fn sugestao(r: &Value, boss: &str, nivel: f64, moeda: &str, agora: i64) -> Optio
     Some(
         json!({ "ts": agora, "boss": boss, "nv": nivel, "moeda": moeda, "ref": r.pointer("/ref/soma"), "perfis": p }),
     )
+}
+
+/// Cancela o job em curso de outro boss do mesmo painel? Só com melhorias: o legado
+/// (`trabalhoEquipe`) nunca cancela.
+fn cancela_ao_trocar(
+    melhorias: bool,
+    mesma_chave: bool,
+    mesmo_grupo: bool,
+    em_curso: bool,
+) -> bool {
+    melhorias && !mesma_chave && mesmo_grupo && em_curso
+}
+
+#[cfg(test)]
+mod testes_cancelamento {
+    use super::cancela_ao_trocar;
+
+    #[test]
+    fn sem_melhorias_nunca_cancela() {
+        assert!(!cancela_ao_trocar(false, false, true, true));
+    }
+
+    #[test]
+    fn com_melhorias_cancela_so_outro_boss_do_mesmo_grupo_em_curso() {
+        assert!(cancela_ao_trocar(true, false, true, true));
+        assert!(!cancela_ao_trocar(true, true, true, true));
+        assert!(!cancela_ao_trocar(true, false, false, true));
+        assert!(!cancela_ao_trocar(true, false, true, false));
+    }
 }

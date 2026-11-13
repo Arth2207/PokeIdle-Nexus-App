@@ -56,16 +56,17 @@ fn perto(a: f64, b: f64) -> bool {
     a == b || (a - b).abs() <= 1e-9 || (a - b).abs() <= 1e-6 * a.abs().max(b.abs())
 }
 
-/// O legado ainda não terminou o trabalho em segundo plano de `falta.sugestao` enquanto o
-/// Nexus já tem o custo. Enquanto o trabalho roda, o legado responde `null` ou só a `nota`
-/// ("Veja a aba Econômica..."), sem `custoAproximado`.
+/// Um lado ainda não terminou o trabalho em segundo plano de `falta.sugestao` e o outro já
+/// tem o custo. Os dois renovam o trabalho a cada 5 min, cada um no seu relógio; enquanto o
+/// trabalho roda, o lado responde `null` ou só a `nota` ("Veja a aba Econômica..."), sem
+/// `custoAproximado`. É tempo, não lógica: o comparador relê e espera, sem tolerar valor.
 fn sugestao_pendente(legado: &Value, nexus: &Value) -> bool {
     let sem_custo = |v: &Value| {
         v.pointer("/falta/sugestao")
             .is_some_and(|s| s.get("custoAproximado").is_none())
     };
     let com_custo = |v: &Value| v.pointer("/falta/sugestao/custoAproximado").is_some();
-    sem_custo(legado) && com_custo(nexus)
+    (sem_custo(legado) && com_custo(nexus)) || (sem_custo(nexus) && com_custo(legado))
 }
 
 /// Primeira diferença entre dois JSONs, com o caminho até ela.
@@ -306,21 +307,25 @@ impl<R: RepoMercado + RepoIngestao + 'static> Comparador<R> {
             return Ok(());
         }
         let (mut status, mut l) = self.legado("/api/bolsa/equipe-propria").await?;
-        let n = estado
+        let mut n = estado
             .equipe_bolsa
             .propria(estado, None, None)
             .await
             .map_err(|e| e.to_string())?;
-        // O legado calcula a sugestão (`falta.sugestao`) num trabalho em segundo plano e responde
-        // `null` até ele terminar; o Nexus calcula na hora. Repete a leitura do legado até o
-        // trabalho acabar (é tempo, não lógica). O trabalho entra numa fila de equipes e pode
-        // levar perto de um minuto.
+        // Os dois lados calculam a sugestão (`falta.sugestao`) num trabalho em segundo plano e
+        // respondem sem custo até ele terminar. Relê os dois até o mesmo estado (é tempo, não
+        // lógica). A resposta fica 60 s em cache nos dois lados, por isso até 12 × 5 s.
         for _ in 0..12 {
             if !sugestao_pendente(&l, &n) {
                 break;
             }
             tokio::time::sleep(Duration::from_secs(5)).await;
             (status, l) = self.legado("/api/bolsa/equipe-propria").await?;
+            n = estado
+                .equipe_bolsa
+                .propria(estado, None, None)
+                .await
+                .map_err(|e| e.to_string())?;
         }
         let ns = if n.get("erro").is_some() { 404 } else { 200 };
         let colecao = |v: &Value| {
@@ -1133,6 +1138,8 @@ mod testes {
         let l = json!({"falta": {"sugestao": null}});
         let n = json!({"falta": {"sugestao": {"custoAproximado": 1090}}});
         assert!(sugestao_pendente(&l, &n));
+        // Simétrico: o Nexus também pode estar com o trabalho em curso.
+        assert!(sugestao_pendente(&n, &l));
         assert!(!sugestao_pendente(&n, &n));
         assert!(!sugestao_pendente(&l, &l));
         let nota = json!({"falta": {"sugestao": {"nota": "Veja a aba Econômica"}}});
