@@ -20,14 +20,55 @@ pub struct Caso {
     /// Consulta com `GROUP BY` sem `ORDER BY` no legado: a ordem das linhas não é garantida
     /// pelo Postgres. Compara com as listas ordenadas (tolerância de ordem, não de conteúdo).
     pub ordem_livre: bool,
+    /// Corpo JSON (POST de cálculo).
+    pub corpo: Option<String>,
+    /// Rota privada: o legado é chamado pelo endereço do Tailscale (que ele trata como
+    /// privado) e o Nexus com a chave dele.
+    pub privado: bool,
+    /// Depende do cache de preços (10 min nos dois lados). Divergência com os caches em
+    /// instantes diferentes é de **tempo** (venda nova entre as montagens), não de lógica.
+    pub precos: bool,
 }
 
-/// Únicos casos que não são GET. O legado responde 405/401 antes de gravar qualquer coisa
-/// (sem corpo, sem chave). **Nunca** pôr aqui `POST /api/dossie/ficha` (grava sem chave)
-/// nem `DELETE` (apagaria dado real se a checagem de chave mudasse no legado).
-const NAO_GET: &[(Method, &str)] = &[
-    (Method::PUT, "/api/dossie/fichas"),
-    (Method::POST, "/api/dossie/vendas"),
+/// Únicos casos que não são GET. Os dois primeiros param no 405/401 antes de gravar; os de
+/// `calc/*` só calculam (o legado não grava nada nessas rotas). **Nunca** pôr aqui
+/// `POST /api/dossie/ficha` (grava sem chave), uploads nem `DELETE`.
+const NAO_GET: &[(Method, &str, Option<&str>)] = &[
+    (Method::PUT, "/api/dossie/fichas", None),
+    (Method::POST, "/api/dossie/vendas", None),
+    (
+        Method::POST,
+        "/api/dossie/calc/dossie",
+        Some(
+            r#"{"speciesId":6,"inputs":{"lv":120,"q":1.3,"p":3,"sh":0,"iv":[20,25,18,31,22,30]}}"#,
+        ),
+    ),
+    (
+        Method::POST,
+        "/api/dossie/calc/dossie",
+        Some(
+            r#"{"speciesId":150,"inputs":{"lv":500,"q":1.8,"p":5,"sh":1,"iv":[32,32,32,32,32,32]}}"#,
+        ),
+    ),
+    (
+        Method::POST,
+        "/api/dossie/calc/dossie",
+        Some(r#"{"speciesId":25,"inputs":{"lv":50},"test":{"speciesId":19,"lv":40,"q":1.1}}"#),
+    ),
+    (
+        Method::POST,
+        "/api/dossie/calc/preco",
+        Some(
+            r#"{"sheet":{"nome":"Charizard","level":100,"quality":1.3,"potencia":3,"ivs":{"hp":20,"atk":25,"def":18,"spAtk":31,"spDef":22,"speed":30}}}"#,
+        ),
+    ),
+    (
+        Method::POST,
+        "/api/dossie/calc/preco",
+        Some(
+            r#"{"sheet":{"nome":"Dragonite","level":200,"quality":1.5,"potencia":4,"shiny":true,"ivs":{"hp":30,"atk":30,"def":30,"spAtk":30,"spDef":30,"speed":30}},"zmove":true}"#,
+        ),
+    ),
 ];
 
 fn caso(metodo: Method, caminho: impl Into<String>) -> Caso {
@@ -35,6 +76,9 @@ fn caso(metodo: Method, caminho: impl Into<String>) -> Caso {
         metodo,
         caminho: caminho.into(),
         ordem_livre: false,
+        corpo: None,
+        privado: false,
+        precos: false,
     }
 }
 
@@ -67,11 +111,34 @@ pub async fn casos(db: &PgPool, http: &reqwest::Client, legado: &str) -> Vec<Cas
     .into_iter()
     .map(|c| caso(Method::GET, c))
     .collect();
-    v.extend(NAO_GET.iter().map(|(m, c)| caso(m.clone(), *c)));
+    v.extend(NAO_GET.iter().map(|(m, c, corpo)| Caso {
+        corpo: corpo.map(str::to_owned),
+        precos: c.ends_with("/preco"),
+        ..caso(m.clone(), *c)
+    }));
+    v.push(caso(Method::GET, "/api/dossie/calc/catalogo"));
+    // Os que dependem do cache de preços vão primeiro e juntos, para os dois lados montarem
+    // o cache o mais perto possível no tempo.
+    v.insert(
+        0,
+        Caso {
+            precos: true,
+            ..caso(Method::GET, "/api/dossie/calc/lite")
+        },
+    );
+    v.insert(
+        0,
+        Caso {
+            privado: true,
+            precos: true,
+            ..caso(Method::GET, "/precificador/precos.json")
+        },
+    );
     v.push(Caso {
         metodo: Method::GET,
         caminho: "/api/dossie/cacada-medidas?esp=x".into(),
         ordem_livre: true,
+        ..caso(Method::GET, "")
     });
 
     // Amostras reais: uma espécie das fichas, quem capturou e um nick de conta (este
@@ -101,6 +168,7 @@ pub async fn casos(db: &PgPool, http: &reqwest::Client, legado: &str) -> Vec<Cas
             metodo: Method::GET,
             caminho: format!("/api/dossie/cacada-medidas?esp=x&nick={}", codificar(&nick)),
             ordem_livre: true,
+            ..caso(Method::GET, "")
         });
     }
     if let Some(foto) = primeira_foto(http, legado).await {
@@ -132,12 +200,26 @@ struct Resposta {
     corpo: Vec<u8>,
 }
 
-async fn buscar(http: &reqwest::Client, base: &str, c: &Caso) -> Result<Resposta> {
-    let r = http
+async fn buscar(
+    http: &reqwest::Client,
+    base: &str,
+    c: &Caso,
+    chave: Option<&str>,
+) -> Result<Resposta> {
+    let mut req = http
         .request(c.metodo.clone(), format!("{base}{}", c.caminho))
         .header("x-forwarded-for", "nexus-paridade")
         // Mesmo Host nos dois: o robots.txt ecoa o Host (a porta mudaria o corpo).
-        .header("host", "dossie")
+        .header("host", "dossie");
+    if let Some(corpo) = &c.corpo {
+        req = req
+            .header("content-type", "application/json")
+            .body(corpo.clone());
+    }
+    if let Some(k) = chave {
+        req = req.header("x-chave", k);
+    }
+    let r = req
         .send()
         .await
         .with_context(|| format!("{} {}{}", c.metodo, base, c.caminho))?;
@@ -226,21 +308,58 @@ fn comparar(c: &Caso, node: &Resposta, nexus: &Resposta) -> Option<String> {
 
 /// Uma rodada: compara todos os casos e grava. Divergência em dado ao vivo (ficha salva
 /// entre as duas requisições) pode acontecer: repete o caso uma vez antes de gravar.
-pub async fn ciclo(
-    db: &PgPool,
-    http: &reqwest::Client,
-    legado: &str,
-    nexus: &str,
-) -> Result<usize> {
-    let casos = casos(db, http, legado).await;
+/// `geradoEm` do cache de preços numa resposta (`precos.json` ou `calc/lite`).
+fn gerado_em(r: &Resposta) -> Option<String> {
+    let v: Value = serde_json::from_slice(&r.corpo).ok()?;
+    v.get("geradoEm")
+        .or_else(|| v.get("status").and_then(|s| s.get("geradoEm")))
+        .map(Value::to_string)
+}
+
+/// Endereços e chave do comparador.
+pub struct Alvos {
+    pub legado: String,
+    /// Legado pela interface do Tailscale (rotas privadas). `None` pula os casos privados.
+    pub legado_privado: Option<String>,
+    pub nexus: String,
+    /// Chave do dossiê do Nexus. `None` pula os casos privados.
+    pub chave: Option<String>,
+}
+
+pub async fn ciclo(db: &PgPool, http: &reqwest::Client, a: &Alvos) -> Result<usize> {
+    let casos = casos(db, http, &a.legado).await;
     let mut divergentes = 0;
+    // Caches de preço montados em instantes diferentes nos dois lados (visto no `geradoEm`).
+    let mut cache_desalinhado = false;
     for c in &casos {
+        let (base_legado, chave) = if c.privado {
+            match (&a.legado_privado, &a.chave) {
+                (Some(l), Some(k)) => (l.as_str(), Some(k.as_str())),
+                _ => continue,
+            }
+        } else {
+            (a.legado.as_str(), None)
+        };
         let mut resultado = None;
         for _ in 0..2 {
-            let node = buscar(http, legado, c).await;
-            let nx = buscar(http, nexus, c).await;
+            let node = buscar(http, base_legado, c, None).await;
+            let nx = buscar(http, &a.nexus, c, chave).await;
             resultado = Some(match (node, nx) {
-                (Ok(a), Ok(b)) => (a.status, b.status, comparar(c, &a, &b)),
+                (Ok(x), Ok(y)) => {
+                    let mut motivo = comparar(c, &x, &y);
+                    if c.precos && motivo.is_some() {
+                        let (gx, gy) = (gerado_em(&x), gerado_em(&y));
+                        if gx.is_some() && gy.is_some() && gx != gy {
+                            cache_desalinhado = true;
+                        }
+                        if cache_desalinhado {
+                            motivo = motivo.map(|m| {
+                                format!("tempo: caches de preço em instantes diferentes ({gx:?} ≠ {gy:?}); {m}")
+                            });
+                        }
+                    }
+                    (x.status, y.status, motivo)
+                }
                 (Err(e), _) => (0, 0, Some(format!("legado: {e:#}"))),
                 (_, Err(e)) => (0, 0, Some(format!("nexus: {e:#}"))),
             });
@@ -251,7 +370,7 @@ pub async fn ciclo(
         let Some((st_node, st_nexus, motivo)) = resultado else {
             continue;
         };
-        if motivo.is_some() {
+        if motivo.as_deref().is_some_and(|m| !m.starts_with("tempo:")) {
             divergentes += 1;
         }
         sqlx::query(
@@ -278,7 +397,7 @@ pub async fn ciclo(
 }
 
 /// Laço do comparador (serviço `nexus-dossie-paridade`, rede do host).
-pub async fn rodar(db: PgPool, legado: String, nexus: String, intervalo: Duration) -> Result<()> {
+pub async fn rodar(db: PgPool, alvos: Alvos, intervalo: Duration) -> Result<()> {
     // Sem isso o reqwest entra em pânico quando a feature `rustls-no-provider` está ligada
     // (build da imagem junto com a API). Já instalado = Err, que pode ser ignorado.
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -287,7 +406,7 @@ pub async fn rodar(db: PgPool, legado: String, nexus: String, intervalo: Duratio
         .build()
         .context("cliente HTTP")?;
     loop {
-        if let Err(e) = ciclo(&db, &http, &legado, &nexus).await {
+        if let Err(e) = ciclo(&db, &http, &alvos).await {
             warn!(erro = %e, "dossiê paridade: ciclo falhou");
         }
         tokio::select! {
@@ -305,7 +424,8 @@ pub async fn relatorio(db: &PgPool, horas: u32) -> Result<()> {
     let linhas: Vec<LinhaRelatorio> = sqlx::query_as(
         "SELECT DISTINCT ON (rota) rota, status_node, status_nexus, igual, detalhe,
                 COUNT(*) OVER (PARTITION BY rota),
-                COUNT(*) FILTER (WHERE NOT igual) OVER (PARTITION BY rota)
+                COUNT(*) FILTER (WHERE NOT igual AND coalesce(detalhe, '') NOT LIKE 'tempo:%')
+                    OVER (PARTITION BY rota)
            FROM nexus.dossie_paridade
           WHERE em >= NOW() - ($1::int * interval '1 hour')
           ORDER BY rota, em DESC",
@@ -320,7 +440,7 @@ pub async fn relatorio(db: &PgPool, horas: u32) -> Result<()> {
     for (rota, sn, sx, igual, detalhe, total, ruins) in linhas {
         let marca = if igual { "✓" } else { "✗" };
         println!(
-            "{marca} {rota:<60} {sn}/{sx}  divergiu {ruins}/{total}  {}",
+            "{marca} {rota:<60} {sn}/{sx}  divergiu (fora tempo) {ruins}/{total}  {}",
             detalhe.unwrap_or_default()
         );
     }
@@ -343,7 +463,7 @@ mod testes {
     /// Trava de segurança: o comparador nunca pode causar escrita no legado.
     #[test]
     fn comparador_nao_grava_no_legado() {
-        for (m, c) in NAO_GET {
+        for (m, c, _) in NAO_GET {
             assert_ne!(*m, Method::DELETE);
             assert_ne!(*m, Method::PATCH);
             assert!(!c.starts_with("/api/dossie/ficha?") && *c != "/api/dossie/ficha");
@@ -371,6 +491,7 @@ mod testes {
             metodo: Method::GET,
             caminho: "/x".into(),
             ordem_livre: true,
+            ..caso(Method::GET, "/x")
         };
         assert_eq!(comparar(&c, &r("{\"m\":[1,2]}"), &r("{\"m\":[2,1]}")), None);
         assert!(comparar(&c, &r("{\"m\":[1,2]}"), &r("{\"m\":[2,3]}")).is_some());

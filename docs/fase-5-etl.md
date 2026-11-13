@@ -244,13 +244,41 @@ Porta interna 9192, publicada só em `127.0.0.1:18899` para o comparador.
   normais. O comparador registra isso como divergência ("nexus: … timed out"); ao contar os
   7 dias, separar falha de transporte de diferença de conteúdo.
 
+**6b ✓ — precificador** (`dossie/precos.rs`)
+- `GET /precificador/precos.json` (`montarPrecos()`): lê o `precos.json` base do legado
+  (só leitura) + `fato_venda_mercado` dos últimos 30 dias, cotação diária dos itens,
+  `prepare` com os motivos de descarte, mescla e `JSON.stringify` compacto. Cache de 10 min
+  separado do cache do cálculo, como no legado (`precosCache` × `precosObj`).
+- `calc/lite` e `calc/preco` (`priceSheet` detalhado: faixas por nível, vendas da família,
+  comparáveis, confiança, trava de nota mínima).
+- Núcleo: `vizinhos_detalhe` (influência, partes, incertas), `Ajuste::nivel` (`fit.level`),
+  `lendario` público. Nada muda no resumo que a API usa.
+- **Correção de paridade no núcleo:** a confiança somava o intercepto antes dos termos;
+  o JS soma no fim. Mudava o último bit de `confidence.chance` (também na bolsa da API).
+- `serde_json` com `float_roundtrip` (unificado com a API): ler floats com arredondamento
+  correto, como o `JSON.parse`. Sem isso o último bit de preços/PvE do arquivo base podia mudar.
+- Serializador `dossie/jsonjs.rs`: números como o JS (`123` e não `123.0`, `1e+21`). Vale
+  para todas as respostas do dossiê.
+- Validação: `precos.json` idêntico (9,3 MB), `calc/lite` idêntico, 82 fichas no
+  `calc/preco` idênticas (70 de vendas reais + bordas).
+
+- Memória: cada linha de venda é resumida ao chegar do banco (a ficha inteira como `Value`
+  levava o pico a ~800 MB); pico medido ~260 MB. Worker com 512M e `MALLOC_ARENA_MAX=2`.
+
+**6c ✓ — cálculo do dossiê** (`dossie/calc/`, feito em paralelo por um subagente)
+- `calc/catalogo` e `calc/dossie`: porte do `sim.js` + `dossie-render.js` (HTML) reusando o
+  combate do núcleo. Lê `engine/data/pokedex.json`, `evolucoes.json` e o
+  `equipes-estado.json` (relido a cada chamada).
+- Validação: catálogo idêntico; 90 casos do `calc/dossie` idênticos (40 viraram teste de
+  regressão em `calc/testes/`).
+
+**Comparador** (casos novos): `precos.json` (legado pela interface do Tailscale, que ele
+trata como privado; Nexus com a chave própria `secrets/dossie_chave`), `calc/lite`,
+`calc/catalogo`, 3× `calc/dossie`, 2× `calc/preco`. Divergência com os caches de preço
+montados em instantes diferentes (`geradoEm` diferente) é gravada com `tempo:` e não conta
+como divergência de lógica no relatório.
+
 **Pendente**
-- 6b: precificador — `GET /precificador/precos.json` (`montarPrecos()`), `calc/lite`,
-  `calc/preco`. O `nucleo::precificador` já tem `preparar` e o `priceSheet` resumido; falta
-  o resultado detalhado do `priceSheet`, `PokeIdleCentral.linhas`, trava de nota e a mescla
-  com o `precos.json` base. Hoje respondem 501.
-- 6c: `calc/catalogo` e `calc/dossie` (renderizam HTML com `sim.js` + `dossie-render.js` +
-  `equipes-core`). Hoje respondem 501.
 - `/api/ia/*`: precisa de `GRANT SELECT` em `ia_memoria`, `ia_playbook`, `v_ia_performance`,
   `config_ia`, `ia_estado` (pedir ao dono). Com chave válida responde 501.
 - Chave do dossiê no Nexus (`NEXUS_DOSSIE_CHAVE_FILE`) só no cutover; até lá rotas com chave → 401.

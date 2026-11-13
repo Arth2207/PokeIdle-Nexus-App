@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use axum::body::Body;
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
+use futures_util::TryStreamExt;
 use nucleo::js as njs;
 use nucleo::precificador::cotacao::{Cotacoes, PrecoItemDia};
 use nucleo::precificador::especie::{lendario, Central, Especie, Golpe};
@@ -72,7 +73,11 @@ pub struct Precos {
 #[derive(Default)]
 pub struct Cache {
     catalogo: Mutex<Option<Arc<Catalogo>>>,
+    /// `precosObj` do legado: usado pelo cálculo (`calc/lite`, `calc/preco`).
     precos: Mutex<Option<(Instant, Arc<Precos>)>>,
+    /// `precosCache` do legado: corpo da rota `precos.json`, com validade própria. O legado
+    /// mantém os dois: montar pelo cálculo atualiza os dois; montar pela rota, só este.
+    texto: Mutex<Option<(Instant, Arc<Vec<u8>>)>>,
 }
 
 async fn carregar_catalogo(db: &PgPool) -> Result<Catalogo, sqlx::Error> {
@@ -146,6 +151,7 @@ impl Cache {
             Ok(p) => {
                 let p = Arc::new(p);
                 *g = Some((Instant::now(), Arc::clone(&p)));
+                *self.texto.lock().await = Some((Instant::now(), Arc::clone(&p.texto)));
                 Ok(p)
             }
             Err(e) => {
@@ -189,7 +195,37 @@ struct VendaBanco {
     species_id: Option<i32>,
     item_id: Option<i32>,
     quantidade: Option<i32>,
-    ficha: Option<Value>,
+    ficha: Option<FichaVenda>,
+}
+
+/// O que o `montarPrecos` usa da `ficha` (jsonb) de uma venda. Convertida assim que a linha
+/// chega do banco: guardar as ~30 mil fichas como `Value` levava o pico a centenas de MB.
+struct FichaVenda {
+    /// `ficha.speciesId` cru (o `find` aceita número ou texto).
+    especie: Option<Value>,
+    /// `ficha.nome` cru (só se for "verdadeiro").
+    nome: Option<Value>,
+    ficha: Ficha,
+    /// `Number.isFinite(ficha.nota) ? ficha.nota : null`.
+    nota: Option<f64>,
+}
+
+impl FichaVenda {
+    /// `None` se a ficha for "falsa" no JS (o legado descarta a venda).
+    fn de(v: Value) -> Option<Self> {
+        if !js::verdade(Some(&v)) {
+            return None;
+        }
+        Some(Self {
+            especie: v.get("speciesId").cloned(),
+            nome: v.get("nome").filter(|n| js::verdade(Some(n))).cloned(),
+            ficha: Ficha::de_json(&v),
+            nota: v
+                .get("nota")
+                .and_then(Value::as_f64)
+                .filter(|n| n.is_finite()),
+        })
+    }
 }
 
 fn agora_ms() -> i64 {
@@ -257,7 +293,7 @@ struct VendaPokemon {
     nome: String,
     em: f64,
     preco: f64,
-    ficha: Value,
+    ficha: FichaVenda,
 }
 
 /// `P.prepare(central, vendas, itens)`: linhas + motivos de descarte (na ordem em que
@@ -279,7 +315,7 @@ fn preparar(
             continue;
         }
         // `find(s.speciesId ?? s.ficha?.speciesId, s.name)`: id pelo `Number(id)`, senão nome.
-        let id_bruto = js::ou(s.especie.as_ref(), s.ficha.get("speciesId"));
+        let id_bruto = js::ou(s.especie.as_ref(), s.ficha.especie.as_ref());
         let id = Some(js::numero(id_bruto))
             .filter(|n| n.fract() == 0.0 && n.abs() < 2e9)
             .map(|n| n as i32)
@@ -288,8 +324,8 @@ fn preparar(
             pular("espécie desconhecida");
             continue;
         };
-        let ficha = Ficha::de_json(&s.ficha);
-        let Some(d) = descrever(central, &ficha, especie) else {
+        let ficha = &s.ficha.ficha;
+        let Some(d) = descrever(central, ficha, especie) else {
             pular("ficha incompleta");
             continue;
         };
@@ -321,11 +357,7 @@ fn preparar(
         }
         // `readAt` = `at` nas vendas do banco: a leitura nunca é tardia, só `far` conta.
         let incerta = longe;
-        let nota = s
-            .ficha
-            .get("nota")
-            .and_then(Value::as_f64)
-            .filter(|n| n.is_finite());
+        let nota = s.ficha.nota;
         linhas.push(json!({
             "at": s.em,
             "price": s.preco,
@@ -375,37 +407,37 @@ async fn montar(db: &PgPool, cat: &Arc<Catalogo>) -> Result<Precos, Erro> {
         Option<i32>,
         Option<Value>,
     );
-    // Mesma consulta do legado (sem ORDER BY): a ordem física decide os empates.
-    let linhas: Vec<Linha> = sqlx::query_as(
-        "SELECT em::text, tipo, moeda, preco::text, descricao, species_id, item_id, quantidade, ficha
+    // Mesma consulta do legado (sem ORDER BY): a ordem física decide os empates. A ficha só
+    // vem nas vendas de pokémon (as de item não usam), e cada linha é resumida ao chegar.
+    let mut fluxo = sqlx::query_as::<_, Linha>(
+        "SELECT em::text, tipo, moeda, preco::text, descricao, species_id, item_id, quantidade,
+                CASE WHEN tipo = 'pokemon' THEN ficha END
            FROM public.fato_venda_mercado WHERE em >= $1",
     )
     .bind(desde as i64)
-    .fetch_all(db)
-    .await?;
-    let vendas_banco: Vec<VendaBanco> = linhas
-        .into_iter()
-        .map(
-            |(em, tipo, moeda, preco, descricao, species_id, item_id, quantidade, ficha)| {
-                VendaBanco {
-                    em: js::numero_str(&em),
-                    tipo,
-                    moeda,
-                    preco: preco.as_deref().map_or(0.0, js::numero_str),
-                    descricao,
-                    species_id,
-                    item_id,
-                    quantidade,
-                    ficha,
-                }
-            },
-        )
-        .collect();
+    .fetch(db);
+    let mut vendas_banco: Vec<VendaBanco> = Vec::new();
+    while let Some((em, tipo, moeda, preco, descricao, species_id, item_id, quantidade, ficha)) =
+        fluxo.try_next().await?
+    {
+        vendas_banco.push(VendaBanco {
+            em: js::numero_str(&em),
+            tipo,
+            moeda,
+            preco: preco.as_deref().map_or(0.0, js::numero_str),
+            descricao,
+            species_id,
+            item_id,
+            quantidade,
+            ficha: ficha.and_then(FichaVenda::de),
+        });
+    }
+    drop(fluxo);
     let cat = Arc::clone(cat);
     tokio::task::spawn_blocking(move || {
         let base: Value =
             serde_json::from_slice(&bruto).map_err(|e| Erro::novo(500, e.to_string()))?;
-        let valor = montar_valor(base, &vendas_banco, &cat.central, desde)?;
+        let valor = montar_valor(base, vendas_banco, &cat.central, desde)?;
         Ok(derivar(valor, None))
     })
     .await
@@ -414,25 +446,26 @@ async fn montar(db: &PgPool, cat: &Arc<Catalogo>) -> Result<Precos, Erro> {
 
 fn montar_valor(
     mut base: Value,
-    rows: &[VendaBanco],
+    rows: Vec<VendaBanco>,
     central: &Central,
     desde: f64,
 ) -> Result<Value, Erro> {
     let obj = base
         .as_object_mut()
         .ok_or_else(|| Erro::novo(500, "precos.json base não é objeto"))?;
-    let vendas_base: Vec<Value> = obj
-        .get("vendas")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    // `take` em vez de `clone`: tira as vendas base sem copiar e a chave fica no lugar
+    // (o spread do JS mantém a posição de `vendas`).
+    let vendas_base: Vec<Value> = match obj.get_mut("vendas").map(Value::take) {
+        Some(Value::Array(a)) => a,
+        _ => Vec::new(),
+    };
     if rows.is_empty() {
         obj.insert("vendas".into(), Value::Array(unicas(vendas_base)));
         return Ok(base);
     }
     // Cotação diária (mediana do preço unitário em gemas) dos itens vendidos.
     let mut por_dia: Vec<(String, String, i64, Vec<f64>)> = Vec::new();
-    for r in rows {
+    for r in &rows {
         let Some(item) = r.item_id.filter(|i| *i != 0) else {
             continue;
         };
@@ -467,23 +500,23 @@ fn montar_valor(
     }));
 
     let vendas: Vec<VendaPokemon> = rows
-        .iter()
+        .into_iter()
         .filter(|r| r.tipo.as_deref() == Some("pokemon"))
         .filter_map(|r| {
-            let ficha = r.ficha.clone().filter(|f| js::verdade(Some(f)))?;
-            let nome_ficha = ficha.get("nome");
-            let nome = if js::verdade(nome_ficha) {
-                js::texto(nome_ficha)
-            } else {
-                let d = r.descricao.clone().unwrap_or_default();
-                NV.as_ref()
-                    .map_or(d.clone(), |re| re.replacen(&d, 1, "").into_owned())
+            let ficha = r.ficha?;
+            let nome = match &ficha.nome {
+                Some(n) => js::texto(Some(n)),
+                None => {
+                    let d = r.descricao.unwrap_or_default();
+                    NV.as_ref()
+                        .map_or(d.clone(), |re| re.replacen(&d, 1, "").into_owned())
+                }
             };
             Some(VendaPokemon {
-                moeda: r.moeda.clone(),
+                moeda: r.moeda,
                 especie: match r.species_id {
                     Some(id) => Some(Value::from(id)),
-                    None => ficha.get("speciesId").cloned(),
+                    None => ficha.especie.clone(),
                 },
                 nome,
                 em: r.em,
@@ -583,13 +616,32 @@ fn derivar(valor: Value, texto: Option<Vec<u8>>) -> Precos {
 /// `GET /precificador/precos.json` (só privado).
 pub async fn rota_precos(d: &Dossie) -> Result<Response, Erro> {
     let cat = d.precos.catalogo(&d.db).await?;
-    let p = d.precos.atual(&d.db, &cat).await?;
+    let corpo = {
+        let mut g = d.precos.texto.lock().await;
+        match g.as_ref() {
+            Some((quando, t)) if quando.elapsed() <= PRECOS_TTL => Arc::clone(t),
+            _ => match montar(&d.db, &cat).await {
+                Ok(p) => {
+                    *g = Some((Instant::now(), Arc::clone(&p.texto)));
+                    p.texto
+                }
+                // Falhou: o cache velho, senão o arquivo base cru (como o legado).
+                Err(e) => {
+                    tracing::warn!(erro = %e.msg, "dossiê: montarPrecos falhou");
+                    match g.as_ref() {
+                        Some((_, t)) => Arc::clone(t),
+                        None => Arc::new(ler_base().await?),
+                    }
+                }
+            },
+        }
+    };
     Ok((
         [
             (header::CONTENT_TYPE, "application/json; charset=utf-8"),
             (header::CACHE_CONTROL, "no-cache"),
         ],
-        Body::from(p.texto.as_ref().clone()),
+        Body::from(corpo.as_ref().clone()),
     )
         .into_response())
 }

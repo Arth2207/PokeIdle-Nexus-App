@@ -246,15 +246,14 @@ fn montar_dossie(
     cfg: &Configuracao,
     db: sqlx::PgPool,
 ) -> anyhow::Result<std::sync::Arc<dossie::Dossie>> {
-    let chave = match &cfg.dossie_chave_arquivo {
-        Some(arq) => Some(
-            std::fs::read_to_string(arq)
-                .with_context(|| format!("não consegui ler NEXUS_DOSSIE_CHAVE_FILE={arq}"))?
-                .trim()
-                .to_owned(),
-        ),
-        None => None,
-    };
+    // Chave ilegível não derruba o worker (o ETL roda no mesmo processo): segue sem chave,
+    // e as rotas protegidas respondem 401.
+    let chave = cfg.dossie_chave_arquivo.as_ref().and_then(|arq| {
+        std::fs::read_to_string(arq)
+            .map(|c| c.trim().to_owned())
+            .map_err(|e| warn!(erro = %e, arquivo = %arq, "dossiê: não consegui ler a chave"))
+            .ok()
+    });
     Ok(std::sync::Arc::new(dossie::Dossie {
         db,
         static_dir: cfg.dossie_static.clone().into(),
@@ -289,13 +288,23 @@ async fn dossie_paridade(cfg: &Configuracao) -> anyhow::Result<()> {
         nexus = %cfg.dossie_nexus_url,
         "comparador do dossiê iniciado"
     );
-    dossie::paridade::rodar(
-        db,
-        cfg.dossie_legado_url.clone(),
-        cfg.dossie_nexus_url.clone(),
-        cfg.dossie_paridade_ciclo,
-    )
-    .await
+    let chave = match &cfg.dossie_chave_arquivo {
+        Some(arq) => Some(
+            std::fs::read_to_string(arq)
+                .with_context(|| format!("não consegui ler NEXUS_DOSSIE_CHAVE_FILE={arq}"))?
+                .trim()
+                .to_owned(),
+        )
+        .filter(|c| !c.is_empty()),
+        None => None,
+    };
+    let alvos = dossie::paridade::Alvos {
+        legado: cfg.dossie_legado_url.clone(),
+        legado_privado: cfg.dossie_legado_privado_url.clone(),
+        nexus: cfg.dossie_nexus_url.clone(),
+        chave,
+    };
+    dossie::paridade::rodar(db, alvos, cfg.dossie_paridade_ciclo).await
 }
 
 async fn dossie_relatorio(cfg: &Configuracao, horas: u32) -> anyhow::Result<()> {

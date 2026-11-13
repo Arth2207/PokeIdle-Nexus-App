@@ -346,10 +346,14 @@ pub fn vizinhos_detalhe(
     // `influence`: soma do peso por venda (só camada 0), na ordem em que apareceram;
     // ordenação estável por share (o `sort` do JS também é estável).
     let mut por_venda: Vec<(usize, f64)> = Vec::new();
+    let mut posicao: HashMap<usize, usize> = HashMap::new();
     for p in pontos.iter().filter(|p| p.camada == 0) {
-        match por_venda.iter_mut().find(|(i, _)| *i == p.idx) {
-            Some((_, w)) => *w += p.w,
-            None => por_venda.push((p.idx, p.w)),
+        match posicao.get(&p.idx) {
+            Some(&k) => por_venda[k].1 += p.w,
+            None => {
+                posicao.insert(p.idx, por_venda.len());
+                por_venda.push((p.idx, p.w));
+            }
         }
     }
     let mut influencia: Vec<(usize, f64, f64)> = por_venda

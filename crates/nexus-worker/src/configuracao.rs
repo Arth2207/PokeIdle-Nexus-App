@@ -17,6 +17,7 @@
 //! | `NEXUS_DOSSIE_LEGADO_URL`  | não         | `http://127.0.0.1:8899` |
 //! | `NEXUS_DOSSIE_NEXUS_URL`   | não         | `http://127.0.0.1:18899` |
 //! | `NEXUS_DOSSIE_PARIDADE_CICLO_S` | não    | `1800`               |
+//! | `NEXUS_DOSSIE_LEGADO_PRIVADO_URL` | não  | — (casos privados pulados) |
 //!
 //! * Uma das duas formas de DATABASE_URL é obrigatória.
 //!
@@ -56,6 +57,8 @@ pub struct Configuracao {
     pub dossie_legado_url: String,
     pub dossie_nexus_url: String,
     pub dossie_paridade_ciclo: Duration,
+    /// Legado pela interface do Tailscale, para as rotas privadas (`precos.json`).
+    pub dossie_legado_privado_url: Option<String>,
 }
 
 impl Configuracao {
@@ -97,6 +100,9 @@ impl Configuracao {
                 .filter(|v| !v.is_empty()),
             dossie_legado_url: texto("NEXUS_DOSSIE_LEGADO_URL", "http://127.0.0.1:8899"),
             dossie_nexus_url: texto("NEXUS_DOSSIE_NEXUS_URL", "http://127.0.0.1:18899"),
+            dossie_legado_privado_url: std::env::var("NEXUS_DOSSIE_LEGADO_PRIVADO_URL")
+                .ok()
+                .filter(|v| !v.is_empty()),
             dossie_paridade_ciclo: Duration::from_secs(var_u64(
                 "NEXUS_DOSSIE_PARIDADE_CICLO_S",
                 1800,
