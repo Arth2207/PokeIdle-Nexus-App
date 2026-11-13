@@ -18,6 +18,8 @@ pub const TIPOS: &[&str] = &[
     "perfil",
     "mercado_aviso",
     "inventario",
+    // Captura manual do Tracker pela A2 (1 clique do dono = 1 evento).
+    "tracker.captura",
 ];
 
 /// Campos que não entram na chave: o instante e o tipo já vão separados.

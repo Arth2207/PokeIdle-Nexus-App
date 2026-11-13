@@ -11,7 +11,7 @@ const MEMORIA: usize = 10_000;
 #[derive(Debug)]
 pub struct FilaEventos {
     conta: Option<String>,
-    pendentes: VecDeque<(String, Value)>,
+    pendentes: VecDeque<(Option<String>, Value)>,
     em_voo: Option<EventoLote>,
     proximo_seq: u64,
     vistos: HashSet<String>,
@@ -32,18 +32,25 @@ impl FilaEventos {
     }
 
     /// `false` se o evento já foi enfileirado ou enviado (não duplica).
-    pub fn adicionar(&mut self, ev: Value) -> bool {
+    ///
+    /// Evento objeto com `_conta` (texto) é do lote dessa conta: o campo sai do evento antes de
+    /// enviar. A chave de dedup inclui a conta. Sem `_conta`, vale a conta da fila.
+    pub fn adicionar(&mut self, mut ev: Value) -> bool {
         let chave = ev.to_string();
         if !self.vistos.insert(chave.clone()) {
             return false;
         }
-        self.ordem_vistos.push_back(chave.clone());
+        self.ordem_vistos.push_back(chave);
         while self.ordem_vistos.len() > MEMORIA {
             if let Some(velha) = self.ordem_vistos.pop_front() {
                 self.vistos.remove(&velha);
             }
         }
-        self.pendentes.push_back((chave, ev));
+        let conta = match ev.as_object_mut().and_then(|o| o.remove("_conta")) {
+            Some(Value::String(c)) => Some(c),
+            _ => self.conta.clone(),
+        };
+        self.pendentes.push_back((conta, ev));
         true
     }
 
@@ -63,11 +70,17 @@ impl FilaEventos {
         if self.pendentes.is_empty() || max == 0 {
             return None;
         }
-        let n = max.min(self.pendentes.len());
+        let conta = self.pendentes.front().and_then(|(c, _)| c.clone());
+        let n = self
+            .pendentes
+            .iter()
+            .take(max)
+            .take_while(|(c, _)| *c == conta)
+            .count();
         let eventos: Vec<Value> = self.pendentes.drain(..n).map(|(_, v)| v).collect();
         let lote = EventoLote {
             seq_cliente: self.proximo_seq,
-            conta: self.conta.clone(),
+            conta,
             eventos,
         };
         self.proximo_seq += 1;
@@ -109,6 +122,21 @@ mod testes {
         assert!(!f.adicionar(json!({"t":"kill","n":1})));
         assert!(f.adicionar(json!({"t":"kill","n":2})));
         assert_eq!(f.proximo_lote(10).map(|l| l.eventos.len()), Some(2));
+    }
+
+    #[test]
+    fn lote_agrupa_por_conta_do_evento() {
+        let mut f = FilaEventos::nova(None, 1);
+        f.adicionar(json!({"k":"kill","_conta":"a","n":1}));
+        f.adicionar(json!({"k":"kill","_conta":"a","n":2}));
+        f.adicionar(json!({"k":"kill","_conta":"b","n":3}));
+        let l1 = f.proximo_lote(10);
+        assert_eq!(l1.as_ref().and_then(|l| l.conta.clone()), Some("a".into()));
+        assert_eq!(l1.as_ref().map(|l| l.eventos.len()), Some(2));
+        assert!(l1.is_some_and(|l| l.eventos.iter().all(|e| e.get("_conta").is_none())));
+        assert!(f.confirmar(&ack(1, true)));
+        let l2 = f.proximo_lote(10);
+        assert_eq!(l2.and_then(|l| l.conta), Some("b".into()));
     }
 
     #[test]
