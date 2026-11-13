@@ -52,10 +52,9 @@ pub fn chave_ok(d: &Dossie, p: &Pedido) -> bool {
         == 0
 }
 
-/// `privado()`: no legado também vale quem entra pela interface do Tailscale. O Nexus não
-/// escuta nela (só rede interna); no cutover a porta do Tailscale aponta para cá.
+/// `privado()`: chave, ou a conexão veio pela porta privada (a do Tailscale no host).
 pub fn privado(d: &Dossie, p: &Pedido) -> bool {
-    chave_ok(d, p)
+    p.rede_privada || chave_ok(d, p)
 }
 
 static PUBLICO_HTML: LazyLock<HashSet<&str>> = LazyLock::new(|| {

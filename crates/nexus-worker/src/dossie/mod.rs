@@ -51,7 +51,14 @@ pub struct Dossie {
     pub limites: Limites,
     /// Catálogo e `precos.json` do precificador (etapa 6b).
     pub precos: precos::Cache,
+    /// Produção (cutover): escritas no `public` e uploads na pasta do legado. `false` = sombra.
+    pub escrita: bool,
 }
+
+/// A conexão chegou pela porta "privada" (no legado: a interface do Tailscale, que libera
+/// as rotas protegidas sem chave). Em JS seria um `req.socket.localAddress === TS_HOST`.
+#[derive(Clone, Copy)]
+pub struct RedePrivada(pub bool);
 
 impl Dossie {
     pub fn fotos_dir(&self) -> PathBuf {
@@ -68,6 +75,8 @@ pub struct Pedido {
     pub params: Vec<(String, String)>,
     pub headers: HeaderMap,
     pub ip: String,
+    /// Veio pela porta privada.
+    pub rede_privada: bool,
 }
 
 impl Pedido {
@@ -163,7 +172,7 @@ pub fn router(d: Arc<Dossie>) -> Router {
 }
 
 /// Sobe o servidor do dossiê. Erro de bind só é logado: o ETL continua.
-pub async fn servir(porta: u16, d: Arc<Dossie>, parar: CancellationToken) {
+pub async fn servir(porta: u16, d: Arc<Dossie>, parar: CancellationToken, privada: bool) {
     let addr = SocketAddr::from(([0, 0, 0, 0], porta));
     let listener = match TcpListener::bind(addr).await {
         Ok(l) => l,
@@ -172,8 +181,10 @@ pub async fn servir(porta: u16, d: Arc<Dossie>, parar: CancellationToken) {
             return;
         }
     };
-    info!(porta, "dossiê ouvindo");
-    let app = router(d).into_make_service_with_connect_info::<SocketAddr>();
+    info!(porta, privada, "dossiê ouvindo");
+    let app = router(d)
+        .layer(axum::Extension(RedePrivada(privada)))
+        .into_make_service_with_connect_info::<SocketAddr>();
     if let Err(e) = axum::serve(listener, app)
         .with_graceful_shutdown(parar.cancelled_owned())
         .await
@@ -185,6 +196,7 @@ pub async fn servir(porta: u16, d: Arc<Dossie>, parar: CancellationToken) {
 async fn atender(
     State(d): State<Arc<Dossie>>,
     ConnectInfo(remoto): ConnectInfo<SocketAddr>,
+    axum::Extension(RedePrivada(rede_privada)): axum::Extension<RedePrivada>,
     req: Request,
 ) -> Response {
     let (partes, corpo) = req.into_parts();
@@ -212,6 +224,7 @@ async fn atender(
         params,
         headers: partes.headers,
         ip,
+        rede_privada,
     };
 
     let get = p.metodo == Method::GET;

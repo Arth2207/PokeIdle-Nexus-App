@@ -127,6 +127,11 @@ async fn carregar_catalogo(db: &PgPool) -> Result<Catalogo, sqlx::Error> {
 }
 
 impl Cache {
+    /// `precosTs = 0`: a próxima chamada da rota `precos.json` remonta.
+    pub async fn invalidar_rota(&self) {
+        *self.texto.lock().await = None;
+    }
+
     /// `carregarMotor()`: uma vez por processo.
     pub async fn catalogo(&self, db: &PgPool) -> Result<Arc<Catalogo>, Erro> {
         let mut g = self.catalogo.lock().await;

@@ -18,6 +18,8 @@
 //! | `NEXUS_DOSSIE_NEXUS_URL`   | não         | `http://127.0.0.1:18899` |
 //! | `NEXUS_DOSSIE_PARIDADE_CICLO_S` | não    | `1800`               |
 //! | `NEXUS_DOSSIE_LEGADO_PRIVADO_URL` | não  | — (casos privados pulados) |
+//! | `NEXUS_DOSSIE_PORTA_PRIVADA` | não       | `0` (sem porta privada) |
+//! | `NEXUS_ESCRITA_DOSSIE`     | não         | `false` (sombra)     |
 //!
 //! * Uma das duas formas de DATABASE_URL é obrigatória.
 //!
@@ -59,6 +61,10 @@ pub struct Configuracao {
     pub dossie_paridade_ciclo: Duration,
     /// Legado pela interface do Tailscale, para as rotas privadas (`precos.json`).
     pub dossie_legado_privado_url: Option<String>,
+    /// Porta cujas conexões contam como privadas (a do Tailscale no host). 0 = nenhuma.
+    pub dossie_porta_privada: u16,
+    /// Cutover do dossiê: escritas no `public` e uploads na pasta do legado.
+    pub escrita_dossie: bool,
 }
 
 impl Configuracao {
@@ -100,6 +106,8 @@ impl Configuracao {
                 .filter(|v| !v.is_empty()),
             dossie_legado_url: texto("NEXUS_DOSSIE_LEGADO_URL", "http://127.0.0.1:8899"),
             dossie_nexus_url: texto("NEXUS_DOSSIE_NEXUS_URL", "http://127.0.0.1:18899"),
+            dossie_porta_privada: var_u16("NEXUS_DOSSIE_PORTA_PRIVADA", 0)?,
+            escrita_dossie: var_bool("NEXUS_ESCRITA_DOSSIE", false)?,
             dossie_legado_privado_url: std::env::var("NEXUS_DOSSIE_LEGADO_PRIVADO_URL")
                 .ok()
                 .filter(|v| !v.is_empty()),

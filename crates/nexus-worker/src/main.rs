@@ -111,11 +111,16 @@ async fn executar(cfg: Configuracao) -> anyhow::Result<()> {
         cfg.escrita_etl,
         parar.clone(),
     );
-    let paridade = loop_etl_paridade(db.clone(), cfg.etl_efic_intervalo, parar.clone());
+    let paridade = loop_etl_paridade(
+        db.clone(),
+        cfg.etl_efic_intervalo,
+        cfg.escrita_etl,
+        parar.clone(),
+    );
 
     if cfg.dossie_porta > 0 {
         let d = montar_dossie(&cfg, db.clone())?;
-        tokio::spawn(dossie::servir(cfg.dossie_porta, d, parar.clone()));
+        tokio::spawn(dossie::servir(cfg.dossie_porta, d, parar.clone(), false));
     }
 
     tokio::join!(etl, efic, paridade);
@@ -175,7 +180,17 @@ async fn loop_etl_eficiencia(
     }
 }
 
-async fn loop_etl_paridade(db: sqlx::PgPool, intervalo: Duration, parar: CancellationToken) {
+async fn loop_etl_paridade(
+    db: sqlx::PgPool,
+    intervalo: Duration,
+    escrita: bool,
+    parar: CancellationToken,
+) {
+    // Depois do cutover o Nexus é a fonte do `public`: comparar com a sombra não diz nada.
+    if escrita {
+        info!("etl_paridade: desligado (NEXUS_ESCRITA_ETL=true, o Nexus é a fonte)");
+        return;
+    }
     loop {
         tokio::select! {
             _ = tokio::time::sleep(intervalo) => {}
@@ -261,6 +276,7 @@ fn montar_dossie(
         chave: chave.filter(|c| !c.is_empty()),
         limites: dossie::Limites::default(),
         precos: Default::default(),
+        escrita: cfg.escrita_dossie,
     }))
 }
 
@@ -268,15 +284,30 @@ async fn dossie_servir(cfg: &Configuracao) -> anyhow::Result<()> {
     iniciar_logs(cfg.log_formato);
     let db = conectar(cfg).await?;
     let d = montar_dossie(cfg, db)?;
+    info!(escrita = d.escrita, "dossiê (serviço próprio) iniciando");
     let parar = CancellationToken::new();
     {
+        // SIGTERM (docker stop) ou Ctrl-C: termina as requisições em andamento e sai.
         let parar = parar.clone();
         tokio::spawn(async move {
-            tokio::signal::ctrl_c().await.ok();
+            let mut term =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = async { match term.as_mut() { Some(t) => { t.recv().await; } None => std::future::pending().await } } => {}
+            }
             parar.cancel();
         });
     }
-    dossie::servir(cfg.dossie_porta.max(1), d, parar).await;
+    if cfg.dossie_porta_privada > 0 {
+        tokio::spawn(dossie::servir(
+            cfg.dossie_porta_privada,
+            std::sync::Arc::clone(&d),
+            parar.clone(),
+            true,
+        ));
+    }
+    dossie::servir(cfg.dossie_porta.max(1), d, parar, false).await;
     Ok(())
 }
 

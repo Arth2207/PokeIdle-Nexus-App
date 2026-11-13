@@ -22,10 +22,16 @@ use super::{enviar, js, ler_corpo, ler_json, Dossie, Erro, Pedido};
 
 const MAX_FOTO: usize = 30_000_000;
 const MAX_FOTOS: usize = 500;
-/// O legado aceita 200 MB no `/arquivo`. Na sombra o teto é 24 MB: o corpo fica inteiro na
-/// memória (o multipart precisa dele) e o worker tem 256 MB com o ETL no mesmo processo.
-/// No cutover: subir o limite do container ou gravar em streaming antes de voltar a 200 MB.
-const MAX_ARQUIVO: usize = 24 * 1024 * 1024;
+/// Teto do `/arquivo`: 200 MB como o legado quando o Nexus é a produção (serviço
+/// `nexus-dossie`, só o dossiê, com memória para isso); 24 MB na sombra, que divide o
+/// processo com o ETL. O corpo fica inteiro na memória (o multipart precisa dele).
+fn max_arquivo(d: &Dossie) -> usize {
+    if d.escrita {
+        200 * 1024 * 1024
+    } else {
+        24 * 1024 * 1024
+    }
+}
 
 /// Um upload por vez: dois corpos grandes juntos estourariam a memória do worker.
 static UPLOAD: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
@@ -187,23 +193,33 @@ pub async fn vendas(d: &Dossie, p: &Pedido, corpo: Body) -> Result<Response, Err
             200,
         ));
     }
-    let novas = sqlx::query(
-        "INSERT INTO nexus.fato_venda_mercado_shadow
-                (id, em, lido_em, tipo, moeda, preco, descricao, species_id, item_id, quantidade, ficha)
-         SELECT id, em, lido_em, tipo, moeda, preco, descricao, species_id, item_id, quantidade, ficha
-           FROM jsonb_to_recordset($1::jsonb) AS x(id bigint, em bigint, lido_em bigint, tipo text, moeda text, preco bigint,
-                descricao text, species_id int, item_id int, quantidade int, ficha jsonb)
-         ON CONFLICT (id) DO NOTHING",
-    )
-    .bind(Value::Array(linhas.clone()).to_string())
-    .execute(&d.db)
-    .await?
-    .rows_affected();
+    let sql = if d.escrita {
+        SQL_VENDAS.replace("{tabela}", "public.fato_venda_mercado")
+    } else {
+        SQL_VENDAS.replace("{tabela}", "nexus.fato_venda_mercado_shadow")
+    };
+    let novas = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(Value::Array(linhas.clone()).to_string())
+        .execute(&d.db)
+        .await?
+        .rows_affected();
+    // `if (rowCount) precosTs = 0`: venda nova invalida o cache da rota `precos.json`.
+    if novas > 0 {
+        d.precos.invalidar_rota().await;
+    }
     Ok(enviar(
         &json!({ "ok": true, "recebidas": lista.len(), "validas": linhas.len(), "novas": novas }),
         200,
     ))
 }
+
+/// INSERT das vendas (o mesmo do legado); `{tabela}` é o destino (sombra ou `public`).
+const SQL_VENDAS: &str = "INSERT INTO {tabela}
+                (id, em, lido_em, tipo, moeda, preco, descricao, species_id, item_id, quantidade, ficha)
+         SELECT id, em, lido_em, tipo, moeda, preco, descricao, species_id, item_id, quantidade, ficha
+           FROM jsonb_to_recordset($1::jsonb) AS x(id bigint, em bigint, lido_em bigint, tipo text, moeda text, preco bigint,
+                descricao text, species_id int, item_id int, quantidade int, ficha jsonb)
+         ON CONFLICT (id) DO NOTHING";
 
 /// Colunas do `pokemon_ficha` na ordem dos `$n` do legado, com o tipo do Postgres.
 /// O node-pg manda texto sem tipo e o Postgres infere pela coluna; `$n::text::tipo` dá o
@@ -242,7 +258,13 @@ const COLUNAS_FICHA: &[(&str, &str)] = &[
     ("raw_text", "text"),
 ];
 
-static SQL_FICHA: LazyLock<String> = LazyLock::new(|| {
+/// Sombra: `nexus.pokemon_ficha_shadow`; produção (`escrita`): `public.pokemon_ficha`.
+static SQL_FICHA: LazyLock<String> =
+    LazyLock::new(|| sql_ficha("nexus.pokemon_ficha_shadow", "pokemon_ficha_shadow"));
+static SQL_FICHA_PUBLIC: LazyLock<String> =
+    LazyLock::new(|| sql_ficha("public.pokemon_ficha", "pokemon_ficha"));
+
+fn sql_ficha(tabela: &str, alias: &str) -> String {
     let nomes: Vec<&str> = COLUNAS_FICHA.iter().map(|(c, _)| *c).collect();
     let valores: Vec<String> = COLUNAS_FICHA
         .iter()
@@ -252,14 +274,14 @@ static SQL_FICHA: LazyLock<String> = LazyLock::new(|| {
     let n = COLUNAS_FICHA.len() + 1;
     let sets: Vec<String> = nomes
         .iter()
-        .map(|c| format!("{c}=COALESCE(EXCLUDED.{c},pokemon_ficha_shadow.{c})"))
+        .map(|c| format!("{c}=COALESCE(EXCLUDED.{c},{alias}.{c})"))
         .collect();
     format!(
-        "INSERT INTO nexus.pokemon_ficha_shadow AS pokemon_ficha_shadow ({}, oculto)
+        "INSERT INTO {tabela} AS {alias} ({}, oculto)
          VALUES ({}, ${n}::bool)
          ON CONFLICT (pokemon_id) WHERE pokemon_id IS NOT NULL DO UPDATE SET
            {},
-           oculto=(pokemon_ficha_shadow.oculto OR EXCLUDED.oculto),
+           oculto=({alias}.oculto OR EXCLUDED.oculto),
            ts_salvo=extract(epoch from now())*1000
          RETURNING id::text",
         nomes.join(","),
@@ -270,7 +292,7 @@ static SQL_FICHA: LazyLock<String> = LazyLock::new(|| {
             .collect::<Vec<_>>()
             .join(",\n           ")
     )
-});
+}
 
 /// `POST /api/dossie/ficha`: salva ficha (sem chave, como no legado).
 pub async fn ficha(d: &Dossie, p: &Pedido, corpo: Body) -> Result<Response, Erro> {
@@ -287,7 +309,12 @@ pub async fn ficha(d: &Dossie, p: &Pedido, corpo: Body) -> Result<Response, Erro
     if !js::verdade(b.get("nome")) {
         return Ok(enviar(&json!({ "erro": "ficha sem nome" }), 400));
     }
-    let mut q = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(SQL_FICHA.as_str()));
+    let sql = if d.escrita {
+        SQL_FICHA_PUBLIC.as_str()
+    } else {
+        SQL_FICHA.as_str()
+    };
+    let mut q = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
     for (col, _) in COLUNAS_FICHA {
         // `b.nome` vai cru; o resto é `b.x || null`.
         let v = if *col == "nome" {
@@ -313,7 +340,12 @@ pub async fn apagar_ficha(d: &Dossie, p: &Pedido) -> Result<Response, Erro> {
     if let Some(r) = chave_ou_401(d, p) {
         return Ok(r);
     }
-    let apagadas = sqlx::query("DELETE FROM nexus.pokemon_ficha_shadow WHERE id=$1::text::bigint")
+    let sql = if d.escrita {
+        "DELETE FROM public.pokemon_ficha WHERE id=$1::text::bigint"
+    } else {
+        "DELETE FROM nexus.pokemon_ficha_shadow WHERE id=$1::text::bigint"
+    };
+    let apagadas = sqlx::query(sql)
         .bind(p.param("id"))
         .execute(&d.db)
         .await?
@@ -511,6 +543,15 @@ fn extrair_upload(
     }
 }
 
+/// Onde as fotos são gravadas: a pasta pública do legado em produção, `dados_dir` na sombra.
+fn pasta_fotos(d: &Dossie) -> std::path::PathBuf {
+    if d.escrita {
+        d.fotos_dir()
+    } else {
+        d.dados_dir.join("fotos")
+    }
+}
+
 async fn gravar(dir: std::path::PathBuf, nome: &str, dados: &[u8]) -> Result<(), Erro> {
     tokio::fs::create_dir_all(&dir)
         .await
@@ -558,7 +599,7 @@ pub async fn foto(d: &Dossie, p: &Pedido, corpo: Body) -> Result<Response, Erro>
         chrono::Utc::now().timestamp_millis(),
         base_foto(&nome)
     );
-    gravar(d.dados_dir.join("fotos"), &arq, &dados).await?;
+    gravar(pasta_fotos(d), &arq, &dados).await?;
     Ok(enviar(
         &json!({ "ok": true, "nome": arq, "url": format!("/fotos/{arq}"), "bytes": dados.len() }),
         200,
@@ -580,7 +621,7 @@ pub async fn arquivo(d: &Dossie, p: &Pedido, corpo: Body) -> Result<Response, Er
         .await
         .map_err(|e| Erro::novo(500, e.to_string()))?;
     // O legado usa a mesma mensagem da foto mesmo com teto de 200 MB.
-    let buf = ler_corpo(corpo, MAX_ARQUIVO, "arquivo muito grande (máx 30MB)").await?;
+    let buf = ler_corpo(corpo, max_arquivo(d), "arquivo muito grande (máx 30MB)").await?;
     let (dados, nome) = match extrair_upload(buf, &ct, nome, false) {
         Ok(x) => x,
         Err(r) => return Ok(*r),
@@ -593,7 +634,7 @@ pub async fn arquivo(d: &Dossie, p: &Pedido, corpo: Body) -> Result<Response, Er
         chrono::Utc::now().timestamp_millis(),
         base_arquivo(&nome)
     );
-    gravar(d.dados_dir.join("uploads"), &arq, &dados).await?;
+    gravar(pasta_fotos(d).join("uploads"), &arq, &dados).await?;
     Ok(enviar(
         &json!({ "ok": true, "nome": arq, "bytes": dados.len() }),
         200,
@@ -610,6 +651,17 @@ pub async fn apagar_foto(d: &Dossie, p: &Pedido) -> Result<Response, Erro> {
         return Ok(r);
     }
     let nome = basename(p.param("nome").unwrap_or("")).to_owned();
+    if d.escrita {
+        // Produção: igual ao legado (apaga da pasta pública).
+        let f = d.fotos_dir().join(&nome);
+        if !nome.starts_with("foto-") || !(f.is_file() || f.is_dir()) {
+            return Ok(enviar(&json!({ "erro": "não achou" }), 404));
+        }
+        tokio::fs::remove_file(&f)
+            .await
+            .map_err(|e| Erro::novo(500, e.to_string()))?;
+        return Ok(enviar(&json!({ "ok": true }), 200));
+    }
     let sombra = d.dados_dir.join("fotos").join(&nome);
     let legado = d.fotos_dir().join(&nome);
     let existe = |c: &std::path::Path| c.is_file() || c.is_dir();
@@ -697,5 +749,11 @@ mod testes {
         assert!(s.contains("$29::text::date"));
         assert!(!s.contains("pokemon_id=COALESCE"));
         assert!(s.contains("nick=COALESCE(EXCLUDED.nick,pokemon_ficha_shadow.nick)"));
+        // Produção: o mesmo SQL do legado, na tabela `public.pokemon_ficha`.
+        let p = SQL_FICHA_PUBLIC.as_str();
+        assert!(p.starts_with("INSERT INTO public.pokemon_ficha AS pokemon_ficha ("));
+        assert!(p.contains("nick=COALESCE(EXCLUDED.nick,pokemon_ficha.nick)"));
+        assert!(p.contains("oculto=(pokemon_ficha.oculto OR EXCLUDED.oculto)"));
+        assert!(SQL_VENDAS.contains("ON CONFLICT (id) DO NOTHING"));
     }
 }
