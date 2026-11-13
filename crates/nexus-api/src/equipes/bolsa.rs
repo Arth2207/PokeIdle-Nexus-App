@@ -361,20 +361,6 @@ impl ServicoEquipeBolsa {
         job
     }
 
-    /// Um job de compra já concluído (para a sugestão da equipe própria).
-    fn concluido(&self, p: &Pedido) -> Option<Arc<Value>> {
-        let jobs = self
-            .jobs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let j = jobs.get(&p.chave())?;
-        let e = j
-            .estado
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        e.fim.and(e.data.clone())
-    }
-
     async fn calcular(
         &self,
         estado: &Estado,
@@ -553,8 +539,11 @@ impl ServicoEquipeBolsa {
             n: 5,
             orcamento: None,
         };
-        let eco_compra = match self.concluido(&compra) {
-            Some(d) => d.pointer("/perfis/eco").and_then(|eco| {
+        // Como o legado (`trabalhoEquipe`): o job vale 5 min e o pedido o renova; enquanto o novo
+        // não termina a sugestão fica sem custo. Usar o job velho sem renová-lo congelava o custo.
+        let job_compra = self.trabalho(estado, compra);
+        let eco_compra = match job_compra.situacao() {
+            Situacao::Pronto(d) => d.pointer("/perfis/eco").and_then(|eco| {
                 let slots = eco
                     .get("slots")
                     .and_then(Value::as_array)
@@ -571,10 +560,7 @@ impl ServicoEquipeBolsa {
                     )
                 })
             }),
-            None => {
-                self.trabalho(estado, compra);
-                None
-            }
+            _ => None,
         };
         drop(rb);
         let snapshot = estado

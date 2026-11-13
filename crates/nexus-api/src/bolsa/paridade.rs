@@ -86,7 +86,18 @@ pub fn diferenca(a: &Value, b: &Value, caminho: &str) -> Option<String> {
                     || [".comparaveis", ".askMin", ".chance"]
                         .iter()
                         .any(|c| caminho.ends_with(c)));
+            // Valor justo e custo de completar a equipe: o legado guarda o valor justo de cada
+            // ficha por 10 a 30 min e a sugestão vem de um cálculo de até 5 min atrás; o Nexus
+            // reavalia a cada chamada. Tolerância de 15% só nesses campos.
+            let cache_legado = [
+                ".custoOportunidade",
+                ".custoAproximado",
+                ".custoMedioPorSlot",
+            ]
+            .iter()
+            .any(|c| caminho.ends_with(c));
             let ok = perto(x, y)
+                || (cache_legado && (x - y).abs() <= 0.15 * x.abs().max(y.abs()))
                 || (tempo && (x - y).abs() <= 1e-4 * x.abs().max(y.abs()))
                 || (CONTADORES
                     .iter()
@@ -839,8 +850,11 @@ fn qualidade_equipe(l: &Value, n: &Value) -> Option<String> {
             n.pointer("/boss/key")
         ));
     }
-    // O legado reaproveita um cálculo de até 5 minutos atrás; com o relay ativo, as ofertas
-    // mudam nesse meio tempo. Até 10% de diferença no conjunto, compara a qualidade.
+    // O legado reaproveita um cálculo de até 5 minutos atrás (e cotações de até 30 min); com o
+    // relay ativo, as ofertas mudam nesse meio tempo. Conjuntos de candidatas diferentes não
+    // têm qualidade comparável (equipe e custo saem de outro conjunto): só compara com o
+    // mesmo número de candidatas. Passando de 10% (e de 15 ofertas, para conjuntos pequenos),
+    // é divergência de lógica e aparece.
     let (a, b) = (
         l.pointer("/candidatas")
             .and_then(Value::as_f64)
@@ -849,8 +863,11 @@ fn qualidade_equipe(l: &Value, n: &Value) -> Option<String> {
             .and_then(Value::as_f64)
             .unwrap_or(0.0),
     );
-    if (a - b).abs() > 0.1 * a.max(b) {
+    if (a - b).abs() > 0.1 * a.max(b) && (a - b).abs() > 15.0 {
         return Some(format!("candidatas: {a} ≠ {b} (mais de 10%)"));
+    }
+    if (a - b).abs() > 0.0 {
+        return None;
     }
     let num = |v: &Value, p: &str| v.pointer(p).and_then(Value::as_f64);
     for perfil in ["eco", "eq", "max"] {
@@ -1121,6 +1138,25 @@ mod testes {
         let nota = json!({"falta": {"sugestao": {"nota": "Veja a aba Econômica"}}});
         assert!(sugestao_pendente(&nota, &n));
         assert!(!sugestao_pendente(&nota, &nota));
+    }
+
+    #[test]
+    fn cache_do_legado_tolera_custo_de_oportunidade_e_conjuntos_diferentes() {
+        let a = json!({"perfis": {"max": {"custoOportunidade": 111, "total": 5}}});
+        let b = json!({"perfis": {"max": {"custoOportunidade": 122, "total": 5}}});
+        assert_eq!(diferenca(&a, &b, ""), None);
+        let c = json!({"perfis": {"max": {"custoOportunidade": 111, "total": 6}}});
+        assert!(diferenca(&a, &c, "").is_some());
+        let longe = json!({"perfis": {"max": {"custoOportunidade": 200, "total": 5}}});
+        assert!(diferenca(&a, &longe, "").is_some());
+        // Conjuntos de candidatas diferentes não são comparáveis; mesmo conjunto, é lógica.
+        let perfil = |c: u32, tot: u32| {
+            json!({"boss": {"key": "x"}, "candidatas": c,
+                "perfis": {"max": {"indisponivel": false, "poder": 1.0, "total": tot}}})
+        };
+        assert_eq!(qualidade_equipe(&perfil(18, 1000), &perfil(31, 2000)), None);
+        assert!(qualidade_equipe(&perfil(31, 1000), &perfil(31, 2000)).is_some());
+        assert!(qualidade_equipe(&perfil(100, 1000), &perfil(200, 1000)).is_some());
     }
 
     #[test]
