@@ -67,18 +67,12 @@ for par in \
 done
 
 catalogo="$LEGADO/engine/precificador/catalogo"
-if [ -r "$catalogo/especies.js" ] && command -v node > /dev/null; then
-  hash=$(cat "$catalogo/especies.js" "$catalogo/especies-extra.js" 2>/dev/null | sha256sum | cut -d' ' -f1)
-  if [ "$(cat "$ESTADO/especies.sha256" 2>/dev/null || true)" != "$hash" ]; then
-    tmp=$(mktemp)
-    trap 'rm -f "$tmp"' EXIT
-    node -e '
-      for (const f of process.argv.slice(1)) { try { require(f); } catch (e) { if (e.code !== "MODULE_NOT_FOUND") throw e; } }
-      process.stdout.write(JSON.stringify(globalThis.PI_ESPECIES));
-    ' "$catalogo/especies.js" "$catalogo/especies-extra.js" > "$tmp" \
-      && sincronizar especies "$tmp" "$hash" \
-      || { log "falha ao converter o catálogo de espécies"; falhou=1; }
-  fi
+if [ -r "$catalogo/especies.js" ]; then
+  tmp=$(mktemp)
+  trap 'rm -f "$tmp"' EXIT
+  # Os dois .js concatenados; a API extrai PI_ESPECIES e o complemento (sem Node).
+  cat "$catalogo/especies.js" "$catalogo/especies-extra.js" > "$tmp" 2>/dev/null || true
+  sincronizar especies-js "$tmp" "$(sha256sum < "$tmp" | cut -d' ' -f1)"
 fi
 
 # Constantes do servidor: o último `welcome` gravado pelo coletor do legado (SQLite, só leitura).

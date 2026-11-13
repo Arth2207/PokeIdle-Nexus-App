@@ -6,6 +6,7 @@
 //!   nexus-api token criar <nome> <escopos> [conta]  cria um token (escopos separados por vírgula; com conta, só enxerga essa conta)
 //!   nexus-api importar itens < itens.json      catálogo de itens (items-catalogo.json do legado)
 //!   nexus-api importar especies < esp.json     catálogo de espécies (PI_ESPECIES em JSON)
+//!   nexus-api importar especies-js < a.js b.js  o mesmo, direto dos .js do precificador (sem Node)
 //!   nexus-api importar base < base.json        base do precificador (vendas antigas, cotações)
 //!   nexus-api importar meus-itens < inv.json   inventário (.bolsa-meus-itens.json do legado)
 //!   nexus-api importar pokedex < pokedex.json  pokédex do motor de combate
@@ -59,7 +60,7 @@ use crate::configuracao::Configuracao;
 use crate::estado::Estado;
 
 const USO: &str = "uso: nexus-api [migrar | token criar <nome> <escopos> [conta] | \
-importar itens|especies|base|meus-itens|pokedex|equipes|wiki|faltas|welcome|raros|motor|motor-contas | \
+importar itens|especies|especies-js|base|meus-itens|pokedex|equipes|wiki|faltas|welcome|raros|motor|motor-contas | \
 comparar-motor motor|motor-contas | paridade [url] | \
 paridade-continua | paridade-motor <url> | motor-sombra <url> [--ciclos <n>] | motor-sombra-relatorio [--desde <horas>] | sombra | sombra-relatorio [--desde <horas>] [--origem espelho|sintetico|todas] | avaliar-fichas <agora_ms> | pokedex-divergencias | healthcheck]";
 
@@ -304,6 +305,44 @@ struct ArquivoMeusItens {
     itens: std::collections::BTreeMap<String, i64>,
 }
 
+/// Lê o primeiro array JSON que começa logo depois de `marca` em `texto`.
+fn array_depois(texto: &str, marca: &str) -> anyhow::Result<Option<Vec<serde_json::Value>>> {
+    let Some(pos) = texto.find(marca) else {
+        return Ok(None);
+    };
+    let resto = &texto[pos + marca.len()..];
+    let inicio = resto.find('[').context("array não encontrado")?;
+    // O deserializador para no fim do primeiro valor; o JS que vem depois é ignorado.
+    let mut fluxo = serde_json::Deserializer::from_str(&resto[inicio..]).into_iter();
+    let valor: serde_json::Value = fluxo.next().context("array vazio")??;
+    match valor {
+        serde_json::Value::Array(lista) => Ok(Some(lista)),
+        _ => anyhow::bail!("esperava um array depois de {marca:?}"),
+    }
+}
+
+/// Catálogo de espécies a partir dos `.js` do precificador do legado (`especies.js` seguido de
+/// `especies-extra.js`), sem Node: `PI_ESPECIES=[...]` e o complemento
+/// `for(const e of [...])if(!tem.has(e.id))E.push(e)`, que só acrescenta ids novos.
+fn especies_de_js(texto: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+    let mut lista =
+        array_depois(texto, "PI_ESPECIES=")?.context("PI_ESPECIES não encontrado no catálogo")?;
+    if let Some(extra) = array_depois(texto, "for(const e of ")? {
+        // Como no JS: o conjunto é montado antes do laço e não muda dentro dele.
+        let tem: std::collections::HashSet<i64> = lista
+            .iter()
+            .filter_map(|e| e.get("id").and_then(serde_json::Value::as_i64))
+            .collect();
+        for e in extra {
+            let id = e.get("id").and_then(serde_json::Value::as_i64);
+            if id.is_none_or(|id| !tem.contains(&id)) {
+                lista.push(e);
+            }
+        }
+    }
+    Ok(lista)
+}
+
 /// Importa para o schema `nexus` um arquivo do legado lido do stdin.
 async fn importar(cfg: &Configuracao, tipo: &str) -> anyhow::Result<()> {
     // Leitura bloqueante do stdin: é um comando de linha, roda uma vez e sai.
@@ -331,9 +370,13 @@ async fn importar(cfg: &Configuracao, tipo: &str) -> anyhow::Result<()> {
             let n = persistencia::importacao::catalogo(&db, &itens).await?;
             println!("catálogo de itens importado: {n} itens");
         }
-        "especies" => {
-            let lista: Vec<persistencia::importacao::EspecieArquivo> =
-                serde_json::from_str(&texto).context("JSON inválido")?;
+        "especies" | "especies-js" => {
+            let lista: Vec<persistencia::importacao::EspecieArquivo> = if tipo == "especies-js" {
+                serde_json::from_value(serde_json::Value::Array(especies_de_js(&texto)?))
+                    .context("espécie fora do formato")?
+            } else {
+                serde_json::from_str(&texto).context("JSON inválido")?
+            };
             ensure!(!lista.is_empty(), "a lista veio vazia; nada foi alterado");
             let n = persistencia::importacao::especies(&db, &lista).await?;
             println!("catálogo de espécies importado: {n} espécies");
@@ -454,7 +497,7 @@ async fn importar(cfg: &Configuracao, tipo: &str) -> anyhow::Result<()> {
         }
         "motor" | "motor-contas" => motor::importar(&db, tipo, &texto).await?,
         outro => bail!(
-            "não sei importar {outro:?} (use itens, especies, base, meus-itens, pokedex, equipes, wiki, faltas, welcome, raros, motor ou motor-contas)"
+            "não sei importar {outro:?} (use itens, especies, especies-js, base, meus-itens, pokedex, equipes, wiki, faltas, welcome, raros, motor ou motor-contas)"
         ),
     }
     Ok(())
@@ -696,4 +739,46 @@ async fn pokedex_divergencias(cfg: &Configuracao) -> anyhow::Result<()> {
     mostra("tipos diferentes", &tipos);
     mostra("status base diferentes", &base);
     Ok(())
+}
+
+#[cfg(test)]
+mod testes {
+    use super::especies_de_js;
+
+    #[test]
+    fn especies_de_js_junta_o_complemento_como_o_legado() {
+        let base = r#"// gerado
+(typeof window==='object'?window:globalThis).PI_ESPECIES=[{"id":1,"n":"A","t":["X]"]},{"id":2,"n":"B"}];
+"#;
+        let extra = r#"(function(root){'use strict';const E=root.PI_ESPECIES;if(!Array.isArray(E))return;const tem=new Set(E.map(e=>e.id));
+for(const e of [{"id":2,"n":"B2"},{"id":3,"n":"C"},{"id":3,"n":"C2"}])if(!tem.has(e.id))E.push(e);
+})(typeof window==='object'?window:globalThis);"#;
+        let lista = especies_de_js(&format!("{base}{extra}")).expect("catálogo");
+        let nomes: Vec<&str> = lista.iter().filter_map(|e| e["n"].as_str()).collect();
+        // id 2 já existia; o 3 entra duas vezes, como no JS (o Set não muda no laço).
+        assert_eq!(nomes, ["A", "B", "C", "C2"]);
+        assert!(especies_de_js(extra).is_err());
+        assert_eq!(especies_de_js(base).expect("só base").len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod testes_catalogo_real {
+    /// Confere com a saída do `node -e` antigo: `NEXUS_TESTE_ESPECIES_JS` (os .js concatenados)
+    /// e `NEXUS_TESTE_ESPECIES_JSON` (JSON do Node). Roda só à mão (`--ignored`).
+    #[test]
+    #[ignore = "precisa dos arquivos do legado"]
+    fn especies_de_js_bate_com_o_node() {
+        let (Ok(js), Ok(json)) = (
+            std::env::var("NEXUS_TESTE_ESPECIES_JS"),
+            std::env::var("NEXUS_TESTE_ESPECIES_JSON"),
+        ) else {
+            return;
+        };
+        let texto = std::fs::read_to_string(js).expect("js");
+        let node: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(json).expect("json")).expect("json");
+        let rust = serde_json::Value::Array(super::especies_de_js(&texto).expect("rust"));
+        assert_eq!(rust, node);
+    }
 }

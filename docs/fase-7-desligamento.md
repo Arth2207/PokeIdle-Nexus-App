@@ -61,12 +61,21 @@ Sem mexer no PC nem no `mapper`:
 6. Com a marca `estado/fase12-cutover`, o `sincronizar-catalogos.sh` para de importar `equipes`, `faltas` e `meus-itens` dos arquivos do legado.
 7. O comparador continua lendo o `mapper` em loopback; depois da virada, as diferenças de equipes (estado parado no legado) são esperadas.
 
-**Pré-requisito ainda não cumprido:** 3 dias de comparação limpa. Em 2026-11-13 as diferenças da bolsa são de dado ao vivo (contagem de vendas, `alvoC` ±0,5%), mas `equipe` teve "candidatas 18 ≠ 31" às 13:00, acima da tolerância: investigar antes.
+**Pré-requisito:** 3 dias de comparação limpa. Investigação de 2026-11-13 (3 dias de `nexus.paridade`):
+
+| Diferença | Vezes | Causa | Ação |
+|---|---|---|---|
+| `faltaSugestao.custoAproximado` | 34 | **lógica**: o Nexus nunca renovava o cálculo de compra (custo congelado por horas); o legado renova a cada 5 min | corrigido |
+| `perfis.max.custoOportunidade` | 7 | cache do valor justo no legado (10 a 30 min) | tolerância de 15% só nos custos, com comentário |
+| `candidatas` diferentes | 4 | o legado usa cálculo de até 5 min atrás; o relay muda as ofertas | acima de 10% continua aparecendo; conjuntos diferentes não comparam qualidade |
+| perfil `max`/`eco`: custo fora de ±5%, poder < 99% | 47 | provavelmente cache de cotações do legado; **não provado** (o par 2238 × 2018 ficou estável por horas) | conferir depois do deploy: se persistir com o mesmo número de candidatas, é lógica da seleção (`selecionar`) e precisa de fixture do JS |
+
+As diferenças da bolsa (`mercado`, `ticker`, `balao`...) são de dado ao vivo (contagem de vendas, `alvoC` ±0,5%).
 
 ## Ordem proposta
 
 1. ~~`scoring`~~: parado em 2026-11-13 (`pm2 stop scoring` + `pm2 save`). Volta atrás: `pm2 start scoring && pm2 save`.
 2. `holodex-nexus` da VPS: só sai com a Fase 4 (é a referência do comparador do motor).
 3. Fases 1 e 2: `cutover-fase1-2.sh` (abaixo), depois de corrigir a paridade de `equipe`.
-4. Portar a conversão do catálogo de espécies (`sincronizar-catalogos.sh`) para Rust.
+4. ~~Catálogo de espécies sem Node~~: `nexus-api importar especies-js` (saída idêntica à do Node).
 5. Com a A2: Fases 3 e 4, depois SQLite → PG, e por último `mapper`, 9999, crons e arquivamento do `mapa.db`.
