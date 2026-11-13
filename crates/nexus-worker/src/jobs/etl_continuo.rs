@@ -154,10 +154,11 @@ fn ler_sqlite_batch(
     cursor_ms: i64,
     batch: usize,
 ) -> Result<Vec<Evento>> {
-    // immutable=1: SQLite ignora -shm/-wal (modo WAL do legado); lemos snapshot do arquivo
-    // principal — aceitável para ETL a cada 5 min. Sem isso, SQLite exige escrita no -shm
-    // mesmo com SQLITE_OPEN_READ_ONLY, o que falha no container (apenas o .db está montado).
-    let uri = format!("file:{}?immutable=1", path);
+    // mode=ro: lê o arquivo principal **e o WAL** (o legado grava em modo WAL). Com o diretório
+    // inteiro montado só leitura (`-wal` e `-shm` presentes), o SQLite ≥ 3.22 abre o WAL
+    // read-only mantendo o índice do WAL na memória do processo. Antes usávamos
+    // `immutable=1`, que só via o arquivo principal: o dado chegava atrasado até o checkpoint.
+    let uri = format!("file:{}?mode=ro", path);
     let conn = rusqlite::Connection::open_with_flags(
         uri,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
