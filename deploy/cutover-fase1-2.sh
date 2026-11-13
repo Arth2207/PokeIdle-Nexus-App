@@ -7,27 +7,34 @@
 #   cutover-fase1-2.sh on       liga a escrita no Nexus e desvia a porta 8181 da Tailscale
 #   cutover-fase1-2.sh off      rollback: devolve a porta ao mapper e desliga a escrita
 #   cutover-fase1-2.sh status
+#   cutover-fase1-2.sh guarda   (timer, a cada 15 s) regra só existe com a marca E a borda de pé
 #
 # Como funciona: o relay e o painel chamam o mapper na porta 8181 pela Tailscale. Uma regra
 # REDIRECT manda esse tráfego para a nexus-borda (8183), que entrega /api/bolsa/* e
 # /api/equipes/* ao Nexus e o resto ao mapper. O tráfego local (127.0.0.1:8181) não muda.
+# Se a borda cair, a guarda tira a regra e o 8181 volta direto ao mapper (fail-open).
+#
+# Rollback (off): ofertas, vendas e resumo ficam no Postgres, comum aos dois. O que o Nexus
+# gravou em equipes/faltas/meus-itens durante a virada NÃO volta aos arquivos do legado: o
+# relay reenvia equipes e faltas; edições de meus-itens feitas nesse período se perdem.
 # Roda como root. Nada apaga dado; o mapper continua de pé para o rollback.
-set -euo pipefail
+set -Eeuo pipefail
 
 BASE=/opt/nexus-deploy
 ESTADO="$BASE/estado"
 MARCA="$ESTADO/fase12-cutover"
 IP_TS=100.115.131.15
-UNIDADE=nexus-borda-redirect.service
+TIMER=nexus-borda-guarda.timer
 cd "$BASE"
 
 log() { echo "[fase12 $(date -u +%H:%M:%S)] $*"; }
 compose() { (set -a; . "$BASE/imagens.env"; set +a; docker compose -f "$BASE/compose.yml" --profile fase12 "$@"); }
 cor_ativa() { cat "$ESTADO/cor-ativa"; }
+outra_cor() { [ "$(cor_ativa)" = blue ] && echo green || echo blue; }
 
 flag() { # flag <VAR> <true|false>: troca o valor no bloco x-api
   sed -i -E "s/^(\s+$1: )\"(true|false)\"/\1\"$2\"/" "$BASE/compose.yml"
-  grep -qE "^\s+$1: \"$2\"" "$BASE/compose.yml" || { log "flag $1 não encontrada no compose"; exit 1; }
+  grep -qE "^\s+$1: \"$2\"" "$BASE/compose.yml" || { log "flag $1 não encontrada no compose"; return 1; }
   chown nexus-deploy:nexus-deploy "$BASE/compose.yml"
 }
 
@@ -43,13 +50,21 @@ esperar_api() {
   return 1
 }
 
+# Recria a cor ativa com as flags atuais e recarrega o Nginx do Nexus (o IP do container
+# muda). A cor inativa é recriada parada, para um rollback do deploy não voltar com as
+# flags antigas.
 recriar_api() {
   compose up -d --no-deps --force-recreate "nexus-api-$(cor_ativa)"
   esperar_api
+  compose exec -T nginx nginx -s reload
+  if [ -n "$(compose ps -aq "nexus-api-$(outra_cor)")" ]; then
+    compose up --no-start --no-deps --force-recreate "nexus-api-$(outra_cor)" || log "aviso: cor inativa não recriada"
+  fi
 }
 
 # HTTP status de uma URL (000 se não conectar).
-http() { curl -s -o /dev/null -m 30 -w '%{http_code}' "$@" || true; }
+http() { curl -s -o /dev/null -m "${2:-30}" -w '%{http_code}' "$1" || true; }
+borda_saudavel() { [ "$(http "http://$IP_TS:8183/borda-saude" 3)" = 200 ]; }
 
 cmd_grants() {
   sudo -u holodex psql -d pokeidle -XAtq -v ON_ERROR_STOP=1 <<'SQL'
@@ -71,25 +86,38 @@ cmd_token() {
 }
 
 cmd_teste() {
-  [ -s "$BASE/borda/token.conf" ] || { log "rode 'token' antes"; exit 1; }
+  [ -s "$BASE/borda/token.conf" ] || { log "rode 'token' antes"; return 1; }
   compose up -d --no-deps nexus-borda
-  sleep 2
+  for _ in $(seq 1 10); do borda_saudavel && break; sleep 1; done
   local nexus legado
   nexus=$(http "http://$IP_TS:8183/api/bolsa/mercado?tipo=item&moeda=gold")
   legado=$(http "http://$IP_TS:8183/api/raros2")
   log "borda → Nexus (/api/bolsa/mercado): $nexus · borda → mapper (/api/raros2): $legado"
-  [ "$nexus" = 200 ] && [ "$legado" = 200 ] || { log "teste falhou"; exit 1; }
+  [ "$nexus" = 200 ] && [ "$legado" = 200 ] || { log "teste falhou"; return 1; }
 }
 
 regra() { # regra <-C|-I|-D>
-  iptables -t nat "$1" PREROUTING -i tailscale0 -p tcp --dport 8181 -j REDIRECT --to-ports 8183
+  iptables -w 5 -t nat "$1" PREROUTING -i tailscale0 -p tcp --dport 8181 -j REDIRECT --to-ports 8183
+}
+redirect_on() { regra -C 2>/dev/null || regra -I; }
+redirect_off() { while regra -C 2>/dev/null; do regra -D; done; }
+
+# Timer: a regra só existe com a marca e com a borda respondendo.
+cmd_guarda() {
+  if [ -f "$MARCA" ] && borda_saudavel; then
+    regra -C 2>/dev/null || { regra -I; log "guarda: regra aplicada"; }
+  elif regra -C 2>/dev/null; then
+    redirect_off
+    log "guarda: borda fora do ar ou sem marca; 8181 de volta ao mapper"
+  fi
 }
 
-cmd_redirect_on() { regra -C 2>/dev/null || regra -I; }
-cmd_redirect_off() { while regra -C 2>/dev/null; do regra -D; done; }
+conexoes_ts_8181() { ss -Htn state established '( sport = :8181 )' dst 100.64.0.0/10 | wc -l; }
 
 cmd_on() {
   [ -s "$BASE/borda/token.conf" ] || { log "rode 'grants' e 'token' antes"; exit 1; }
+  # Falha no meio: desfaz tudo.
+  trap 'log "falhou; desfazendo"; cmd_off' ERR
   log "ligando NEXUS_ESCRITA_BOLSA e NEXUS_ESCRITA_EQUIPES"
   flag NEXUS_ESCRITA_BOLSA true
   flag NEXUS_ESCRITA_EQUIPES true
@@ -97,32 +125,44 @@ cmd_on() {
   # O nginx do Nexus monta o arquivo de configuração: recriar para ler os locations novos.
   compose up -d --no-deps --force-recreate nginx
   cmd_teste
-  install -m 644 "$BASE/borda/$UNIDADE" "/etc/systemd/system/$UNIDADE"
+  # Marca antes do desvio: o sync de catálogos para de importar equipes/faltas/meus-itens.
+  touch "$MARCA"
+  install -m 644 "$BASE/borda/nexus-borda-guarda.service" /etc/systemd/system/
+  install -m 644 "$BASE/borda/$TIMER" /etc/systemd/system/
   systemctl daemon-reload
-  systemctl enable --now "$UNIDADE"
+  systemctl enable --now "$TIMER"
+  cmd_guarda
+  regra -C 2>/dev/null || { log "regra não aplicada"; false; }
+  trap - ERR
   # Conexões keep-alive já abertas com o mapper não passam pelo REDIRECT: derrubar as da
   # Tailscale; o cliente reconecta e cai na borda.
   ss -K state established '( sport = :8181 )' dst 100.64.0.0/10 >/dev/null || true
-  touch "$MARCA"
-  log "fases 1 e 2 viradas: bolsa e equipes no Nexus (rollback: $0 off)"
+  sleep 1
+  log "fases 1 e 2 viradas (conexões da Tailscale ainda no mapper: $(conexoes_ts_8181)). Rollback: $0 off"
 }
 
+# Rollback best-effort: cada passo segue mesmo se o anterior falhar.
 cmd_off() {
-  systemctl disable --now "$UNIDADE" 2>/dev/null || true
-  cmd_redirect_off
-  ss -K state established '( sport = :8183 )' >/dev/null || true
+  set +e
+  trap - ERR
+  systemctl disable --now "$TIMER" 2>/dev/null
+  redirect_off
+  rm -f "$MARCA"
+  ss -K state established '( sport = :8183 )' >/dev/null
   flag NEXUS_ESCRITA_BOLSA false
   flag NEXUS_ESCRITA_EQUIPES false
-  recriar_api
-  compose stop nexus-borda || true
-  rm -f "$MARCA"
+  recriar_api || log "aviso: API não ficou saudável; conferir com deploy.sh status"
+  compose stop nexus-borda
   log "rollback: porta 8181 de volta ao mapper, escrita do Nexus desligada"
+  set -e
 }
 
 cmd_status() {
   echo "fases 1 e 2 viradas: $([ -f "$MARCA" ] && echo sim || echo não)"
   echo "  regra REDIRECT 8181→8183: $(regra -C 2>/dev/null && echo ativa || echo ausente)"
-  echo "  $UNIDADE: $(systemctl is-enabled "$UNIDADE" 2>/dev/null || true)"
+  echo "  borda: $(borda_saudavel && echo saudável || echo fora)"
+  echo "  $TIMER: $(systemctl is-active "$TIMER" 2>/dev/null || true)"
+  echo "  conexões da Tailscale direto no mapper: $(conexoes_ts_8181)"
   grep -E '^\s+NEXUS_ESCRITA_(BOLSA|EQUIPES):' "$BASE/compose.yml" | sed 's/^ */  /'
   compose ps --format '  {{.Name}} {{.Status}}' nexus-borda "nexus-api-$(cor_ativa)" 2>/dev/null || true
 }
@@ -133,8 +173,7 @@ case "${1:-}" in
   teste) cmd_teste ;;
   on) cmd_on ;;
   off) cmd_off ;;
-  redirect-on) cmd_redirect_on ;;
-  redirect-off) cmd_redirect_off ;;
+  guarda) cmd_guarda ;;
   status) cmd_status ;;
-  *) sed -n '2,9p' "$0"; exit 2 ;;
+  *) sed -n '2,10p' "$0"; exit 2 ;;
 esac

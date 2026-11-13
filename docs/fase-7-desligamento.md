@@ -53,8 +53,11 @@ Sem mexer no PC nem no `mapper`:
    - `grants`: `INSERT, UPDATE` do `nexus_app` em `fato_oferta_mercado` e `fato_resumo_item`.
    - `token`: token `borda-fase12` (leitura + escrita) em `borda/token.conf` (600).
    - `teste`: sobe a borda sem desviar tráfego e testa os dois lados.
-   - `on`: flags, recria a API ativa e o Nginx, testa, instala a unit `nexus-borda-redirect.service` (reaplica a regra no boot) e derruba as conexões keep-alive da Tailscale no 8181.
-   - `off`: tira a regra e a unit, desliga as flags e para a borda (< 1 min).
+   - `on`: flags, recria a API ativa e o Nginx, testa, instala o timer `nexus-borda-guarda.timer` (a cada 15 s: regra só com a marca **e** a borda respondendo `/borda-saude`; se a borda cair, o 8181 volta direto ao `mapper`) e derruba as conexões keep-alive da Tailscale no 8181.
+   - `off` (best-effort): tira o timer e a regra, desliga as flags e para a borda (< 1 min). Falha no meio do `on` chama o `off` sozinha.
+   - A borda responde CORS como o legado (`OPTIONS` 204, `Access-Control-Allow-Origin: *`).
+   - **Rollback não devolve ao legado** o que o Nexus gravou em equipes, faltas e meus-itens: o relay reenvia equipes e faltas; edições de meus-itens feitas durante a virada se perdem. Ofertas, vendas e resumo ficam no Postgres, comum aos dois.
+   - Rate limit: um token só para relay e painel (10 req/s, rajada 40, no Nexus); a carga medida é ~0,1 req/s.
 6. Com a marca `estado/fase12-cutover`, o `sincronizar-catalogos.sh` para de importar `equipes`, `faltas` e `meus-itens` dos arquivos do legado.
 7. O comparador continua lendo o `mapper` em loopback; depois da virada, as diferenças de equipes (estado parado no legado) são esperadas.
 

@@ -1,0 +1,7 @@
+[Unit]
+Description=Nexus: guarda da borda (regra 8181→8183 só com a borda de pé; cutover das fases 1 e 2)
+After=network-online.target tailscaled.service docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/nexus-deploy/cutover-fase1-2.sh guarda

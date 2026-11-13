@@ -1,0 +1,10 @@
+[Unit]
+Description=Nexus: guarda da borda a cada 15 s
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=15s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
