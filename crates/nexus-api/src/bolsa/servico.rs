@@ -47,6 +47,10 @@ pub struct ServicoBolsa<R> {
     pub repo: R,
     atual: ArcSwapOption<Snapshot>,
     /// Um único montador por vez. Quem chega com o snapshot vazio espera o mesmo resultado.
+    /// Segurado do início até gravar o snapshot: o lock do `carregador` é solto antes do
+    /// `Mercado::montar`, e sem este segundo lock duas chamadas no boot montavam dois
+    /// mercados em paralelo (pico de ~820 MB contra ~330 MB estável).
+    montagem: Mutex<()>,
     carregador: Mutex<Carregador>,
     /// Cache LRU do feedback (40 filtros), invalidado quando o mercado é remontado.
     pub feedback: Cache<String, Arc<Feedback>>,
@@ -59,6 +63,7 @@ impl<R: RepoMercado + 'static> ServicoBolsa<R> {
         Self {
             repo,
             atual: ArcSwapOption::empty(),
+            montagem: Mutex::new(()),
             carregador: Mutex::new(Carregador::default()),
             feedback: Cache::new(40),
         }
@@ -75,6 +80,9 @@ impl<R: RepoMercado + 'static> ServicoBolsa<R> {
     /// Monta um mercado novo e troca o snapshot.
     pub async fn atualizar(&self) -> Result<Arc<Snapshot>, ErroBolsa> {
         let pedido = Instant::now();
+        // Em JS seria uma promise única guardada (`this.montando ??= montar()`): quem chega
+        // durante a montagem espera e reaproveita o resultado no teste logo abaixo.
+        let _montagem = self.montagem.lock().await;
         let mut carregador = self.carregador.lock().await;
         // Se outra task montou enquanto esperávamos o lock, aproveita.
         if let Some(s) = self.atual.load_full().filter(|s| s.montado >= pedido) {
@@ -169,5 +177,59 @@ impl<R: RepoMercado + 'static> ServicoBolsa<R> {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+    use nucleo::bolsa::repo::{Agregados, Estaticos, OfertaBruta};
+    use nucleo::bolsa::venda::VendaBruta;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Repo vazio que conta as montagens (cada uma chama `ofertas_ativas` uma vez).
+    #[derive(Default)]
+    struct RepoContador {
+        montagens: AtomicUsize,
+    }
+
+    impl RepoMercado for RepoContador {
+        async fn vendas(&self, _: i64, _: i64) -> Result<Vec<VendaBruta>, ErroRepo> {
+            Ok(vec![])
+        }
+        async fn vendas_recentes(&self, _: i64) -> Result<Vec<VendaBruta>, ErroRepo> {
+            Ok(vec![])
+        }
+        async fn estaticos(&self) -> Result<Estaticos, ErroRepo> {
+            Ok(Estaticos::default())
+        }
+        async fn agregados(&self, _: i64, _: i64, _: i64, _: bool) -> Result<Agregados, ErroRepo> {
+            Ok(Agregados::default())
+        }
+        async fn ofertas_ativas(&self, _: &FiltroOfertas) -> Result<Vec<OfertaBruta>, ErroRepo> {
+            self.montagens.fetch_add(1, Ordering::SeqCst);
+            // Dá tempo da segunda chamada chegar com a montagem em andamento.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok(vec![])
+        }
+        async fn ofertas_do_ticker(
+            &self,
+            _: bool,
+            _: i32,
+            _: &str,
+            _: i64,
+        ) -> Result<Vec<OfertaBruta>, ErroRepo> {
+            Ok(vec![])
+        }
+    }
+
+    /// Regressão do pico de memória no boot: duas chamadas com o snapshot vazio
+    /// montavam dois mercados em paralelo.
+    #[tokio::test]
+    async fn snapshots_simultaneos_no_boot_montam_uma_vez() {
+        let bolsa = Arc::new(ServicoBolsa::novo(RepoContador::default()));
+        let (a, b) = tokio::join!(bolsa.snapshot(), bolsa.snapshot());
+        assert!(a.is_ok() && b.is_ok());
+        assert_eq!(bolsa.repo.montagens.load(Ordering::SeqCst), 1);
     }
 }
