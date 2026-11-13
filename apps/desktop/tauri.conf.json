@@ -3,8 +3,12 @@
   "productName": "Nexus",
   "version": "0.1.0",
   "identifier": "app.nexus.desktop",
-  "build": { "frontendDist": "./ui" },
+  "build": {
+    "frontendDist": "./ui/dist",
+    "beforeBuildCommand": { "script": "trunk build --release", "cwd": "ui", "wait": true }
+  },
   "app": {
+    "withGlobalTauri": true,
     "windows": [{ "title": "Nexus", "width": 1100, "height": 720 }],
     "security": { "csp": null }
   },

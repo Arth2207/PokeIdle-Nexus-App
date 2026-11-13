@@ -35,3 +35,17 @@ Meta com 4 contas abertas em jogo: **até 1,4 GB de RAM e 25% de CPU**. Não dá
 ## Pendente
 
 UI Leptos (hoje `iniciar_nucleo`, `abrir_conta` e `abrir_tracker` são comandos sem tela); keyring; coletar do jogo `inventario`, `mercado` e `perfil` (o parser em `jogo` já aceita; falta o coletor ler o DOM/estado, que o legado lia do estado do motor); `hunt_slug` nas linhas do HUD (o legado deriva de `ultimo.hunt`); expor informativos (`raro.novo` etc.) e `sessao.ressincronizar` (recarga por HTTP) à UI; TLS é `rustls` com raízes webpki; commitar o `Cargo.lock` do desktop e passar a usar `--locked`; ícone definitivo; incluir `tracker.captura` em `TIPOS` no servidor.
+
+## Tela (Leptos)
+
+A tela do app é um crate Rust próprio, `apps/desktop/ui` (Leptos CSR, alvo `wasm32-unknown-unknown`), buildado com [trunk](https://trunkrs.dev) 0.22.1. Não há JavaScript escrito à mão; a ponte com o Tauri é feita por `wasm_bindgen` (`window.__TAURI__`). Os fundos de bioma ficam em `apps/desktop/assets/biomas` (WebP) e o trunk os copia para o `dist`.
+
+Para buildar:
+
+```
+rustup target add wasm32-unknown-unknown
+cd apps/desktop/ui && trunk build --release   # gera apps/desktop/ui/dist
+cd .. && cargo tauri build                    # o beforeBuildCommand já roda o trunk
+```
+
+O `tauri.conf.json` aponta `frontendDist` para `ui/dist` e roda `trunk build --release` na pasta `ui` antes do build.

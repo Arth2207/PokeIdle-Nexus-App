@@ -102,9 +102,21 @@ jobs:
       - uses: actions/checkout@v5
       - name: Toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
+      - name: Alvo WebAssembly (UI Leptos)
+        run: rustup target add wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: apps/desktop
+          workspaces: |
+            apps/desktop
+            apps/desktop/ui
+      # trunk: binário pronto, versão e SHA-256 fixos (o trunk baixa o wasm-bindgen-cli da versão do Cargo.lock).
+      - name: trunk 0.22.1
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/trunk-rs/trunk/releases/download/v0.22.1/trunk-x86_64-pc-windows-msvc.zip -OutFile trunk.zip
+          if ((Get-FileHash trunk.zip -Algorithm SHA256).Hash.ToLower() -ne "1cc65012a9df60b02db948f5a3f0601e594ce952efb1cfd23147c9021c9f7d75") { throw "SHA-256 do trunk não confere" }
+          Expand-Archive trunk.zip -DestinationPath "$env:RUNNER_TEMP\trunk"
+          "$env:RUNNER_TEMP\trunk" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
       # app-icon.png é a fonte; os tamanhos e o .ico saem daqui (icons/ não é versionado).

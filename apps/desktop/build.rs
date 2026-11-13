@@ -3,6 +3,8 @@ fn main() {
     // só recebe as três que o coletor usa (ver capabilities/jogo.json).
     let manifest = tauri_build::AppManifest::new().commands(&[
         "iniciar_nucleo",
+        "salvar_token",
+        "tem_token",
         "abrir_conta",
         "abrir_tracker",
         "coletor_evento",

@@ -1,0 +1,30 @@
+# UI do app A2 (Leptos CSR, wasm32), buildada com trunk. Workspace próprio: não é membro
+# do crate desktop nem do workspace raiz.
+[workspace]
+
+[package]
+name = "nexus-ui"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+leptos = { version = "=0.8.23", features = ["csr"] }
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Storage", "Document", "Element", "HtmlInputElement"] }
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1

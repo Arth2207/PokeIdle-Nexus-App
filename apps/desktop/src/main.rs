@@ -8,13 +8,14 @@ use a2_nucleo::jogo::{
     conta_do_rotulo, evento_tracker, eventos_do_coletor, rotulo_da_conta, script_passo, Avaliador,
     Correio, ExecutorJanelas,
 };
+use a2_nucleo::token::ArmazemToken;
 use a2_nucleo::ArquivoToken;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tokio::sync::{mpsc, watch};
 
 const URL_JOGO: &str = "https://pokeidle.io/";
@@ -223,14 +224,41 @@ fn iniciar_nucleo(
     if let Some(antigo) = travar(&estado.parar).replace(parar_tx) {
         let _ = antigo.send(true);
     }
+    let app_tela = app.clone();
     let exec = ExecutorJanelas::novo(Janelas {
         app,
         correio: estado.correio.clone(),
     });
+    let tela = app_tela;
     tauri::async_runtime::spawn(async move {
-        let _ = rodar(cfg, armazem, exec, eventos_rx, parar_rx).await;
+        let fim = match rodar(cfg, armazem, exec, eventos_rx, parar_rx).await {
+            Ok(()) => "núcleo parado".to_owned(),
+            Err(e) => format!("núcleo parou: {e}"),
+        };
+        let _ = tela.emit("nucleo", fim);
     });
     Ok(())
+}
+
+/// Grava o token do Nexus (escopo `relay`) no armazém local do app.
+#[tauri::command]
+fn salvar_token(token: String) -> Result<(), String> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Err("token vazio".into());
+    }
+    ArquivoToken::padrao("nexus")
+        .and_then(|a| a.gravar(token))
+        .map_err(|e| e.to_string())
+}
+
+/// Há token salvo? (a tela só mostra sim/não, nunca o valor)
+#[tauri::command]
+fn tem_token() -> Result<bool, String> {
+    ArquivoToken::padrao("nexus")
+        .and_then(|a| a.ler())
+        .map(|t| t.is_some())
+        .map_err(|e| e.to_string())
 }
 
 fn main() {
@@ -238,6 +266,8 @@ fn main() {
         .manage(Estado::default())
         .invoke_handler(tauri::generate_handler![
             iniciar_nucleo,
+            salvar_token,
+            tem_token,
             abrir_conta,
             abrir_tracker,
             coletor_evento,
