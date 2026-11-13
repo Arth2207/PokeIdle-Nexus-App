@@ -10,7 +10,7 @@ Objetivo: nenhum processo Node do legado servindo produção, o `mapa.db` arquiv
 |---|---|---|---|---|---|
 | pm2 `mapper` (`server.js`) | 8181 (todas as interfaces) | `/ingest` → `mapa.db`; bolsa (`/ofertas`, indicadores, veredito) → `fato_oferta_mercado`; equipes, raros, shiny, fila de comandos | relay do PC (escrita); painel via motor (leitura) | Fases 1, 2 e 3 | **produção** |
 | pm2 `mapper`, servidor estático | 9999 (público) | páginas e JSONs de `data/static` (inclui `precos-nexus.json`) | painel / navegador | arquivos estáticos no Nginx do Nexus | **produção**; consumidores a medir |
-| pm2 `holodex-nexus` (`servidor.js`) | 47821 (loopback e Tailscale), 47822 (loopback) | motor e API para cliente externo; navegadores desligados (`HDX_SEM_BROWSER=1`). Coletor de mercado parado desde 2026-11-10 | nenhuma conexão observada; o PC usa o motor dele | Fase 4 (motor) | ligado, sem uso observado |
+| pm2 `holodex-nexus` (`servidor.js`) | 47821 (loopback e Tailscale), 47822 (loopback) | motor e API para cliente externo; navegadores desligados (`HDX_SEM_BROWSER=1`). Coletor de mercado parado desde 2026-11-10 | comparador da Fase 4 (`nexus-paridade` lê o motor em loopback) | Fase 4 (motor) | **necessário até a virada da Fase 4** |
 | pm2 `scoring` (`scoring.js`) | 8182 (loopback) | scoring da IA | nenhum (Fase 6 aposentada) | nenhum | ligado, sem clientes |
 | pm2 `ai-observer` | — | observador de IA | — | nenhum | parado |
 | pm2 `etl-continuo`, `etl-eficiencia` | — | ETL `mapa.db` → `fato_kill`, eficiência | — | `nexus-worker` (Fase 5) | parados (virada) |
@@ -49,14 +49,21 @@ Sem mexer no PC nem no `mapper`:
 2. Regra `iptables -t nat PREROUTING -i tailscale0 --dport 8181 -j REDIRECT` para essa porta. O `mapper` continua no 8181 e o tráfego local não muda.
 3. A borda manda as rotas da bolsa e das equipes (escrita e leitura) para o Nginx do Nexus, com o token do relay injetado por ela, e todo o resto (`/ingest`, comandos, raros, shiny) para o `mapper` em loopback.
 4. Na mesma janela: `NEXUS_ESCRITA_BOLSA=true` e `NEXUS_ESCRITA_EQUIPES=true`.
-5. Script `cutover-fase1-2.sh status|on|off`: `off` remove a regra e desliga as flags (< 1 min).
+5. Script `/opt/nexus-deploy/cutover-fase1-2.sh` (cópia em `deploy/`):
+   - `grants`: `INSERT, UPDATE` do `nexus_app` em `fato_oferta_mercado` e `fato_resumo_item`.
+   - `token`: token `borda-fase12` (leitura + escrita) em `borda/token.conf` (600).
+   - `teste`: sobe a borda sem desviar tráfego e testa os dois lados.
+   - `on`: flags, recria a API ativa e o Nginx, testa, instala a unit `nexus-borda-redirect.service` (reaplica a regra no boot) e derruba as conexões keep-alive da Tailscale no 8181.
+   - `off`: tira a regra e a unit, desliga as flags e para a borda (< 1 min).
+6. Com a marca `estado/fase12-cutover`, o `sincronizar-catalogos.sh` para de importar `equipes`, `faltas` e `meus-itens` dos arquivos do legado.
+7. O comparador continua lendo o `mapper` em loopback; depois da virada, as diferenças de equipes (estado parado no legado) são esperadas.
 
 **Pré-requisito ainda não cumprido:** 3 dias de comparação limpa. Em 2026-11-13 as diferenças da bolsa são de dado ao vivo (contagem de vendas, `alvoC` ±0,5%), mas `equipe` teve "candidatas 18 ≠ 31" às 13:00, acima da tolerância: investigar antes.
 
 ## Ordem proposta
 
 1. ~~`scoring`~~: parado em 2026-11-13 (`pm2 stop scoring` + `pm2 save`). Volta atrás: `pm2 start scoring && pm2 save`.
-2. `holodex-nexus` da VPS: confirmar por 24 h que ninguém conecta no 47821/47822 e então parar.
-3. Fases 1 e 2: definir o caminho (relay do PC ou proxy na VPS) e escrever `cutover-fase1-2.sh`.
+2. `holodex-nexus` da VPS: só sai com a Fase 4 (é a referência do comparador do motor).
+3. Fases 1 e 2: `cutover-fase1-2.sh` (abaixo), depois de corrigir a paridade de `equipe`.
 4. Portar a conversão do catálogo de espécies (`sincronizar-catalogos.sh`) para Rust.
 5. Com a A2: Fases 3 e 4, depois SQLite → PG, e por último `mapper`, 9999, crons e arquivamento do `mapa.db`.

@@ -11,6 +11,11 @@ x-api: &api
     NEXUS_ENDERECO: 0.0.0.0
     NEXUS_LOG_FORMATO: json
     NEXUS_DATABASE_URL_FILE: /run/secrets/database_url
+    # Espelho só-leitura de public.comando_fila em nexus.comando (shadow da fila, fase 3).
+    NEXUS_ESPELHO_COMANDOS: "true"
+    # Cutover das fases 1 e 2 (cutover-fase1-2.sh on|off troca estes valores).
+    NEXUS_ESCRITA_BOLSA: "false"
+    NEXUS_ESCRITA_EQUIPES: "false"
   secrets:
     - database_url
   volumes:
@@ -66,6 +71,12 @@ services:
       NEXUS_DATABASE_URL_FILE: /run/secrets/database_url
       NEXUS_PARIDADE_URL: http://127.0.0.1:8181
       NEXUS_PARIDADE_CICLO_S: "600"
+      # Fase 4: comparador das rotas do motor. O motor da VPS roda em UTC (o do PC, -180).
+      NEXUS_PARIDADE_MOTOR_URL: http://127.0.0.1:47821
+      NEXUS_MOTOR_FUSO_MIN: "0"
+      # Fase 4: laço do motor em sombra contra o motor do PC (Tailscale, só leitura).
+      NEXUS_MOTOR_SOMBRA_URL: http://100.67.28.87:47821
+      NEXUS_MOTOR_SOMBRA_FUSO_MIN: "-180"
       # Compara também /api/bolsa/equipe e /equipe-propria (dispara o cálculo do legado).
       NEXUS_PARIDADE_EQUIPE: "true"
     secrets:
@@ -81,7 +92,171 @@ services:
       resources:
         limits:
           cpus: "0.5"
-          memory: 384M
+          memory: 640M
+    logging: *logs
+
+  # Cliente sombra: recebe os comandos espelhados pelo WebSocket e confirma como
+  # 'sombra' sem executar nada. Mede o critério de 7 dias (nexus-api sombra-relatorio).
+  nexus-sombra:
+    image: ${NEXUS_IMAGEM_PARIDADE:-ghcr.io/arth2207/nexus-api:inexistente}
+    command: ["sombra"]
+    network_mode: host
+    environment:
+      NEXUS_LOG_FORMATO: json
+      NEXUS_SOMBRA_URL: ws://127.0.0.1:8480/ws
+      NEXUS_SOMBRA_TOKEN_FILE: /run/secrets/sombra_token
+      # Um comando sintético a cada ~5 min (só schema nexus) para medir a fila.
+      NEXUS_SOMBRA_GERAR_S: "300"
+      # A configuração comum exige o banco, mesmo o cliente sombra não usando.
+      NEXUS_DATABASE_URL_FILE: /run/secrets/database_url
+    secrets:
+      - sombra_token
+      - database_url
+    volumes:
+      - /var/run/postgresql:/var/run/postgresql
+    read_only: true
+    tmpfs: [/tmp]
+    restart: unless-stopped
+    logging: *logs
+
+  # Worker de ETL e jobs agendados. Sem porta pública; só /health/ready e /metrics internos.
+  # Cursor transacional no Postgres + ON CONFLICT garante idempotência — restart durante
+  # deploy não duplica nem perde dados.
+  nexus-worker:
+    image: ${NEXUS_IMAGEM_WORKER:-ghcr.io/arth2207/nexus-api:inexistente}
+    entrypoint: ["/nexus-worker"]
+    environment:
+      NEXUS_LOG_FORMATO: json
+      NEXUS_DATABASE_URL_FILE: /run/secrets/database_url
+      NEXUS_PORTA_METRICAS: "9191"
+      # Cutover da Fase 5: true = grava no public (ver cutover-fase5.sh etl-on/etl-off).
+      NEXUS_ESCRITA_ETL: "true"
+      # Dossiê em sombra (fase 5, etapa 6). Leituras no public, escritas em nexus.*_shadow,
+      # uploads no tmpfs /dados. Sem chave configurada: rotas protegidas respondem 401.
+      NEXUS_DOSSIE_PORTA: "9192"
+      NEXUS_DOSSIE_STATIC: /opt/mapper/data/static
+      NEXUS_DOSSIE_DADOS: /dados
+      # Chave só do Nexus (a do legado não é copiada); libera as rotas privadas aqui.
+      NEXUS_DOSSIE_CHAVE_FILE: /run/secrets/dossie_chave
+      # Menos arenas do malloc: as threads do spawn_blocking (montagem do precos.json) não
+      # prendem memória cada uma na sua arena.
+      MALLOC_ARENA_MAX: "2"
+    secrets:
+      - database_url
+      - dossie_chave
+    # Só no loopback do host, para o comparador (nexus-dossie-paridade).
+    ports:
+      - "127.0.0.1:18899:9192"
+    volumes:
+      - /var/run/postgresql:/var/run/postgresql
+      # Diretório inteiro (não arquivo a arquivo): o relay regrava o equipes-estado.json
+      # trocando o arquivo, e um bind de arquivo ficaria preso no inode antigo.
+      - /opt/mapper/data:/opt/mapper/data:ro
+      # precos.json base, pokedex.json e evolucoes.json do dossiê (etapas 6b/6c).
+      - /opt/mapper/engine/data:/opt/mapper/engine/data:ro
+    # /opt/mapper/data e engine/data são do grupo dossie (gid 986) — adiciona o gid para leitura
+    group_add: ["986"]
+    networks:
+      default: {}
+      monitoring:
+        aliases: [nexus-worker]
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /dados:uid=65532,gid=65532,mode=0700,size=64m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "/nexus-worker", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    stop_grace_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+    logging: *logs
+
+  # Comparador de rotas do dossiê: mesma requisição no legado (8899) e no worker (18899).
+  # Só GETs e POST/DELETE sem chave (param no 401). Rede do host para chegar no legado.
+  nexus-dossie-paridade:
+    image: ${NEXUS_IMAGEM_WORKER:-ghcr.io/arth2207/nexus-api:inexistente}
+    entrypoint: ["/nexus-worker", "dossie-paridade"]
+    network_mode: host
+    environment:
+      NEXUS_LOG_FORMATO: json
+      NEXUS_DATABASE_URL_FILE: /run/secrets/database_url
+      NEXUS_DOSSIE_LEGADO_URL: http://127.0.0.1:8899
+      NEXUS_DOSSIE_NEXUS_URL: http://127.0.0.1:18899
+      NEXUS_DOSSIE_PARIDADE_CICLO_S: "1800"
+      # Rotas privadas (precos.json): o legado libera quem entra pela interface do Tailscale.
+      NEXUS_DOSSIE_LEGADO_PRIVADO_URL: http://100.115.131.15:8899
+      NEXUS_DOSSIE_CHAVE_FILE: /run/secrets/dossie_chave
+    secrets:
+      - database_url
+      - dossie_chave
+    volumes:
+      - /var/run/postgresql:/var/run/postgresql
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    depends_on: [nexus-worker]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 512M
+    logging: *logs
+
+  # Dossiê em produção (cutover da Fase 5): só sobe com `cutover-fase5.sh dossie-on`.
+  # Usuário dossie (994) para gravar as fotos na pasta do legado; portas do dossie.service.
+  nexus-dossie:
+    profiles: ["cutover"]
+    image: ${NEXUS_IMAGEM_WORKER:-ghcr.io/arth2207/nexus-api:inexistente}
+    entrypoint: ["/nexus-worker", "dossie-servir"]
+    user: "994:986"
+    environment:
+      NEXUS_LOG_FORMATO: json
+      NEXUS_DATABASE_URL_FILE: /run/secrets/database_url_dossie
+      NEXUS_DOSSIE_PORTA: "9192"
+      # Conexões por esta porta contam como privadas (era a interface do Tailscale).
+      NEXUS_DOSSIE_PORTA_PRIVADA: "9193"
+      NEXUS_DOSSIE_STATIC: /opt/mapper/data/static
+      NEXUS_DOSSIE_DADOS: /dados
+      NEXUS_DOSSIE_CHAVE_FILE: /run/secrets/dossie_chave_legado
+      NEXUS_ESCRITA_DOSSIE: "true"
+      MALLOC_ARENA_MAX: "2"
+    secrets:
+      - database_url_dossie
+      - dossie_chave_legado
+    ports:
+      - "127.0.0.1:8899:9192"
+      - "100.115.131.15:8899:9193"
+    volumes:
+      - /var/run/postgresql:/var/run/postgresql
+      - /opt/mapper/data:/opt/mapper/data:ro
+      # Única pasta gravável: fotos e uploads do dossiê.
+      - /opt/mapper/data/static/fotos:/opt/mapper/data/static/fotos
+      - /opt/mapper/engine/data:/opt/mapper/engine/data:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /dados:uid=994,gid=986,mode=0700,size=16m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          # Upload de até 200 MB fica inteiro na memória (+ ~260 MB do precos.json).
+          memory: 1G
     logging: *logs
 
   nginx:
@@ -111,49 +286,38 @@ services:
           memory: 64M
     logging: *logs
 
-  # Worker de ETL e jobs agendados. Sem porta pública; só /health/ready e /metrics internos.
-  # Não precisa de blue/green: o cursor é transacional no Postgres e ON CONFLICT garante
-  # idempotência — reiniciar o worker durante o deploy não duplica nem perde dados.
-  nexus-worker:
-    image: ${NEXUS_IMAGEM_WORKER:-ghcr.io/arth2207/nexus-api:inexistente}
-    entrypoint: ["/nexus-worker"]
-    environment:
-      NEXUS_LOG_FORMATO: json
-      NEXUS_DATABASE_URL_FILE: /run/secrets/database_url
-      NEXUS_PORTA_METRICAS: "9191"
-    secrets:
-      - database_url
+  # Cutover das fases 1 e 2 (cutover-fase1-2.sh): recebe o tráfego da porta 8181 do legado
+  # que chega pela Tailscale (REDIRECT) e divide entre o Nexus e o mapper. Só sobe no cutover.
+  nexus-borda:
+    image: nginx:1.28.0-alpine
+    profiles: [fase12]
+    network_mode: host
+    command: ["nginx", "-c", "/etc/nginx/borda/nginx.conf", "-g", "daemon off;"]
     volumes:
-      - /var/run/postgresql:/var/run/postgresql
-      - /opt/mapper/data/mapa.db:/opt/mapper/data/mapa.db:ro
-    # mapa.db é grupo dossie (gid 986, modo 660) — adiciona o gid para leitura
-    group_add: ["986"]
-    networks:
-      default: {}
-      monitoring:
-        aliases: [nexus-worker]
+      # Diretório, não arquivo: editar o arquivo troca o inode.
+      - ./borda:/etc/nginx/borda:ro
     read_only: true
-    tmpfs: [/tmp]
-    cap_drop: [ALL]
+    tmpfs: [/tmp, /var/cache/nginx, /var/run]
     security_opt: [no-new-privileges:true]
-    healthcheck:
-      test: ["CMD", "/nexus-worker", "healthcheck"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-    stop_grace_period: 30s
     restart: unless-stopped
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: 256M
+          cpus: "0.25"
+          memory: 64M
     logging: *logs
 
 secrets:
   database_url:
     file: ./secrets/database_url
+  sombra_token:
+    file: ./secrets/sombra_token
+  dossie_chave:
+    file: ./secrets/dossie_chave
+  database_url_dossie:
+    file: ./secrets/database_url_dossie
+  dossie_chave_legado:
+    file: ./secrets/dossie_chave_legado
 
 networks:
   monitoring:

@@ -101,6 +101,19 @@ cmd_deploy() {
   definir_imagem paridade "$imagem"
   export_imagens
   compose up -d --no-deps --force-recreate nexus-paridade || log "aviso: comparador não subiu"
+  # O cliente sombra usa a mesma imagem do comparador.
+  compose up -d --no-deps --force-recreate nexus-sombra || log "aviso: cliente sombra não subiu"
+  # O worker de ETL usa a mesma imagem; reiniciar aqui garante que sempre rode a versão nova.
+  definir_imagem worker "$imagem"
+  export_imagens
+  compose up -d --no-deps --force-recreate nexus-worker || log "aviso: worker não subiu"
+  # Comparador do dossiê: mesma imagem do worker.
+  if [ -f "$BASE/estado/dossie-cutover" ]; then
+    # Depois do cutover o dossiê de produção é o nexus-dossie (mesma imagem do worker).
+    compose --profile cutover up -d --no-deps --force-recreate nexus-dossie || log "aviso: nexus-dossie não subiu"
+  else
+    compose up -d --no-deps --force-recreate nexus-dossie-paridade || log "aviso: comparador do dossiê não subiu"
+  fi
 
   docker image prune -f >/dev/null
   log "deploy concluído: $sha"

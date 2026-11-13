@@ -57,6 +57,11 @@ for par in \
   "raros:$LEGADO/data/raros-estado.json"; do
   tipo=${par%%:*}
   arquivo=${par#*:}
+  # Depois do cutover das fases 1 e 2 o Nexus é o dono desses estados: o arquivo do
+  # legado para de ser a fonte (cutover-fase1-2.sh).
+  if [ -f "$BASE/estado/fase12-cutover" ]; then
+    case "$tipo" in equipes|faltas|meus-itens) continue ;; esac
+  fi
   [ -r "$arquivo" ] || { log "$tipo: $arquivo não encontrado"; continue; }
   sincronizar "$tipo" "$arquivo" "$(sha256sum < "$arquivo" | cut -d' ' -f1)"
 done
