@@ -550,8 +550,14 @@ async fn paridade_continua(cfg: Configuracao) -> anyhow::Result<()> {
         .com_equipes(estado.clone(), cfg.paridade_equipe)
         .com_motor(cfg.paridade_motor_url.as_deref());
     tracing::info!(%url, ciclo_s = ciclo.as_secs(), "comparador de paridade iniciado");
-    // Fase 4: o laço do motor em sombra roda ao lado do comparador (mesma rede do host).
     let parar_sombra = tokio_util::sync::CancellationToken::new();
+    // Como no `serve`: sem remontar, o snapshot do mercado fica congelado no início do
+    // processo e a equipe da bolsa do Nexus é calculada sobre ofertas velhas.
+    Arc::clone(&estado.bolsa).iniciar(
+        Duration::from_secs(cfg.bolsa_ciclo_s.max(10)),
+        parar_sombra.clone(),
+    );
+    // Fase 4: o laço do motor em sombra roda ao lado do comparador (mesma rede do host).
     if let Some(url_motor) = &cfg.motor_sombra_url {
         let sombra =
             motor_sombra::Sombra::nova(url_motor, cfg.motor_sombra_fuso_ms(), cfg.escrita_motor)?;
