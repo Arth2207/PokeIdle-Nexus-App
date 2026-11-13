@@ -2,7 +2,8 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "jogo",
   "description": "Páginas remotas do jogo e do tracker: só os comandos do coletor, nada do core.",
-  "windows": ["jogo-*", "tracker"],
+  "windows": ["tracker"],
+  "webviews": ["jogo-*", "tracker"],
   "remote": { "urls": ["https://pokeidle.io/*"] },
   "permissions": ["allow-coletor-evento", "allow-coletor-resultado", "allow-tracker-captura"]
 }

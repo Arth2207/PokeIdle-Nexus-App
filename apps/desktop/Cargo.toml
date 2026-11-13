@@ -14,7 +14,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 a2-nucleo = { path = "../../crates/a2-nucleo" }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["unstable"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync", "time"] }
 
