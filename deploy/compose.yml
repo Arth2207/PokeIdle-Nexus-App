@@ -73,16 +73,13 @@ services:
     environment:
       NEXUS_LOG_FORMATO: json
       NEXUS_DATABASE_URL_FILE: /run/secrets/database_url
-      NEXUS_PARIDADE_URL: http://127.0.0.1:8181
-      NEXUS_PARIDADE_CICLO_S: "600"
+      # Comparador com o legado desligado (14/11): mapper parado; sem a URL, só o motor roda.
       # Comparador das rotas do motor desligado (14/11): o holodex-nexus saiu com a Fase 4.
       # Fase 4: laço do motor em sombra lendo a janela que o app manda (sem o PC antigo).
       NEXUS_MOTOR_SOMBRA_URL: nexus
       NEXUS_MOTOR_SOMBRA_FUSO_MIN: "-180"
       # Fase 4 virada: o motor do Nexus manda os comandos ao app (fila da fase 3).
       NEXUS_ESCRITA_MOTOR: "true"
-      # Compara também /api/bolsa/equipe e /equipe-propria (dispara o cálculo do legado).
-      NEXUS_PARIDADE_EQUIPE: "true"
     secrets:
       - database_url
     volumes:
