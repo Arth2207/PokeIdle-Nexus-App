@@ -134,7 +134,7 @@ pub fn aba(e: Estado, versao: RwSignal<u32>, moeda: RwSignal<String>) -> impl In
                 <div class="pregao">
                     <div class="caixa lista-ativos">
                         <input placeholder="Buscar ativo…" prop:value=move || busca.get() on:input=move |ev| busca.set(event_target_value(&ev)) />
-                        <select prop:value=move || tipo.get() on:change=move |ev| tipo.set(event_target_value(&ev))>
+                        <select class="caixa" prop:value=move || tipo.get() on:change=move |ev| tipo.set(event_target_value(&ev))>
                             <option value="todos">"Todos os tipos"</option>
                             <option value="pokemon">"Pokémon"</option>
                             <option value="item">"Itens"</option>

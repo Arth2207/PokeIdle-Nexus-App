@@ -70,8 +70,9 @@ pub fn Colunas(linhas: Vec<(String, f64, String)>) -> impl IntoView {
             <div class="col-media" style=topo_media></div>
             {linhas.into_iter().enumerate().map(|(i, (nome, v, rot))| {
                 let h = format!("height:{:.1}%", (v.max(0.0) / max * 100.0).clamp(0.0, 100.0));
+                let ultima = i + 1 == n;
                 view! {
-                    <div class="col" class:ativo=i + 1 == n>
+                    <div class="col" class:ativo=ultima>
                         <span class="col-rot">{rot}</span>
                         <span class="col-trilho"><span class="col-val" style=h></span></span>
                         <span class="col-nome">{nome}</span>
