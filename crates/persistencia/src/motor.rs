@@ -571,6 +571,36 @@ pub async fn contas_do_app(db: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
     .await
 }
 
+/// Decisões do motor nas últimas 6 h (painel), uma por conta, regra e tipo, com quantos
+/// ciclos ela se repetiu e a última versão (o motor decide de novo a cada ciclo).
+pub async fn decisoes_recentes(db: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT jsonb_build_object('nick', nick, 'regra', regra, 'decisao', decisao,
+                 'ciclos', count(*), 'ultimo', (extract(epoch FROM max(em)) * 1000)::bigint,
+                 'dados', (array_agg(dados ORDER BY id DESC))[1])
+           FROM nexus.motor_decisao
+          WHERE em > now() - interval '6 hours' AND decisao <> 'marca'
+          GROUP BY nick, regra, decisao ORDER BY max(em) DESC LIMIT 80",
+    )
+    .fetch_all(db)
+    .await
+}
+
+/// Comandos do motor nas últimas 24 h por tipo: total, executados com `ok` e com falha.
+pub async fn regras_resumo(db: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT jsonb_build_object('tipo', tipo, 'total', count(*),
+                 'ok', count(*) FILTER (WHERE resultado = 'ok'),
+                 'falhas', count(*) FILTER (WHERE executado_em IS NOT NULL AND resultado <> 'ok'),
+                 'ultimo', (extract(epoch FROM max(criado_em)) * 1000)::bigint)
+           FROM nexus.comando
+          WHERE origem = 'motor' AND criado_em > now() - interval '24 hours'
+          GROUP BY tipo ORDER BY count(*) DESC",
+    )
+    .fetch_all(db)
+    .await
+}
+
 #[cfg(test)]
 mod testes {
     use super::*;

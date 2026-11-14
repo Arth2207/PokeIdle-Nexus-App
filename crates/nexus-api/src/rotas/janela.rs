@@ -2,6 +2,7 @@
 //! O motor do Nexus lê daqui quando roda sem o motor do legado (`NEXUS_MOTOR_SOMBRA_URL=nexus`).
 //! `GET /api/contas`: as contas do app (rótulo, nick no jogo e a última janela), para o painel.
 //! `GET /api/cacada?conta=`: sessão da conta por hora, hunts e drops (tela Caçada).
+//! `GET /api/motor/decisoes`: decisões do motor (6 h) e o resultado dos comandos por tipo (24 h).
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -82,6 +83,24 @@ pub async fn cacada(
         Ok(v) => Json(v).into_response(),
         Err(e) => {
             tracing::warn!(erro = %e, "caçada");
+            erro(StatusCode::SERVICE_UNAVAILABLE, "banco indisponível")
+        }
+    }
+}
+
+pub async fn decisoes(State(estado): State<Estado>) -> Response {
+    use persistencia::motor as m;
+    let r = async {
+        Ok::<_, sqlx::Error>(json!({
+            "decisoes": m::decisoes_recentes(&estado.db).await?,
+            "regras": m::regras_resumo(&estado.db).await?,
+        }))
+    }
+    .await;
+    match r {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => {
+            tracing::warn!(erro = %e, "decisões do motor");
             erro(StatusCode::SERVICE_UNAVAILABLE, "banco indisponível")
         }
     }
