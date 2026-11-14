@@ -10,6 +10,7 @@ pub mod escaneamento;
 pub mod financas;
 pub mod mercado;
 pub mod pregao;
+pub mod saude;
 pub mod visao;
 
 use leptos::prelude::*;

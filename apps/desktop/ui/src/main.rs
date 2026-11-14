@@ -631,6 +631,7 @@ fn Configuracoes(e: Estado) -> impl IntoView {
                 Some(Err(er)) => view! { <div class="dica erro">{format!("Erro ao ler o token: {er}")}</div> }.into_any(),
             }}
         </div>
+        <telas::saude::Saude e=e />
         <Diario reg=e.reg />
     }
 }
