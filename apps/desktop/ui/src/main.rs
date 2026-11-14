@@ -873,7 +873,17 @@ fn App() -> impl IntoView {
         } else {
             "—".to_owned()
         }),
-        conta_ativa: RwSignal::new(String::new()),
+        // `?todas=1` abre no modo comparativo (link direto do site).
+        conta_ativa: RwSignal::new(
+            if web_sys::window()
+                .and_then(|j| j.location().search().ok())
+                .is_some_and(|q| q.contains("todas=1"))
+            {
+                telas::TODAS.to_owned()
+            } else {
+                String::new()
+            },
+        ),
         ocupado: RwSignal::new(false),
         descoberta: RwSignal::new(if guardado(CHAVE_DESCOBERTA) == "sim" {
             "sim".to_owned()
@@ -1034,11 +1044,13 @@ fn App() -> impl IntoView {
             <div class="palco">
                 <div class="topo">
                     <div class="pilula vidro">
-                        <select on:change=move |ev| e.conta_ativa.set(event_target_value(&ev))>
+                        <select prop:value=move || if e.conta_ativa.get() == telas::TODAS { telas::TODAS.to_owned() } else { ativa().unwrap_or_default() }
+                            on:change=move |ev| e.conta_ativa.set(event_target_value(&ev))>
                             {move || lista_contas(&e.contas_txt.get())
                                 .into_iter()
                                 .map(|c| view! { <option>{c}</option> })
                                 .collect_view()}
+                            <option>{telas::TODAS}</option>
                         </select>
                     </div>
                     <div class="pilula vidro">

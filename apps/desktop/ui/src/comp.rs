@@ -305,6 +305,9 @@ pub const CSS: &str = r#"
 .col-nome { font-size:11px; color:var(--texto-3); }
 .col-media { position:absolute; left:0; right:0; border-top:1px dashed var(--texto-3); margin-bottom:22px; pointer-events:none; }
 .vg { display:grid; grid-template-columns:1.6fr 1fr; gap:16px; margin-bottom:16px; }
+.vg:has(> .larga) { grid-template-columns:1fr; }
+.faixa { display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:14px; }
+.faixa .scan { grid-template-columns:110px 1fr; }
 .vg-base { display:grid; grid-template-columns:1.3fr 1fr; gap:16px; }
 @media (max-width: 1100px) { .vg, .vg-base { grid-template-columns:1fr; } }
 .caixa { background:rgba(255,255,255,.55); border:1px solid var(--vidro-borda); border-radius:18px; padding:14px 16px; }

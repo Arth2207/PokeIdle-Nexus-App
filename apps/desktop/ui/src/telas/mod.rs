@@ -17,6 +17,14 @@ use leptos::prelude::*;
 
 use crate::{lista_contas, Estado};
 
+/// Opção do seletor que troca as telas para o modo comparativo.
+pub const TODAS: &str = "Todas as contas";
+
+/// Modo "Todas as contas" (as telas de uma conta só seguem na primeira).
+pub fn todas(e: Estado) -> bool {
+    e.conta_ativa.get() == TODAS
+}
+
 /// Rótulo da conta escolhida no topo (minúsculo), ou a primeira da lista.
 pub fn rotulo_ativo(e: Estado) -> Option<String> {
     let a = e.conta_ativa.get();

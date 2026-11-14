@@ -4,7 +4,7 @@ use leptos::prelude::*;
 use serde_json::Value;
 
 use super::escaneamento::Escaneamento;
-use super::{cabecalho, nick_ativo, rotulo_ativo};
+use super::{cabecalho, nick_ativo, rotulo_ativo, todas};
 use crate::comp::{carregado, Colunas, Kpi, Veredito};
 use crate::dados::{curto, inteiro, lista, no_app, num, recurso, txt};
 use crate::Estado;
@@ -118,13 +118,30 @@ pub fn VisaoGeral(e: Estado) -> impl IntoView {
             })}
         </div>
         <div class="vg">
-            <div class="caixa">
+            <div class="caixa" class:larga=move || todas(e)>
                 <div class="caixa-t">"Escaneamento de campo"</div>
-                {move || carregado(contas.get(), |c| {
-                    let alvo = rotulo_ativo(e);
+                {move || carregado(contas.get(), move |c| {
                     let l = lista(&c, "contas");
+                    if todas(e) {
+                        // Modo comparativo: as contas lado a lado, cada uma com o status.
+                        let agora = js_sys::Date::now();
+                        return view! {
+                            <div class="faixa">
+                                {l.iter().cloned().map(|x| {
+                                    let viva = agora - num(&x, "em").unwrap_or(0.0) < 120_000.0;
+                                    view! {
+                                        <div>
+                                            <span class=if viva { "selo ok" } else { "selo nao" }>{if viva { "mandando dados" } else { "parada" }}</span>
+                                            <Escaneamento conta=x />
+                                        </div>
+                                    }
+                                }).collect_view()}
+                            </div>
+                        }.into_any();
+                    }
+                    let alvo = rotulo_ativo(e);
                     let conta = l.iter().find(|x| Some(txt(x, "conta")) == alvo).or(l.first()).cloned();
-                    conta.map(|x| view! { <Escaneamento conta=x /> })
+                    conta.map(|x| view! { <Escaneamento conta=x /> }).into_any()
                 })}
             </div>
             <div class="caixa">
