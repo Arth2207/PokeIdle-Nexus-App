@@ -1,22 +1,17 @@
-//! Aprende a posição do time de PvP na Área de Treinamento: a cada luta liberada (o jogo dá
-//! uma a cada 5 min), monta um time do meta da faixa como pokémon teste (lado A) e luta com o
-//! time do dono (lado B) numa formação candidata. Guarda a nota de cada formação; quando uma
-//! vence a atual com folga em lutas repetidas, aplica no PvP (`pvp.time.salvar`).
-//!
-//! Só roda com o app como relay oficial e o aprendizado ligado. O meta vem do servidor
-//! (`/api/pvp/meta`); as lutas viram eventos `treino.resultado` pelo coletor.
+//! O aprendizado de uma conta: a cada luta liberada (o jogo dá uma a cada 5 min), monta um
+//! time do meta da faixa como pokémon teste (lado A) e luta com o time da conta (lado B) numa
+//! formação candidata. Guarda a nota de cada formação; quando uma vence a atual com folga em
+//! lutas repetidas, aplica no PvP (`pvp.time.salvar`).
 
 use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{json, Value};
 
-use super::{Entrega, Fluxo};
+use super::comum::Comum;
 
 /// Casa de cada pokémon do time: id → casa.
 pub type Formacao = BTreeMap<i64, i64>;
 
-/// Recarrega o meta a cada 30 min.
-const META_MS: i64 = 30 * 60_000;
 /// Sem resposta do treino em 1 min, libera de novo.
 const ESPERA_MS: i64 = 60_000;
 /// Espera padrão entre lutas (o jogo manda o `cooldownMs`).
@@ -44,15 +39,15 @@ impl Nota {
     }
 }
 
-pub struct Treino {
-    dono: String,
-    ligado: bool,
+#[derive(Default)]
+pub struct TreinoConta {
     time: Vec<i64>,
     atual: Formacao,
     especie_de: HashMap<i64, i64>,
     faixa: Option<i64>,
     meta: Option<Value>,
-    meta_em: Option<i64>,
+    /// Metas das faixas logo acima (adversários mais fortes que a conta ainda vai pegar).
+    pub(super) acima: Vec<Value>,
     livre_em: i64,
     esperando: Option<(i64, Formacao)>,
     notas: BTreeMap<String, (Formacao, Nota)>,
@@ -113,24 +108,69 @@ fn casas_para(meta: &Value, alcance: i64) -> Vec<i64> {
     v
 }
 
-impl Treino {
-    pub fn novo(dono: &str, ligado: bool) -> Self {
+/// O `i`-ésimo (revezando entre os 3 mais comuns) time do meta, como pokémon teste.
+fn adversario_do_meta(meta: &Value, i: u64) -> Option<Vec<Value>> {
+    let times = meta.get("times")?.as_array()?;
+    let t = times.get((i % times.len().clamp(1, 3) as u64) as usize)?;
+    let especies = meta.get("especies")?.as_array()?;
+    let mut usadas = Vec::new();
+    let mut a = Vec::new();
+    for sp in t
+        .get("especies")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_i64)
+    {
+        let e = especies
+            .iter()
+            .find(|e| e.get("especie").and_then(Value::as_i64) == Some(sp));
+        let nivel = e
+            .and_then(|e| e.get("nivel_medio")?.as_i64())
+            .unwrap_or(100)
+            .clamp(1, 1000);
+        let alcance = e.and_then(|e| e.get("alcance")?.as_i64()).unwrap_or(1);
+        let preferida = e
+            .and_then(|e| e.get("casas")?.as_array()?.first()?.get(0)?.as_i64())
+            .into_iter();
+        let casa = preferida
+            .chain(casas_para(meta, alcance))
+            .chain(1..=25)
+            .find(|c| !usadas.contains(c))?;
+        usadas.push(casa);
+        a.push(json!({"casa": casa, "teste": {
+            "speciesId": sp, "level": nivel,
+            "ivs": {"hp": 31, "atk": 31, "def": 31, "spAtk": 31, "spDef": 31, "speed": 31},
+            "qualidade": 1.5, "potencia": 1, "shiny": false, "tmFisico": false, "tmElemental": null,
+        }}));
+    }
+    (!a.is_empty()).then_some(a)
+}
+
+impl TreinoConta {
+    pub fn nova() -> Self {
         Self {
-            dono: dono.to_owned(),
-            ligado,
-            time: Vec::new(),
-            atual: Formacao::new(),
-            especie_de: HashMap::new(),
-            faixa: None,
-            meta: None,
-            meta_em: None,
             livre_em: i64::MIN / 2,
-            esperando: None,
-            notas: BTreeMap::new(),
-            rodada: 0,
-            aplicar: None,
-            mudou: false,
+            ..Self::default()
         }
+    }
+
+    /// Faixa de pontos do PvP da conta (de 100 em 100), quando já veio.
+    pub fn faixa(&self) -> Option<i64> {
+        self.faixa
+    }
+
+    pub fn definir_meta(&mut self, meta: &Value) {
+        self.meta = Some(meta.clone());
+    }
+
+    /// Metas das faixas acima, da mais perto para a mais longe.
+    pub fn definir_acima(&mut self, metas: Vec<Value>) {
+        self.acima = metas;
+    }
+
+    /// Algo mudou desde o último [`TreinoConta::notas_json`]?
+    pub fn mudou(&mut self) -> bool {
+        std::mem::take(&mut self.mudou)
     }
 
     fn alcance(&self, id: i64) -> i64 {
@@ -145,51 +185,25 @@ impl Treino {
             .unwrap_or(1)
     }
 
-    /// Time adversário do meta (reveza entre os 3 mais comuns) como pokémon teste.
+    /// Time adversário como pokémon teste: reveza entre o meta da faixa da conta e o das
+    /// faixas acima (as que têm amostra) e, em cada um, entre os 3 times mais comuns.
     fn adversario(&self) -> Option<Vec<Value>> {
-        let meta = self.meta.as_ref()?;
-        if meta.get("partidas").and_then(Value::as_u64).unwrap_or(0) < MIN_PARTIDAS_META {
+        let metas: Vec<&Value> = self
+            .meta
+            .iter()
+            .chain(&self.acima)
+            .filter(|m| m.get("partidas").and_then(Value::as_u64).unwrap_or(0) >= MIN_PARTIDAS_META)
+            .collect();
+        if metas.is_empty() {
             return None;
         }
-        let times = meta.get("times")?.as_array()?;
-        let t = times.get((self.rodada % times.len().clamp(1, 3) as u64) as usize)?;
-        let especies = meta.get("especies")?.as_array()?;
-        let mut usadas = Vec::new();
-        let mut a = Vec::new();
-        for sp in t
-            .get("especies")?
-            .as_array()?
-            .iter()
-            .filter_map(Value::as_i64)
-        {
-            let e = especies
-                .iter()
-                .find(|e| e.get("especie").and_then(Value::as_i64) == Some(sp));
-            let nivel = e
-                .and_then(|e| e.get("nivel_medio")?.as_i64())
-                .unwrap_or(100)
-                .clamp(1, 1000);
-            let alcance = e.and_then(|e| e.get("alcance")?.as_i64()).unwrap_or(1);
-            let preferida = e
-                .and_then(|e| e.get("casas")?.as_array()?.first()?.get(0)?.as_i64())
-                .into_iter();
-            let casa = preferida
-                .chain(casas_para(meta, alcance))
-                .chain(1..=25)
-                .find(|c| !usadas.contains(c))?;
-            usadas.push(casa);
-            a.push(json!({"casa": casa, "teste": {
-                "speciesId": sp, "level": nivel,
-                "ivs": {"hp": 31, "atk": 31, "def": 31, "spAtk": 31, "spDef": 31, "speed": 31},
-                "qualidade": 1.5, "potencia": 1, "shiny": false, "tmFisico": false, "tmElemental": null,
-            }}));
-        }
-        (!a.is_empty()).then_some(a)
+        let n = metas.len() as u64;
+        adversario_do_meta(metas[(self.rodada % n) as usize], self.rodada / n)
     }
 
     /// Próxima formação a testar: a atual até ter amostra; depois, a melhor com um pokémon
     /// mudado de casa (ou de novo a melhor, para confirmar, se ainda tem poucas lutas).
-    fn candidata(&self) -> Formacao {
+    fn candidata(&self, comum: &Comum) -> Formacao {
         let atual_k = chave(&self.atual);
         let atual_lutas = self.notas.get(&atual_k).map_or(0, |x| x.1.lutas);
         if atual_lutas < MIN_LUTAS {
@@ -220,6 +234,8 @@ impl Treino {
             .into_iter()
             .filter(|c| !ocupadas.contains(c))
             .collect();
+        // O que as outras contas já aprenderam sobre a espécie vem primeiro.
+        let opcoes = comum.ordenar(self.especie_de.get(&id).copied(), opcoes);
         let mut nova = melhor.clone();
         if !opcoes.is_empty() {
             let pos = (self.rodada / self.time.len() as u64) as usize % opcoes.len();
@@ -248,17 +264,10 @@ impl Treino {
     }
 }
 
-impl Fluxo for Treino {
-    fn nome(&self) -> &'static str {
-        "treino"
-    }
-
-    fn receber(&mut self, _msg: &Value, _agora: i64) {}
-
-    fn receber_conta(&mut self, conta: &str, msg: &Value, agora: i64) {
-        if !self.ligado || !conta.eq_ignore_ascii_case(&self.dono) {
-            return;
-        }
+impl TreinoConta {
+    /// Aplica uma mensagem da conta. Numa luta de treino terminada, devolve as (espécie, casa)
+    /// do time e a nota, para o aprendizado comum.
+    pub fn receber(&mut self, msg: &Value, agora: i64) -> Option<(Vec<(i64, i64)>, f64)> {
         match msg.get("t").and_then(Value::as_str) {
             Some("welcome" | "estado") => {
                 let e = msg.get("estado");
@@ -298,29 +307,22 @@ impl Fluxo for Treino {
                         self.livre_em = agora + cd;
                     }
                     if let (Some((_, f)), Some(n)) = (self.esperando.take(), nota_da_luta(r)) {
+                        let pares = f
+                            .iter()
+                            .filter_map(|(id, c)| Some((*self.especie_de.get(id)?, *c)))
+                            .collect();
                         self.registrar(f, n);
+                        return Some((pares, n));
                     }
                 }
             }
             _ => {}
         }
+        None
     }
 
-    fn consulta(&mut self, agora: i64) -> Option<String> {
-        let faixa = self.faixa.filter(|_| self.ligado)?;
-        if self.meta_em.is_some_and(|t| agora - t < META_MS) {
-            return None;
-        }
-        self.meta_em = Some(agora);
-        Some(format!("/api/pvp/meta?faixa={faixa}&dias=14"))
-    }
-
-    fn resposta(&mut self, _rota: &str, v: &Value, _agora: i64) {
-        self.meta = Some(v.clone());
-    }
-
-    fn pedir(&mut self, agora: i64) -> Option<Value> {
-        if !self.ligado || self.time.is_empty() || self.atual.len() != self.time.len() {
+    pub fn pedir(&mut self, agora: i64, comum: &Comum) -> Option<Value> {
+        if self.time.is_empty() || self.atual.len() != self.time.len() {
             return None;
         }
         if let Some(f) = self.aplicar.take() {
@@ -336,7 +338,7 @@ impl Fluxo for Treino {
             return None;
         }
         let a = self.adversario()?;
-        let f = self.candidata();
+        let f = self.candidata(comum);
         self.rodada += 1;
         self.esperando = Some((agora, f.clone()));
         self.livre_em = agora + COOLDOWN_MS;
@@ -347,28 +349,15 @@ impl Fluxo for Treino {
         Some(json!({"t": "treino.lutar", "a": a, "b": b}))
     }
 
-    fn entregar(&mut self, _agora: i64) -> Vec<Entrega> {
-        Vec::new()
+    pub fn notas_json(&self) -> Vec<Value> {
+        self.notas
+            .values()
+            .map(|(f, n)| json!({"f": f, "soma": n.soma, "lutas": n.lutas}))
+            .collect()
     }
 
-    fn salvar(&mut self) -> Option<Value> {
-        std::mem::take(&mut self.mudou).then(|| {
-            let n: Vec<Value> = self
-                .notas
-                .values()
-                .map(|(f, n)| json!({"f": f, "soma": n.soma, "lutas": n.lutas}))
-                .collect();
-            json!({"v": 1, "notas": n})
-        })
-    }
-
-    fn restaurar(&mut self, v: &Value) {
-        for x in v
-            .get("notas")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
+    pub fn restaurar(&mut self, notas: &[Value]) {
+        for x in notas {
             let f: Formacao = x
                 .get("f")
                 .and_then(Value::as_object)
@@ -391,87 +380,10 @@ impl Fluxo for Treino {
 mod testes {
     use super::*;
 
-    fn meta() -> Value {
-        json!({"partidas": 10,
-            "especies": [{"especie": 6, "alcance": 3, "nivel_medio": 300, "casas": [[17, 5, 0.6]]},
-                         {"especie": 127, "alcance": 1, "nivel_medio": 100, "casas": [[2, 5, 0.6]]}],
-            "alcances": [{"alcance": 1, "casas": [[3, 9, 0.7]]}],
-            "times": [{"especies": [6, 127]}]})
-    }
-
-    fn pronto() -> Treino {
-        let mut t = Treino::novo("Sikien", true);
-        t.receber_conta(
-            "sikien",
-            &json!({"t": "welcome", "estado": {"pokemons": [
-            {"id": 1, "speciesId": 127}, {"id": 2, "speciesId": 6}]}}),
-            0,
-        );
-        t.receber_conta(
-            "Sikien",
-            &json!({"t": "pvp", "time": [1, 2], "casas": {"1": 2, "2": 17},
-            "rank": {"pontos": 461}}),
-            0,
-        );
-        t
-    }
-
-    fn resultado(venceu_b: bool) -> Value {
-        json!({"t": "treino", "resultado": {"venceuA": !venceu_b, "cooldownMs": 1000,
-            "placar": [{"id": 1, "dano": 100}, {"id": 2, "dano": if venceu_b { 300 } else { 100 }}]}})
-    }
-
     #[test]
-    fn nota_e_desligado() {
+    fn nota_da_luta_soma_vitoria_e_margem() {
         let r =
             json!({"venceuA": false, "placar": [{"id": 1, "dano": 100}, {"id": 2, "dano": 300}]});
         assert_eq!(nota_da_luta(&r), Some(1.25));
-        let mut off = Treino::novo("Sikien", false);
-        off.receber_conta(
-            "Sikien",
-            &json!({"t": "pvp", "time": [1], "casas": {"1": 2}}),
-            0,
-        );
-        assert_eq!(off.pedir(0), None);
-        assert_eq!(off.consulta(0), None);
-    }
-
-    #[test]
-    fn testa_a_atual_depois_muda_e_aplica_a_melhor() {
-        let mut t = pronto();
-        assert_eq!(
-            t.consulta(0).as_deref(),
-            Some("/api/pvp/meta?faixa=400&dias=14")
-        );
-        assert_eq!(t.pedir(0), None, "sem meta ainda");
-        t.resposta("", &meta(), 0);
-        let mut agora = 0;
-        let mut aplicou = None;
-        for i in 0..40 {
-            agora += 10_000;
-            let Some(p) = t.pedir(agora) else { continue };
-            if p["t"] == "pvp.time.salvar" {
-                aplicou = Some(p);
-                break;
-            }
-            assert_eq!(p["t"], "treino.lutar");
-            assert_eq!(p["a"][0]["teste"]["speciesId"], 6);
-            if i < 3 {
-                assert_eq!(
-                    p["b"],
-                    json!([{"meu": 1, "casa": 2}, {"meu": 2, "casa": 17}])
-                );
-            }
-            // A atual perde; qualquer outra formação vence.
-            let atual = p["b"] == json!([{"meu": 1, "casa": 2}, {"meu": 2, "casa": 17}]);
-            t.receber_conta("Sikien", &resultado(!atual), agora);
-        }
-        let p = aplicou.unwrap_or_default();
-        assert_eq!(p["pokemonIds"], json!([1, 2]));
-        assert_ne!(p["casas"], json!({"1": 2, "2": 17}));
-        assert!(t.salvar().is_some());
-        let mut outro = pronto();
-        outro.restaurar(&t.salvar().unwrap_or_else(|| json!({"notas": t.notas.values().map(|(f, n)| json!({"f": f, "soma": n.soma, "lutas": n.lutas})).collect::<Vec<_>>()})));
-        assert!(!outro.notas.is_empty());
     }
 }
