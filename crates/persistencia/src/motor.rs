@@ -550,18 +550,25 @@ pub async fn resultados_comandos(
     .await
 }
 
-/// Contas do app: `{conta, nick, em}` (última janela recebida), da mais recente.
+/// Contas do app com o resumo da última janela (para o painel): rótulo, nick no jogo, quando
+/// chegou, hunt, ouro, nível do treinador e o pokémon ativo (textos da tela, espécie e shiny).
 pub async fn contas_do_app(db: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
-    let linhas: Vec<(String, Option<String>, i64)> = sqlx::query_as(
-        "SELECT conta, janela->>'nick', (extract(epoch FROM em) * 1000)::bigint
+    sqlx::query_scalar(
+        "SELECT jsonb_build_object(
+                 'conta', conta,
+                 'nick', janela->>'nick',
+                 'em', (extract(epoch FROM em) * 1000)::bigint,
+                 'hunt', janela->'ultimo'->>'hunt',
+                 'gold', janela->'ultimo'->>'gold',
+                 'trLv', janela->'ultimo'->>'trLv',
+                 'trXp', janela->'ultimo'->>'trXp',
+                 'ativo', janela->'ultimo'->'ativo',
+                 'especie', janela->'ultimo'->'io'->'active'->'speciesId',
+                 'shiny', janela->'ultimo'->'io'->'active'->'shiny')
            FROM nexus.motor_janela ORDER BY conta",
     )
     .fetch_all(db)
-    .await?;
-    Ok(linhas
-        .into_iter()
-        .map(|(conta, nick, em)| serde_json::json!({"conta": conta, "nick": nick, "em": em}))
-        .collect())
+    .await
 }
 
 #[cfg(test)]

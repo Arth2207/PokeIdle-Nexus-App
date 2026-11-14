@@ -54,6 +54,34 @@ pub fn Barras(
     }
 }
 
+/// Colunas verticais (série curta no tempo): a última leva o acento; linha tracejada na média.
+#[component]
+pub fn Colunas(linhas: Vec<(String, f64, String)>) -> impl IntoView {
+    let max = linhas.iter().map(|l| l.1).fold(0.0_f64, f64::max).max(1e-9);
+    let media = if linhas.is_empty() {
+        0.0
+    } else {
+        linhas.iter().map(|l| l.1).sum::<f64>() / linhas.len() as f64
+    };
+    let n = linhas.len();
+    let topo_media = format!("bottom:{:.1}%", (media / max * 100.0).clamp(0.0, 100.0));
+    view! {
+        <div class="colunas">
+            <div class="col-media" style=topo_media></div>
+            {linhas.into_iter().enumerate().map(|(i, (nome, v, rot))| {
+                let h = format!("height:{:.1}%", (v.max(0.0) / max * 100.0).clamp(0.0, 100.0));
+                view! {
+                    <div class="col" class:ativo=i + 1 == n>
+                        <span class="col-rot">{rot}</span>
+                        <span class="col-trilho"><span class="col-val" style=h></span></span>
+                        <span class="col-nome">{nome}</span>
+                    </div>
+                }
+            }).collect_view()}
+        </div>
+    }
+}
+
 /// Tabela densa com cabeçalho; a primeira coluna à esquerda, o resto alinhado à direita.
 #[component]
 pub fn Tabela(cab: Vec<&'static str>, linhas: Vec<Vec<String>>) -> impl IntoView {
@@ -164,6 +192,38 @@ pub const CSS: &str = r#"
 .casa.ocupada { background:rgba(200,255,46,.55); }
 .duas { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
 @media (max-width: 1100px) { .duas { grid-template-columns:1fr; } }
+.colunas { position:relative; display:flex; gap:10px; align-items:stretch; height:170px; padding-top:18px; }
+.col { flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; min-width:0; }
+.col-trilho { flex:1; width:100%; display:flex; align-items:flex-end; }
+.col-val { display:block; width:100%; border-radius:8px 8px 3px 3px; background:#9AA3AD; }
+.col.ativo .col-val { background:var(--neon); }
+.col-rot { font-size:11px; font-variant-numeric:tabular-nums; color:var(--texto-2); }
+.col-nome { font-size:11px; color:var(--texto-3); }
+.col-media { position:absolute; left:0; right:0; border-top:1px dashed var(--texto-3); margin-bottom:22px; pointer-events:none; }
+.vg { display:grid; grid-template-columns:1.6fr 1fr; gap:16px; margin-bottom:16px; }
+.vg-base { display:grid; grid-template-columns:1.3fr 1fr; gap:16px; }
+@media (max-width: 1100px) { .vg, .vg-base { grid-template-columns:1fr; } }
+.caixa { background:rgba(255,255,255,.55); border:1px solid var(--vidro-borda); border-radius:18px; padding:14px 16px; }
+.caixa-t { font:700 13px "Space Grotesk", Inter, sans-serif; letter-spacing:.1em; text-transform:uppercase; color:var(--texto-2); margin-bottom:10px; }
+.scan { display:grid; grid-template-columns:minmax(180px,1fr) 1.1fr; gap:14px; align-items:center; }
+.scan-img { position:relative; display:flex; justify-content:center; }
+.scan-img img { width:100%; max-width:260px; aspect-ratio:1; object-fit:contain; filter:drop-shadow(0 18px 18px rgba(22,24,28,.28)); }
+.scan-img::after { content:""; position:absolute; bottom:4%; width:62%; height:12%; border-radius:50%; background:radial-gradient(rgba(200,255,46,.6), transparent 70%); z-index:-1; }
+.scan-nome { font:700 30px "Space Grotesk", Inter, sans-serif; }
+.scan-sub { font-size:12px; color:var(--texto-3); letter-spacing:.08em; }
+.chips { display:flex; gap:6px; flex-wrap:wrap; margin:8px 0; }
+.chip { font-size:12px; font-weight:600; padding:3px 10px; border-radius:999px; background:var(--trilho); }
+.medidor { display:grid; grid-template-columns:28px 1fr auto; gap:8px; align-items:center; font-size:12px; margin-top:6px; }
+.medidor .trilho { height:9px; border-radius:999px; background:var(--trilho); overflow:hidden; }
+.medidor .val { display:block; height:100%; border-radius:999px; background:var(--melhora); }
+.medidor .xp .val { background:var(--neon); }
+.pilula { display:inline-flex; gap:6px; align-items:center; margin-top:10px; padding:5px 12px; border-radius:999px; background:var(--neon); font-weight:600; font-size:13px; }
+.acao-v { display:flex; gap:10px; align-items:center; }
+.acao-v .veredito { flex:1; }
+.diario-m { display:flex; flex-direction:column; gap:6px; font-size:13px; max-height:220px; overflow:auto; }
+.diario-m div { display:grid; grid-template-columns:44px 90px 1fr; gap:8px; }
+.diario-m .h { font-variant-numeric:tabular-nums; color:var(--texto-3); }
+.diario-m .falha { color:var(--piora); }
 .horas { display:grid; grid-template-columns:repeat(24,1fr); gap:2px; }
 .horas div { height:26px; border-radius:4px; background:var(--melhora); }
 .horas-rot { display:grid; grid-template-columns:repeat(24,1fr); font-size:10px; color:var(--texto-3); text-align:center; }
