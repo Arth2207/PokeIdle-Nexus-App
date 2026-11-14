@@ -213,14 +213,31 @@ pub async fn colecao(
         Ok(n) => n,
         Err((st, msg)) => return erro(st, msg),
     };
+    let motor = estado.equipes.motor().await.ok();
     match estado.equipes.estado_fresco().await {
         Ok(e) => {
             let c = e.conta(Some(&nick));
+            let mut pokemons = c
+                .and_then(|c| c.get("pokemons"))
+                .cloned()
+                .unwrap_or_else(|| json!([]));
+            // `dex`: a espécie base para a imagem (formas especiais do jogo pelo nome).
+            if let (Some(m), Some(ps)) = (motor.as_ref(), pokemons.as_array_mut()) {
+                for p in ps {
+                    let dex = p
+                        .get("speciesId")
+                        .and_then(Value::as_i64)
+                        .and_then(|id| m.dex_de(id));
+                    if let (Some(d), Some(o)) = (dex, p.as_object_mut()) {
+                        o.insert("dex".into(), json!(d));
+                    }
+                }
+            }
             Json(json!({
                 "nick": nick,
                 "trLv": c.and_then(|c| c.get("trLv")),
                 "em": c.and_then(|c| c.get("em")),
-                "pokemons": c.and_then(|c| c.get("pokemons")).cloned().unwrap_or_else(|| json!([])),
+                "pokemons": pokemons,
             }))
             .into_response()
         }

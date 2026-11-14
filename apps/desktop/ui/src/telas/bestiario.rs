@@ -19,12 +19,17 @@ const ABAS: &[&str] = &["Coleção", "Pokédex"];
 /// expõe; formas especiais (mega etc.) contam pela forma base. Expor a pokédex do Nexus se faltar.
 const POKEDEX: i64 = 1025;
 
+/// Espécie base para a imagem: a que o servidor resolveu (`dex`), senão a regra local.
+fn dex(p: &Value) -> i64 {
+    num(p, "dex").map_or_else(
+        || especie_da_imagem(num(p, "speciesId").unwrap_or(0.0) as i64),
+        |d| d as i64,
+    )
+}
+
 fn img(p: &Value) -> String {
     let sh = p.get("shiny").and_then(Value::as_bool) == Some(true);
-    sprite(
-        especie_da_imagem(num(p, "speciesId").unwrap_or(0.0) as i64),
-        sh,
-    )
+    sprite(dex(p), sh)
 }
 
 /// Ficha do exemplar escolhido: stats, IVs, nota e o valor na Bolsa.
@@ -98,7 +103,7 @@ pub fn Bestiario(e: Estado) -> impl IntoView {
         <Abas opcoes=ABAS ativa=aba />
         {move || (aba.get() == "Pokédex").then(|| carregado(col.get(), |v| {
             let tem: std::collections::BTreeSet<i64> = lista(&v, "pokemons").iter()
-                .filter_map(|p| p.get("speciesId")?.as_i64()).map(especie_da_imagem).collect();
+                .map(dex).filter(|d| *d > 0).collect();
             let n = (1..=POKEDEX).filter(|i| tem.contains(i)).count();
             view! {
                 <div class="medidor"><b></b><span class="trilho"><span class="val" style=format!("width:{:.1}%", n as f64 / POKEDEX as f64 * 100.0)></span></span>

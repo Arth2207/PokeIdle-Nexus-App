@@ -213,6 +213,12 @@ impl MotorEquipes {
         (m > 0 && m <= 1025).then_some(m)
     }
 
+    /// Id da espécie base (Pokédex nacional) de uma espécie do jogo, para a imagem: as formas
+    /// especiais ("Furious Scizor", 2050) caem na base pelo nome ("Scizor", 212).
+    pub fn dex_de(&self, id: i64) -> Option<i64> {
+        self.dex.por_id(id).and_then(|sp| self.dex_base(sp))
+    }
+
     /// `spriteDe`.
     pub fn sprite(&self, sp: Option<&EspecieCombate>, shiny: bool) -> Value {
         sp.and_then(|sp| self.dex_base(sp))
