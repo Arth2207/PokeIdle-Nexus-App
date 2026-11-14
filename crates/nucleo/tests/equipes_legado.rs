@@ -7,7 +7,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use nucleo::combate::especie::Pokedex;
-use nucleo::equipes::{resposta_bosses, resposta_plano, EstadoEquipes, MotorEquipes};
+use nucleo::equipes::{resposta_bosses, resposta_lab, resposta_plano, EstadoEquipes, MotorEquipes};
 use serde_json::Value;
 
 mod comum;
@@ -90,4 +90,39 @@ fn ingest_como_o_legado() {
     assert_eq!(e.bosses_em, 1000);
     // Sem nick, a primeira conta.
     assert!(e.conta(None).is_some());
+}
+
+#[test]
+fn lab_com_a_melhor_equipe_da_o_mesmo_que_o_plano() {
+    let m = motor();
+    let f: Value = serde_json::from_str(include_str!("fixtures/equipes-legado.json")).unwrap();
+    let mut conferidos = 0;
+    for cenario in f["cenarios"].as_array().unwrap() {
+        let estado: EstadoEquipes = serde_json::from_value(cenario["estado"].clone()).unwrap();
+        for c in cenario["chamadas"].as_array().unwrap() {
+            let (Some(nick), Some(boss)) =
+                (c["query"]["nick"].as_str(), c["query"]["boss"].as_str())
+            else {
+                continue;
+            };
+            let Ok(p) = resposta_plano(&m, &estado, Some(nick), Some(boss), None) else {
+                continue;
+            };
+            let Some(eq) = p["minha"]["equipe"].as_array() else {
+                continue;
+            };
+            let ids: Vec<String> = eq
+                .iter()
+                .map(|x| match &x["id"] {
+                    Value::String(t) => t.clone(),
+                    v => v.to_string(),
+                })
+                .collect();
+            let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+            let lab = resposta_lab(&m, &estado, Some(nick), boss, &ids).unwrap();
+            assert_eq!(lab["cobertura"], p["minha"]["cobertura"], "{nick} {boss}");
+            conferidos += 1;
+        }
+    }
+    assert!(conferidos > 0, "nenhum cenário com equipe da conta");
 }

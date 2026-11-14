@@ -87,11 +87,12 @@ fn comando_medias(nick: &str, dias: i64) -> Decisao {
 }
 
 /// `motorMedias`: preço médio do Mercado (só consulta), a cada 30 min por conta.
+/// O jogo responde `dias: 7` mesmo ao pedido de 1 dia (visto em 528 pedidos, 14/11), então
+/// `medias1` nunca chega: exigir as duas, como o legado, repetia os pedidos a cada 5 min.
 pub fn medias(_d: &Value, laco: &mut EstadoLaco, r: &Relogio, conta: &ContaViva) -> Vec<Decisao> {
     let agora = r.agora_ms as f64;
     let m = caminho(&conta.ultimo, &["hdx", "medias"]);
-    let m1 = caminho(&conta.ultimo, &["hdx", "medias1"]);
-    if verdadeiro(m) && verdadeiro(m1) && agora - mais(m.and_then(|x| x.get("t"))) < 30.0 * MIN_MS {
+    if verdadeiro(m) && agora - mais(m.and_then(|x| x.get("t"))) < 30.0 * MIN_MS {
         return Vec::new();
     }
     let em = laco.marca(&conta.nick, "mediasEm");
@@ -99,10 +100,7 @@ pub fn medias(_d: &Value, laco: &mut EstadoLaco, r: &Relogio, conta: &ContaViva)
         return Vec::new();
     }
     laco.marcar(&conta.nick, "mediasEm", agora);
-    vec![
-        comando_medias(&conta.nick, 7),
-        comando_medias(&conta.nick, 1),
-    ]
+    vec![comando_medias(&conta.nick, 7)]
 }
 
 /// `motorBola`: a bola automática fica sempre ligada (partes do app desligam por um instante
@@ -399,18 +397,19 @@ mod testes {
     }
 
     #[test]
-    fn medias_pede_duas_vezes_e_espera_5_min() {
+    fn medias_pede_7_dias_e_espera_5_min() {
         let d = dados();
         let mut laco = EstadoLaco::default();
         let c = conta(json!({"hdx": {}}));
         let v = medias(&d, &mut laco, &rel(10_000_000), &c);
-        assert_eq!(v.len(), 2);
+        assert_eq!(v.len(), 1);
         assert!(medias(&d, &mut laco, &rel(10_000_000 + 299_000), &c).is_empty());
         assert_eq!(
             medias(&d, &mut laco, &rel(10_000_000 + 300_000), &c).len(),
-            2
+            1
         );
-        let fresca = conta(json!({"hdx": {"medias": {"t": 9_999_000}, "medias1": {}}}));
+        // Só a de 7 dias fresca já basta (o jogo nunca manda a de 1 dia).
+        let fresca = conta(json!({"hdx": {"medias": {"t": 9_999_000}}}));
         let mut outro = EstadoLaco::default();
         assert!(medias(&d, &mut outro, &rel(10_000_000), &fresca).is_empty());
     }

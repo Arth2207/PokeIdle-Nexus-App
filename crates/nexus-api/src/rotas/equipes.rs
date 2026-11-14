@@ -156,6 +156,39 @@ pub async fn plano(
     }
 }
 
+/// `GET /api/equipes/lab?nick=&boss=&ids=1,2,3`: avalia a equipe montada à mão.
+pub async fn lab(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Query(p): Params,
+) -> Response {
+    let nick = match nick_de(cliente.as_ref(), p.get("nick").map(String::as_str)) {
+        Ok(n) => n,
+        Err(()) => return proibido(),
+    };
+    let (motor, est) = dados!(estado);
+    let r = tokio::task::spawn_blocking(move || {
+        let ids: Vec<&str> = p
+            .get("ids")
+            .map(|t| {
+                t.split(',')
+                    .map(str::trim)
+                    .filter(|x| !x.is_empty())
+                    .take(6)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let boss = p.get("boss").map(String::as_str).unwrap_or_default();
+        equipes::resposta_lab(&motor, &est, nick.as_deref(), boss, &ids)
+    })
+    .await;
+    match r {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => erro(e.status, e.erro),
+        Err(_) => erro(500, "falha no cálculo"),
+    }
+}
+
 /// `POST /api/equipes/ingest`: só com `NEXUS_ESCRITA_EQUIPES=true`. Até o cutover, quem
 /// recebe o relay é o legado, e o estado chega aqui pela importação.
 pub async fn ingest(

@@ -94,23 +94,90 @@ fn por_que(minha: &Value) -> Option<String> {
     ))
 }
 
+/// Linha do tempo da luta no modelo: cada um dos 5 primeiros luta sozinho até cair
+/// (`D` = dano por segundo × tempo até cair) e o próximo entra em seguida.
+/// Devolve os pontos (segundo, HP do boss em %) e o segundo da vitória, se vence.
+pub fn replay(eq: &Value, hp: f64) -> (Vec<(f64, f64)>, Option<f64>) {
+    let mut pts = vec![(0.0, 100.0)];
+    if hp <= 0.0 {
+        return (pts, None);
+    }
+    let (mut t, mut resta) = (0.0, hp);
+    for x in lista(eq, "equipe").iter().take(5) {
+        let (d, td) = (num(x, "D").unwrap_or(0.0), num(x, "tDie").unwrap_or(0.0));
+        if td <= 0.0 || d <= 0.0 {
+            continue;
+        }
+        if d >= resta {
+            let fim = t + td * resta / d;
+            pts.push((fim, 0.0));
+            return (pts, Some(fim));
+        }
+        t += td;
+        resta -= d;
+        pts.push((t, resta / hp * 100.0));
+    }
+    (pts, None)
+}
+
+fn minutos(t: f64) -> String {
+    format!("{}m{:02}s", (t / 60.0) as i64, (t % 60.0) as i64)
+}
+
+/// HP do boss ao longo da luta (eixo x em segundos, proporcional ao tempo).
+fn grafico_replay(eq: &Value, hp: f64) -> impl IntoView {
+    let (pts, fim) = replay(eq, hp);
+    let tmax = pts.last().map_or(1.0, |p| p.0).max(1.0);
+    let (w, h) = (600.0, 140.0);
+    let d: String = pts
+        .iter()
+        .enumerate()
+        .map(|(i, (t, v))| {
+            format!(
+                "{}{:.1},{:.1}",
+                if i == 0 { "M" } else { " L" },
+                t / tmax * w,
+                6.0 + (100.0 - v) / 100.0 * (h - 12.0)
+            )
+        })
+        .collect();
+    let nomes: Vec<String> = lista(eq, "equipe")
+        .iter()
+        .take(5)
+        .map(|x| txt(x, "nome"))
+        .collect();
+    let fim_txt = fim.map_or_else(
+        || {
+            format!(
+                "Não vence: o boss fica com {:.0}% do HP.",
+                pts.last().map_or(100.0, |p| p.1)
+            )
+        },
+        |f| format!("Vence em {}.", minutos(f)),
+    );
+    view! {
+        <svg class="grafico-linha" viewBox=format!("0 0 {w} {h}")>
+            <path class="linha-v" d=d fill="none" stroke="var(--neon)" stroke-width="2.5" />
+        </svg>
+        <div class="linha-rot"><span>"0s"</span><span>{minutos(tmax)}</span></div>
+        <div class="dica">{format!("Ordem: {} · {fim_txt} Modelo analítico (sem sorte): cada um luta até cair e o próximo entra.", nomes.join(" → "))}</div>
+    }
+}
+
 fn detalhe(p: Value) -> AnyView {
     let boss = p.get("boss").cloned().unwrap_or(Value::Null);
     let minha = p.get("minha").cloned().unwrap_or(Value::Null);
     let ideal = p.get("ideal").cloned().unwrap_or(Value::Null);
-    let dps: f64 = lista(&minha, "equipe")
-        .iter()
-        .filter_map(|x| num(x, "dpsOut"))
-        .sum();
-    let tempo = num(&boss, "hp").filter(|_| dps > 0.0).map(|hp| hp / dps);
+    let hp = num(&boss, "hp").unwrap_or(0.0);
+    let tempo = replay(&minha, hp).1;
     let cm = num(&minha, "cobertura").unwrap_or(0.0);
     view! {
         <div class="secao">{format!("{} · nível {}", txt(&boss, "nome"), inteiro(num(&boss, "teamLevel").unwrap_or(0.0)))}</div>
         <div class="kpis">
             <Kpi titulo="Chance de vitória" valor=pct(cm) comparacao="meta 100%".to_owned() bom=Some(cm >= 1.0)
                 ajuda="Dano total da melhor equipe da conta ÷ HP do boss (modelo de combate)." />
-            <Kpi titulo="Tempo de luta" valor=tempo.map_or("—".into(), |t| format!("{}m{:02}s", (t / 60.0) as i64, (t % 60.0) as i64))
-                ajuda="HP do boss ÷ dano por segundo somado da equipe." />
+            <Kpi titulo="Tempo de luta" valor=tempo.map_or("não vence".into(), minutos)
+                ajuda="Pela linha do tempo do modelo: cada um luta até cair e o próximo entra." />
             <Kpi titulo="Força vs. ideal" valor=pct(num(&minha, "poderVsIdeal").unwrap_or(0.0)) />
             <Kpi titulo="Ideal" valor=pct(num(&ideal, "cobertura").unwrap_or(0.0)) ajuda="Chance da equipe ideal, que independe do que a conta tem." />
         </div>
@@ -127,9 +194,76 @@ fn detalhe(p: Value) -> AnyView {
                 <Tabela cab=vec!["Pokémon", "Nível", "Dano", "Cai em", "Fraqueza"] linhas=equipe(&ideal) />
             </div>
         </div>
+        <div class="caixa" style="margin-top:14px">
+            <div class="caixa-t">"Replay da luta · melhor disponível"</div>
+            {grafico_replay(&minha, hp)}
+        </div>
         <div class="dica">{txt(&p, "nota")}</div>
     }
     .into_any()
+}
+
+/// Laboratório: monta até 6 pokémon da coleção à mão e vê a chance contra o boss escolhido.
+fn laboratorio(e: Estado, versao: RwSignal<u32>, boss: RwSignal<String>) -> impl IntoView {
+    let col = recurso(e, versao, move || {
+        nick_ativo(e).map(|n| format!("/api/pvp/colecao?nick={n}"))
+    });
+    let ids = RwSignal::new(Vec::<(String, String)>::new());
+    let q = RwSignal::new(String::new());
+    let lab = recurso(e, versao, move || {
+        let n = nick_ativo(e)?;
+        let l = ids.get();
+        let b = boss.get();
+        (!l.is_empty() && !b.is_empty()).then(|| {
+            let v: Vec<String> = l.into_iter().map(|x| x.0).collect();
+            format!("/api/equipes/lab?nick={n}&boss={b}&ids={}", v.join(","))
+        })
+    });
+    view! {
+        <div class="caixa" style="margin-top:14px">
+            <div class="caixa-t">"Laboratório · monte a equipe"</div>
+            <div class="chips">
+                {move || ids.get().into_iter().map(|(id, nome)| view! {
+                    <span class="chip" title="Tirar" style="cursor:pointer" on:click=move |_| ids.update(|l| l.retain(|x| x.0 != id))>{format!("{nome} ✕")}</span>
+                }).collect_view()}
+            </div>
+            <input class="caixa" placeholder="Buscar na coleção…" prop:value=move || q.get() on:input=move |ev| q.set(event_target_value(&ev)) />
+            {move || carregado(col.get(), move |c| {
+                let f = q.get().to_lowercase();
+                let mut l: Vec<Value> = lista(&c, "pokemons").iter()
+                    .filter(|x| f.is_empty() || txt(x, "nome").to_lowercase().contains(&f))
+                    .cloned().collect();
+                l.sort_by(|a, b| num(b, "level").unwrap_or(0.0).total_cmp(&num(a, "level").unwrap_or(0.0)));
+                view! {
+                    <div class="chips">
+                        {l.into_iter().take(30).map(|x| {
+                            let id = match x.get("id") { Some(Value::String(t)) => t.clone(), Some(v) => v.to_string(), None => String::new() };
+                            let nome = txt(&x, "nome");
+                            let rot = format!("{nome} · nv {}", inteiro(num(&x, "level").unwrap_or(0.0)));
+                            view! {
+                                <span class="chip" style="cursor:pointer" on:click=move |_| ids.update(|v| {
+                                    if v.len() < 6 && !v.iter().any(|y| y.0 == id) { v.push((id.clone(), nome.clone())); }
+                                })>{rot}</span>
+                            }
+                        }).collect_view()}
+                    </div>
+                }
+            })}
+            {move || (!ids.get().is_empty()).then(|| carregado(lab.get(), |r| {
+                let hp = r.pointer("/boss/hp").and_then(Value::as_f64).unwrap_or(0.0);
+                let c = num(&r, "cobertura").unwrap_or(0.0);
+                view! {
+                    <div class="kpis">
+                        <Kpi titulo="Chance (modelo)" valor=pct(c) bom=Some(c >= 1.0) ajuda="Dano total da equipe montada ÷ HP do boss." />
+                        <Kpi titulo="Tempo de luta" valor=replay(&r, hp).1.map_or("não vence".into(), minutos) />
+                    </div>
+                    <Tabela cab=vec!["Pokémon", "Nível", "Dano", "Cai em", "Fraqueza"] linhas=equipe(&r) />
+                    {grafico_replay(&r, hp)}
+                    <div class="dica">"Espécie repetida conta uma vez; a ordem é a do maior dano."</div>
+                }
+            }))}
+        </div>
+    }
 }
 
 pub fn aba(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
@@ -181,6 +315,7 @@ pub fn aba(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
             }
         })}
         {move || (!escolhido.get().is_empty()).then(|| carregado(plano.get(), detalhe))}
+        {move || (!escolhido.get().is_empty()).then(|| laboratorio(e, versao, escolhido))}
     }
 }
 
@@ -206,6 +341,15 @@ mod testes {
         assert_eq!(
             por_que(&m).as_deref(),
             Some("B (ROCK) cai primeiro, em 7 s: apanha ×4 de WATER.")
+        );
+        // A tira 60 de 100 em 30 s; B tira o resto: 40 de 80 → metade dos 20 s.
+        let eq = json!({"equipe": [{"D": 60, "tDie": 30}, {"D": 80, "tDie": 20}]});
+        let (pts, fim) = replay(&eq, 100.0);
+        assert_eq!(fim, Some(40.0));
+        assert_eq!(pts, vec![(0.0, 100.0), (30.0, 40.0), (40.0, 0.0)]);
+        assert_eq!(
+            replay(&json!({"equipe": [{"D": 10, "tDie": 5}]}), 100.0).1,
+            None
         );
     }
 }

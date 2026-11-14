@@ -891,6 +891,45 @@ pub fn resposta_plano(
     }))
 }
 
+/// Laboratório: a equipe montada à mão (ids da coleção da conta, até 6) contra um boss, no
+/// mesmo modelo do plano. Espécie repetida conta uma vez, como no plano.
+pub fn resposta_lab(
+    motor: &MotorEquipes,
+    estado: &EstadoEquipes,
+    nick: Option<&str>,
+    boss: &str,
+    ids: &[&str],
+) -> Result<Value, ErroEquipes> {
+    let lista = motor.lista_bosses(&estado.bosses);
+    let Some(boss) = achar(&lista, boss) else {
+        return Err(ErroEquipes {
+            status: 404,
+            erro: "boss não encontrado",
+        });
+    };
+    let id_de = |f: &Value| match f.get("id") {
+        Some(Value::String(t)) => t.clone(),
+        Some(v) => v.to_string(),
+        None => String::new(),
+    };
+    let escolhidos: Vec<Value> = estado
+        .conta(nick)
+        .and_then(|c| c.get("pokemons"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|f| ids.contains(&id_de(f).as_str()))
+        .take(6)
+        .cloned()
+        .collect();
+    motor
+        .equipe_colecao(boss, &escolhidos, 6)
+        .ok_or(ErroEquipes {
+            status: 404,
+            erro: "espécie do boss não está na Pokédex",
+        })
+}
+
 /// Divergência entre dois modelos para um boss: cobertura (soma ÷ HP) da equipe teórica
 /// realista em cada um e quantas espécies as duas equipes têm em comum.
 #[derive(Debug, Clone, PartialEq)]
