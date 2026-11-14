@@ -9,6 +9,7 @@ pub mod combate;
 pub mod escaneamento;
 pub mod financas;
 pub mod mercado;
+pub mod pregao;
 pub mod visao;
 
 use leptos::prelude::*;

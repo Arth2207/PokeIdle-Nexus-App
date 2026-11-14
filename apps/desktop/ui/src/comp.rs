@@ -290,6 +290,22 @@ pub const CSS: &str = r#"
 .boss img { width:96px; height:96px; object-fit:contain; filter:drop-shadow(0 8px 10px rgba(22,24,28,.25)); }
 .boss .n { font-weight:700; } .boss .s { font-size:12px; color:var(--texto-2); margin-bottom:4px; }
 .boss.sel { outline:2px solid var(--melhora); }
+.pregao { display:grid; grid-template-columns:minmax(230px,1fr) 2fr minmax(240px,1fr); gap:14px; }
+@media (max-width: 1100px) { .pregao { grid-template-columns:1fr; } }
+.lista-ativos { display:flex; flex-direction:column; gap:8px; }
+.ativos { max-height:470px; overflow:auto; display:flex; flex-direction:column; gap:2px; }
+.ativo { display:grid; grid-template-columns:26px 1fr auto 56px; gap:6px; align-items:center; font-size:13px; padding:5px 6px; border-radius:10px; cursor:pointer; font-variant-numeric:tabular-nums; }
+.ativo img { width:24px; height:24px; object-fit:contain; }
+.ativo .nome { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ativo.sel { background:var(--neon); }
+.melhora { color:var(--melhora); } .piora { color:var(--piora); }
+.velas { width:100%; }
+.velas line { stroke-width:1.2; } .velas .sobe { fill:var(--melhora); stroke:var(--melhora); } .velas .desce { fill:var(--piora); stroke:var(--piora); }
+.velas .vol { opacity:.45; } .velas .ma { fill:none; stroke:#8BC34A; stroke-width:2; }
+.velas .justo { stroke:var(--texto-2); stroke-dasharray:5 4; }
+.ohlc { font-size:12px; color:var(--texto-2); font-variant-numeric:tabular-nums; margin-bottom:4px; }
+.sinal { font:700 30px "Space Grotesk", Inter, sans-serif; } .sinal.bom { color:var(--melhora); } .sinal.alerta { color:var(--piora); }
+.pares { display:grid; grid-template-columns:1fr auto; gap:6px 10px; font-size:13px; margin-top:10px; font-variant-numeric:tabular-nums; }
 .linha { width:100%; height:180px; }
 .linha path { fill:none; stroke:var(--melhora); stroke-width:2.5; vector-effect:non-scaling-stroke; }
 .linha .faixa { fill:var(--trilho); }

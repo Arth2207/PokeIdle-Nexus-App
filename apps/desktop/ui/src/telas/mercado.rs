@@ -23,48 +23,6 @@ fn acao_pt(a: &str) -> String {
     .to_owned()
 }
 
-fn aba_pregao(e: Estado, versao: RwSignal<u32>, moeda: RwSignal<String>) -> impl IntoView {
-    let m = recurso(e, versao, || Some("/api/bolsa/mercado".into()));
-    let busca = RwSignal::new(String::new());
-    view! {
-        <div class="filtros">
-            <input placeholder="Buscar espécie ou item" prop:value=move || busca.get()
-                on:input=move |ev| busca.set(event_target_value(&ev)) />
-        </div>
-        {move || carregado(m.get(), move |v| {
-            let r = v.get("resumo").cloned().unwrap_or(Value::Null);
-            let q = busca.get().to_lowercase();
-            let moeda_api = if moeda.get() == "Gold" { "gold" } else { "orb" };
-            let mut t: Vec<Value> = lista(&v, "tickers").iter()
-                .filter(|x| txt(x, "moeda") == moeda_api && (q.is_empty() || txt(x, "nome").to_lowercase().contains(&q)))
-                .cloned().collect();
-            t.sort_by(|a, b| num(b, "vscore").unwrap_or(0.0).abs().total_cmp(&num(a, "vscore").unwrap_or(0.0).abs()));
-            let linhas: Vec<Vec<String>> = t.iter().take(150).map(|x| vec![
-                format!("{}{}", txt(x, "nome"), if x.get("shiny").and_then(Value::as_bool) == Some(true) { " ✦" } else { "" }),
-                curto(num(x, "ultimo").unwrap_or(0.0)),
-                curto(num(x, "base").unwrap_or(0.0)),
-                num(x, "var24h").map_or("—".into(), pct),
-                num(x, "var7d").map_or("—".into(), pct),
-                inteiro(num(x, "vol24h").unwrap_or(0.0)),
-                txt(x, "liquidez"),
-                acao_pt(&txt(x, "acao")),
-                format!("{:.0}%", num(x, "vconf").unwrap_or(0.0)),
-            ]).collect();
-            view! {
-                <div class="kpis">
-                    <Kpi titulo="Comprar" valor=inteiro(num(&r, "comprar").unwrap_or(0.0)) unidade="ativos"
-                        ajuda="Ativos com preço bem abaixo da base (média de 30 dias ajustada pela tendência)." />
-                    <Kpi titulo="Vender" valor=inteiro(num(&r, "vender").unwrap_or(0.0)) unidade="ativos" />
-                    <Kpi titulo="Observar" valor=inteiro(num(&r, "observar").unwrap_or(0.0)) unidade="ativos" />
-                    <Kpi titulo="Vendas na janela" valor=inteiro(num(&r, "vendas").unwrap_or(0.0))
-                        comparacao=format!("{} dias", inteiro(num(&v, "janelaDias").unwrap_or(0.0))) />
-                </div>
-                <Tabela cab=vec!["Ativo", "Último", "Base", "24h", "7d", "Vol. 24h", "Liquidez", "Sinal", "Confiança"] linhas=linhas />
-            }
-        })}
-    }
-}
-
 fn aba_oportunidades(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
     let d = recurso(e, versao, || Some("/api/bolsa/dicas".into()));
     view! {
@@ -129,7 +87,7 @@ pub fn Mercado(e: Estado, moeda: RwSignal<String>) -> impl IntoView {
         {cabecalho("Mercado", "O que compro, o que vendo e o que guardo?", versao)}
         <Abas opcoes=ABAS ativa=aba />
         {move || match aba.get() {
-            "Pregão" => aba_pregao(e, versao, moeda).into_any(),
+            "Pregão" => super::pregao::aba(e, versao, moeda).into_any(),
             "Oportunidades" => aba_oportunidades(e, versao).into_any(),
             _ => aba_inventario(e, versao).into_any(),
         }}
