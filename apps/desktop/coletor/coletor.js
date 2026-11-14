@@ -27,7 +27,7 @@
     ws.addEventListener('message', function (ev) {
       if (typeof ev.data !== 'string') return;
       vistoWs = Date.now();
-      if (bruto) enviar({ t: 'bruto', dir: 'in', dados: ev.data.slice(0, 1048576) });
+      if (bruto) enviar({ t: 'bruto', dir: 'in', dados: ev.data.slice(0, 3145728) });
       try {
         var m = JSON.parse(ev.data);
         if (m && repassa[m.t]) enviar(m);
@@ -43,7 +43,7 @@
   OrigWS.prototype.send = function (d) {
     if (doJogo(this)) {
       ouvir(this);
-      if (bruto && typeof d === 'string') enviar({ t: 'bruto', dir: 'out', dados: d.slice(0, 1048576) });
+      if (bruto && typeof d === 'string') enviar({ t: 'bruto', dir: 'out', dados: d.slice(0, 3145728) });
     }
     return envioOrig.apply(this, arguments);
   };

@@ -57,5 +57,5 @@ Dá para montar qualquer equipe do meta como pokemon teste e lutar contra a equi
 
 ## Limites do modo Descoberta
 
-- Até 850 KB por mensagem (acima disso guarda o começo do texto) e 120 por minuto por tipo e conta.
+- Até 3 MB por mensagem (acima disso guarda o começo do texto) e 120 por minuto por tipo e conta.
 - Liga em Configurações; vale ao clicar em Conectar. Deixar desligado fora de testes.

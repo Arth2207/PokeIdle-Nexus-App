@@ -8,10 +8,10 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// Quantos eventos já enviados lembrar para não reenfileirar o mesmo.
 const MEMORIA: usize = 10_000;
-/// Tamanho (JSON) máximo de um lote; o servidor aceita mensagens de até 1 MiB.
+/// Tamanho (JSON) máximo de um lote; o servidor aceita mensagens de até 4 MiB.
 pub const LOTE_BYTES: usize = 512 * 1024;
 /// Evento sozinho acima disto vira um marcador (`truncado`): nunca trava a fila.
-pub const EVENTO_BYTES: usize = 900 * 1024;
+pub const EVENTO_BYTES: usize = 3 * 1024 * 1024 + 128 * 1024;
 
 #[derive(Debug)]
 pub struct FilaEventos {
