@@ -3,7 +3,7 @@
 use leptos::prelude::*;
 use serde_json::Value;
 
-use super::escaneamento::especie_da_imagem;
+use super::escaneamento::{especie_da_imagem, forma};
 use super::{cabecalho, nick_ativo};
 use crate::comp::{carregado, Abas, Barras, Kpi};
 use crate::dados::{curto, inteiro, lista, num, recurso, sprite, txt};
@@ -64,7 +64,7 @@ fn ficha(p: &Value, mercado: Option<Value>) -> impl IntoView {
     view! {
         <div class="caixa" style="margin-bottom:16px">
             <div class="scan">
-                <div class="scan-img"><img src=img(p) alt="" /></div>
+                <div class="scan-img"><img class=forma(&txt(p, "nome")) src=img(p) alt="" /></div>
                 <div>
                     <div class="scan-sub">{format!("#{sp} · {}", lista(p, "tipos").iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" / "))}</div>
                     <div class="scan-nome">{txt(p, "nome")}{sh.then_some(" ✦")}</div>
@@ -158,7 +158,7 @@ pub fn Bestiario(e: Estado) -> impl IntoView {
                         let id = num(&p, "id").unwrap_or(0.0) as i64;
                         view! {
                             <div class="mini" on:click=move |_| escolhido.set(Some(id))>
-                                <img src=img(&p) alt="" loading="lazy" />
+                                <img class=forma(&txt(&p, "nome")) src=img(&p) alt="" loading="lazy" />
                                 <div class="n">{format!("{}{}", txt(&p, "nome"), if sh { " ✦" } else { "" })}</div>
                                 <div class="s">{format!("nv {} · poder {}", inteiro(num(&p, "level").unwrap_or(0.0)), inteiro(num(&p, "poder").unwrap_or(0.0)))}</div>
                                 <div class="s">{format!("IV {} · nota {:.2} · {}", inteiro(num(&p, "ivTotal").unwrap_or(0.0)), num(&p, "nota").unwrap_or(0.0),

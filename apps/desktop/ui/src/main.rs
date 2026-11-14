@@ -22,16 +22,25 @@ extern "C" {
 }
 
 const CSS: &str = r#"
-:root { --texto:#16181C; --texto-2:#4C5560; --texto-3:#7A838D; --vidro:rgba(255,255,255,.75); --vidro-borda:rgba(255,255,255,.75); --trilho:rgba(22,24,28,.10); --neon:#C8FF2E; --sobre-neon:#16181C; --melhora:#1F9D6B; --piora:#E5533D; --raio:20px; --sombra:0 24px 64px rgba(22,24,28,.16); }
+:root { --texto:#16181C; --texto-2:#4C5560; --texto-3:#7A838D; --vidro:rgba(255,255,255,.48); --vidro-borda:rgba(255,255,255,.6); --cartao:rgba(255,255,255,.52); --trilho:rgba(22,24,28,.10); --neon:#C8FF2E; --sobre-neon:#16181C; --melhora:#1F9D6B; --piora:#E5533D; --raio:20px; --sombra:0 24px 64px rgba(22,24,28,.16); }
 * { box-sizing: border-box; }
 html, body { height:100%; }
 body { margin:0; font:14px/1.45 Inter, system-ui, "Segoe UI", sans-serif; color:var(--texto); background:#cfe3d2 url("biomas/bioma-floresta-dia.webp") center/cover no-repeat fixed; overflow:hidden; }
 body.noite { background-color:#3a4658; background-blend-mode:multiply; }
+/* Tema escuro: vidro fumê e texto claro sobre a paisagem escurecida. */
+body.noite { --texto:#EEF2F5; --texto-2:#B9C3CD; --texto-3:#8D99A6; --vidro:rgba(16,20,28,.55); --vidro-borda:rgba(255,255,255,.12); --cartao:rgba(16,20,28,.58); --trilho:rgba(255,255,255,.14); --sombra:0 24px 64px rgba(0,0,0,.45); }
+body.noite .conteudo.vidro { background:rgba(8,12,18,.22); }
+body.noite input, body.noite select.caixa, body.noite button.btn, body.noite .seg, body.noite button.redondo, body.noite .tabela th { background:rgba(16,20,28,.72); color:var(--texto); }
+body.noite option { background:#1b212b; color:#EEF2F5; }
+body.noite .kpi, body.noite .caixa { background:linear-gradient(150deg, rgba(30,36,48,.72), rgba(12,16,24,.5)); box-shadow:0 10px 30px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.08); }
+body.noite .kpi-ico { background:rgba(200,255,46,.22); }
+/* Sobre o neon o texto é sempre escuro (no tema escuro o --texto fica claro). */
+body.noite .opcao:hover, body.noite .ativo.sel { color:var(--sobre-neon); }
 .sobre { position:fixed; inset:0; background:rgba(22,24,28,.25); display:flex; justify-content:center; align-items:flex-start; padding-top:12vh; z-index:50; }
 .paleta { width:min(520px,90vw); padding:12px; border-radius:18px; display:flex; flex-direction:column; gap:4px; }
 .opcao { padding:8px 10px; border-radius:10px; cursor:pointer; font-size:13px; }
 .opcao:hover { background:var(--neon); }
-.alertas { position:fixed; top:64px; right:24px; width:min(380px,90vw); max-height:60vh; overflow:auto; padding:10px; border-radius:16px; z-index:40; }
+.alertas.vidro { position:fixed; top:64px; right:24px; width:min(380px,90vw); max-height:60vh; overflow:auto; padding:10px; border-radius:16px; z-index:40; }
 .contagem { background:var(--piora); color:#fff; border-radius:999px; font-size:10px; padding:1px 6px; margin-left:4px; }
 .nevoa { position:fixed; inset:0; background:linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,.10)); pointer-events:none; }
 .casca { position:relative; display:flex; gap:16px; height:100vh; padding:16px; }
@@ -49,6 +58,8 @@ h1, h2 { font-family:"Space Grotesk", Inter, system-ui, sans-serif; margin:0; }
 .pilula { border-radius:999px; padding:8px 16px; display:flex; align-items:center; gap:8px; }
 .pilula select { border:0; background:transparent; font:inherit; font-weight:600; color:var(--texto); outline:none; }
 .conteudo { flex:1; padding:24px 28px; overflow:auto; }
+/* Painel do conteúdo quase transparente: a paisagem aparece entre os cartões (mockup 01). */
+.conteudo.vidro { background:rgba(255,255,255,.14); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); box-shadow:none; }
 h2 { font-size:15px; letter-spacing:.12em; text-transform:uppercase; margin-bottom:16px; }
 .pergunta { color:var(--texto-2); margin:-8px 0 16px; }
 .campo { margin:14px 0 4px; font-size:11px; letter-spacing:.12em; text-transform:uppercase; font-weight:700; color:var(--texto-3); display:block; }
@@ -75,7 +86,7 @@ button.btn:disabled { opacity:.5; cursor:default; }
 .logo .ico { width:28px; height:28px; color:var(--melhora); }
 .item { display:flex; align-items:center; gap:10px; }
 .ico { width:18px; height:18px; flex:none; }
-.rodape-conta { margin-top:auto; padding:10px 12px; border-radius:16px; background:rgba(255,255,255,.55); border:1px solid var(--vidro-borda); display:flex; flex-direction:column; gap:6px; }
+.rodape-conta { margin-top:auto; padding:10px 12px; border-radius:16px; background:var(--cartao); border:1px solid var(--vidro-borda); display:flex; flex-direction:column; gap:6px; }
 .rodape-conta .nome { display:flex; align-items:center; gap:8px; font-weight:600; }
 .topo { padding:0 4px; }
 .topo .esp { flex:1; }
@@ -94,7 +105,7 @@ button.pilula { border:1px solid var(--vidro-borda); font:inherit; font-weight:6
 .seg button.ativo { background:var(--neon); color:var(--sobre-neon); }
 .grade { flex:1; min-height:0; display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:14px; }
 .grade.foco { grid-template-columns:1fr; grid-template-rows:1fr; }
-.card { min-height:0; border-radius:var(--raio); background:rgba(255,255,255,.55); border:1px solid var(--vidro-borda); padding:12px 14px; display:flex; flex-direction:column; gap:10px; }
+.card { min-height:0; border-radius:var(--raio); background:var(--cartao); backdrop-filter:blur(14px); border:1px solid var(--vidro-borda); padding:12px 14px; display:flex; flex-direction:column; gap:10px; }
 .card .cab { display:flex; align-items:center; gap:12px; font:700 15px "Space Grotesk", Inter, sans-serif; letter-spacing:.06em; text-transform:uppercase; }
 .card .cab .ico { width:22px; height:22px; color:var(--texto-2); }
 .stat { display:inline-flex; align-items:center; gap:6px; padding:4px 12px; border-radius:999px; font:600 13px Inter, sans-serif; letter-spacing:0; text-transform:none; }
@@ -900,7 +911,8 @@ fn App() -> impl IntoView {
         biomas: RwSignal::new(Vec::new()),
     };
     let pagina = e.pagina;
-    globais::fundo(e);
+    let tema = RwSignal::new(guardado(globais::CHAVE_TEMA));
+    globais::fundo(e, tema);
     let periodo = RwSignal::new(String::from("Últimos 7 dias"));
     let moeda = RwSignal::new(String::from("Orbs"));
     let desempenho = RwSignal::new(true);
@@ -1069,6 +1081,7 @@ fn App() -> impl IntoView {
                     <span class="esp"></span>
                     <globais::Busca e=e />
                     <globais::Alertas e=e />
+                    <globais::Tema tema=tema />
                     <button class="pilula vidro" title="Modo desempenho" on:click=move |_| desempenho.update(|v| *v = !*v)>
                         "Modo desempenho"
                         <span class="chave" class:on=move || desempenho.get()></span>

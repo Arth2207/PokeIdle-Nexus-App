@@ -34,7 +34,8 @@ pub async fn shiny_servidor(db: &PgPool, desde_ms: i64) -> Result<Vec<(i64, Valu
     eventos(db, "shiny.servidor", desde_ms, 100_000).await
 }
 
-/// Último evento de um tipo de uma conta (ou de qualquer conta, com `None`).
+/// Último evento de um tipo de uma conta (ou de qualquer conta, com `None`). A conta pode vir
+/// pelo rótulo do app ou pelo nick do jogo (o evento é gravado pelo rótulo).
 async fn ultimo(
     db: &PgPool,
     tipo: &str,
@@ -43,7 +44,7 @@ async fn ultimo(
     sqlx::query_as(
         "SELECT (extract(epoch FROM em) * 1000)::bigint, dados
            FROM nexus.evento
-          WHERE tipo = $1 AND ($2::text IS NULL OR conta = $2)
+          WHERE tipo = $1 AND ($2::text IS NULL OR conta IN (SELECT $2 UNION SELECT conta FROM nexus.motor_janela WHERE lower(janela->>'nick') = lower($2)))
           ORDER BY em DESC
           LIMIT 1",
     )
@@ -72,7 +73,7 @@ pub async fn treinos(
     sqlx::query_as(
         "SELECT (extract(epoch FROM em) * 1000)::bigint, dados
            FROM nexus.evento
-          WHERE tipo = 'treino.resultado' AND conta = $1
+          WHERE tipo = 'treino.resultado' AND conta IN (SELECT $1 UNION SELECT conta FROM nexus.motor_janela WHERE lower(janela->>'nick') = lower($1))
           ORDER BY em DESC
           LIMIT $2",
     )

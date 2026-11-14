@@ -4,6 +4,34 @@
 use leptos::prelude::*;
 use serde_json::Value;
 
+/// Ícone do KPI pelo assunto do título.
+fn icone_kpi(titulo: &str) -> &'static str {
+    let t = titulo.to_lowercase();
+    [
+        ("patrim", "financas"),
+        ("lucro", "mercado"),
+        ("ganho", "mercado"),
+        ("ouro", "financas"),
+        ("rendimento", "recarregar"),
+        ("disponib", "monitor"),
+        ("chance", "combate"),
+        ("vence", "combate"),
+        ("tempo", "aguardando"),
+        ("força", "combate"),
+        ("ideal", "foco"),
+        ("abate", "cacada"),
+        ("hunt", "cacada"),
+        ("shiny", "folha"),
+        ("custo", "alerta"),
+        ("regra", "automacao"),
+        ("comando", "automacao"),
+        ("espécie", "bestiario"),
+    ]
+    .iter()
+    .find(|(k, _)| t.contains(k))
+    .map_or("grade", |(_, i)| i)
+}
+
 /// KPI: valor, unidade, comparação e a definição (no `title`).
 #[component]
 pub fn Kpi(
@@ -16,16 +44,19 @@ pub fn Kpi(
     #[prop(default = None)]
     bom: Option<bool>,
 ) -> impl IntoView {
-    let classe = match bom {
-        Some(true) => "comp melhora",
-        Some(false) => "comp piora",
-        None => "comp",
+    let (classe, seta, estado) = match bom {
+        Some(true) => ("comp melhora", "▲ ", "kpi bom"),
+        Some(false) => ("comp piora", "▼ ", "kpi ruim"),
+        None => ("comp", "", "kpi"),
     };
     view! {
-        <div class="kpi" title=ajuda>
-            <div class="kpi-t">{titulo}{(!ajuda.is_empty()).then(|| view! { <span class="ajuda">"?"</span> })}</div>
+        <div class=estado title=ajuda>
+            <div class="kpi-t">
+                <span class="kpi-ico">{crate::icone(icone_kpi(titulo))}</span>
+                {titulo}{(!ajuda.is_empty()).then(|| view! { <span class="ajuda">"?"</span> })}
+            </div>
             <div class="kpi-v">{valor}<span class="un">{unidade}</span></div>
-            {comparacao.map(|c| view! { <div class=classe>{c}</div> })}
+            {comparacao.map(|c| view! { <div class=classe>{seta}{c}</div> })}
         </div>
     }
 }
@@ -72,7 +103,7 @@ pub fn Colunas(linhas: Vec<(String, f64, String)>) -> impl IntoView {
                 let h = format!("height:{:.1}%", (v.max(0.0) / max * 100.0).clamp(0.0, 100.0));
                 let ultima = i + 1 == n;
                 view! {
-                    <div class="col" class:ativo=ultima>
+                    <div class="col" class:hoje=ultima>
                         <span class="col-rot">{rot}</span>
                         <span class="col-trilho"><span class="col-val" style=h></span></span>
                         <span class="col-nome">{nome}</span>
@@ -254,10 +285,19 @@ pub fn carregado<V: IntoView + 'static>(
 
 pub const CSS: &str = r#"
 .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin-bottom:18px; }
-.kpi { background:rgba(255,255,255,.6); border:1px solid var(--vidro-borda); border-radius:16px; padding:12px 14px; }
+.kpi { position:relative; overflow:hidden; background:linear-gradient(140deg, rgba(255,255,255,.66), rgba(255,255,255,.34)); backdrop-filter:blur(16px) saturate(1.3); -webkit-backdrop-filter:blur(16px) saturate(1.3); box-shadow:0 10px 30px rgba(22,24,28,.10), inset 0 1px 0 rgba(255,255,255,.85); border:1px solid var(--vidro-borda); border-radius:20px; padding:16px 18px 14px; transition:transform .18s, box-shadow .18s; }
+.kpi:hover { transform:translateY(-2px); box-shadow:0 16px 40px rgba(22,24,28,.14), inset 0 1px 0 rgba(255,255,255,.85); }
+.kpi::after { content:""; position:absolute; left:18px; right:18px; bottom:0; height:3px; border-radius:3px 3px 0 0; background:linear-gradient(90deg, var(--neon), transparent); opacity:.8; }
+.kpi.bom::after { background:linear-gradient(90deg, var(--melhora), transparent); }
+.kpi.ruim::after { background:linear-gradient(90deg, var(--piora), transparent); }
+.kpi-ico { width:30px; height:30px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; background:rgba(200,255,46,.35); color:var(--texto); flex:none; }
+.kpi-ico svg { width:17px; height:17px; }
+.kpi .comp { display:inline-block; margin-top:6px; padding:2px 10px; border-radius:999px; background:var(--trilho); font-size:12px; font-weight:600; }
+.kpi .comp.melhora { background:rgba(31,157,107,.14); }
+.kpi .comp.piora { background:rgba(229,83,61,.14); }
 .kpi-t { font-size:11px; letter-spacing:.12em; text-transform:uppercase; font-weight:700; color:var(--texto-3); display:flex; gap:6px; align-items:center; }
 .ajuda { display:inline-flex; width:14px; height:14px; border-radius:50%; border:1px solid var(--texto-3); font-size:9px; align-items:center; justify-content:center; cursor:help; }
-.kpi-v { font:700 26px "Space Grotesk", Inter, sans-serif; font-variant-numeric:tabular-nums; margin-top:4px; }
+.kpi-v { font:700 32px "Space Grotesk", Inter, sans-serif; font-variant-numeric:tabular-nums; margin-top:4px; }
 .kpi-v .un { font:500 13px Inter, sans-serif; color:var(--texto-2); margin-left:6px; }
 .comp { font-size:12px; color:var(--texto-2); margin-top:2px; }
 .comp.melhora { color:var(--melhora); } .comp.piora { color:var(--piora); }
@@ -274,7 +314,7 @@ pub const CSS: &str = r#"
 .tabela th { position:sticky; top:0; background:rgba(255,255,255,.92); text-align:right; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--texto-3); padding:8px 10px; }
 .tabela td { text-align:right; padding:7px 10px; border-bottom:1px solid var(--trilho); }
 .tabela th:first-child, .tabela td:first-child { text-align:left; }
-.veredito { background:rgba(255,255,255,.7); border:1px solid var(--vidro-borda); border-left:4px solid var(--neon); border-radius:14px; padding:12px 14px; }
+.veredito { background:var(--cartao); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); box-shadow:0 8px 24px rgba(22,24,28,.08); border:1px solid var(--vidro-borda); border-left:4px solid var(--neon); border-radius:14px; padding:12px 14px; }
 .veredito.alerta { border-left-color:var(--piora); } .veredito.bom { border-left-color:var(--melhora); }
 .v-t { font-weight:700; } .v-m { color:var(--texto-2); font-size:13px; margin-top:2px; }
 .v-p { display:flex; gap:12px; font-size:12px; color:var(--texto-3); margin-top:6px; }
@@ -284,7 +324,7 @@ pub const CSS: &str = r#"
 .filtros { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
 .filtros input, .filtros select { width:auto; min-width:180px; }
 .grade-cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; }
-.mini { background:rgba(255,255,255,.6); border:1px solid var(--vidro-borda); border-radius:14px; padding:10px; display:flex; flex-direction:column; align-items:center; gap:4px; text-align:center; cursor:pointer; }
+.mini { background:var(--cartao); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); box-shadow:0 8px 24px rgba(22,24,28,.08); border:1px solid var(--vidro-borda); border-radius:14px; padding:10px; display:flex; flex-direction:column; align-items:center; gap:4px; text-align:center; cursor:pointer; }
 .mini img { width:84px; height:84px; object-fit:contain; filter:drop-shadow(0 6px 8px rgba(22,24,28,.25)); }
 .mini .n { font-weight:700; } .mini .s { font-size:12px; color:var(--texto-2); }
 .mini.sel { outline:2px solid var(--melhora); }
@@ -300,18 +340,23 @@ pub const CSS: &str = r#"
 .col { flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; min-width:0; }
 .col-trilho { flex:1; width:100%; display:flex; align-items:flex-end; }
 .col-val { display:block; width:100%; border-radius:8px 8px 3px 3px; background:#9AA3AD; }
-.col.ativo .col-val { background:var(--neon); }
+.col.hoje .col-val { background:var(--neon); }
 .col-rot { font-size:11px; font-variant-numeric:tabular-nums; color:var(--texto-2); }
 .col-nome { font-size:11px; color:var(--texto-3); }
 .col-media { position:absolute; left:0; right:0; border-top:1px dashed var(--texto-3); margin-bottom:22px; pointer-events:none; }
 .vg { display:grid; grid-template-columns:1.6fr 1fr; gap:16px; margin-bottom:16px; }
 .vg:has(> .larga) { grid-template-columns:1fr; }
 .faixa { display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:14px; }
-.faixa .scan { grid-template-columns:110px 1fr; }
+.faixa /* Formas do jogo sobre a imagem da espécie base: brilho de cor própria. */
+img.forma-furious { filter:drop-shadow(0 0 10px rgba(229,83,61,.9)) saturate(1.25) hue-rotate(-12deg); }
+img.forma-ancient { filter:drop-shadow(0 0 10px rgba(214,158,46,.9)) sepia(.35); }
+img.forma-brave { filter:drop-shadow(0 0 10px rgba(56,132,255,.9)) saturate(1.15); }
+.scan { grid-template-columns:110px 1fr; }
 .vg-base { display:grid; grid-template-columns:1.3fr 1fr; gap:16px; }
 @media (max-width: 1100px) { .vg, .vg-base { grid-template-columns:1fr; } }
-.caixa { background:rgba(255,255,255,.55); border:1px solid var(--vidro-borda); border-radius:18px; padding:14px 16px; }
-.caixa-t { font:700 13px "Space Grotesk", Inter, sans-serif; letter-spacing:.1em; text-transform:uppercase; color:var(--texto-2); margin-bottom:10px; }
+.caixa { background:linear-gradient(150deg, rgba(255,255,255,.62), rgba(255,255,255,.32)); backdrop-filter:blur(16px) saturate(1.3); -webkit-backdrop-filter:blur(16px) saturate(1.3); box-shadow:0 10px 30px rgba(22,24,28,.10), inset 0 1px 0 rgba(255,255,255,.85); border:1px solid var(--vidro-borda); border-radius:22px; padding:18px 20px; }
+.caixa-t { font:700 13px "Space Grotesk", Inter, sans-serif; letter-spacing:.1em; text-transform:uppercase; color:var(--texto-2); margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+.caixa-t::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--neon); box-shadow:0 0 0 3px rgba(200,255,46,.3); flex:none; }
 .scan { display:grid; grid-template-columns:minmax(180px,1fr) 1.1fr; gap:14px; align-items:center; }
 .scan-img { position:relative; display:flex; justify-content:center; }
 .scan-img img { width:100%; max-width:260px; aspect-ratio:1; object-fit:contain; filter:drop-shadow(0 18px 18px rgba(22,24,28,.28)); }
@@ -324,7 +369,7 @@ pub const CSS: &str = r#"
 .medidor .trilho { height:9px; border-radius:999px; background:var(--trilho); overflow:hidden; }
 .medidor .val { display:block; height:100%; border-radius:999px; background:var(--melhora); }
 .medidor .xp .val { background:var(--neon); }
-.pilula { display:inline-flex; gap:6px; align-items:center; margin-top:10px; padding:5px 12px; border-radius:999px; background:var(--neon); font-weight:600; font-size:13px; }
+.pilula-neon { display:inline-flex; gap:6px; align-items:center; margin-top:10px; padding:5px 12px; border-radius:999px; background:var(--neon); color:var(--sobre-neon); font-weight:600; font-size:13px; }
 .acao-v { display:flex; gap:10px; align-items:center; }
 .acao-v .veredito { flex:1; }
 .diario-m { display:flex; flex-direction:column; gap:6px; font-size:13px; max-height:220px; overflow:auto; }
@@ -332,7 +377,7 @@ pub const CSS: &str = r#"
 .diario-m .h { font-variant-numeric:tabular-nums; color:var(--texto-3); }
 .diario-m .falha { color:var(--piora); }
 .grade-bosses { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px; margin-bottom:12px; }
-.boss { display:grid; grid-template-columns:96px 1fr; gap:10px; align-items:center; background:rgba(255,255,255,.6); border:1px solid var(--vidro-borda); border-radius:16px; padding:10px; cursor:pointer; }
+.boss { display:grid; grid-template-columns:96px 1fr; gap:10px; align-items:center; background:var(--cartao); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); box-shadow:0 8px 24px rgba(22,24,28,.08); border:1px solid var(--vidro-borda); border-radius:16px; padding:10px; cursor:pointer; }
 .boss img { width:96px; height:96px; object-fit:contain; filter:drop-shadow(0 8px 10px rgba(22,24,28,.25)); }
 .boss .n { font-weight:700; } .boss .s { font-size:12px; color:var(--texto-2); margin-bottom:4px; }
 .boss.sel { outline:2px solid var(--melhora); }

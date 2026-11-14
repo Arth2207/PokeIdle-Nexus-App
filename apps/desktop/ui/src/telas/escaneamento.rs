@@ -33,6 +33,17 @@ pub fn especie_da_imagem(sp: i64) -> i64 {
     }
 }
 
+/// Classe do brilho das formas do jogo (Furious, Ancient, Brave), que usam a imagem da
+/// espécie base: sem ela ficam iguais à normal.
+pub fn forma(nome: &str) -> &'static str {
+    match nome.split_whitespace().next() {
+        Some("Furious") => "forma-furious",
+        Some("Ancient") => "forma-ancient",
+        Some("Brave") => "forma-brave",
+        _ => "",
+    }
+}
+
 fn medidor(rotulo: &'static str, texto: String, classe: &'static str) -> impl IntoView {
     let w = format!("width:{:.1}%", fracao(&texto).unwrap_or(0.0) * 100.0);
     view! {
@@ -58,7 +69,7 @@ pub fn Escaneamento(conta: Value) -> impl IntoView {
     view! {
         <div class="scan">
             <div class="scan-img">
-                {(sp > 0).then(|| view! { <img src=sprite(sp, shiny) alt=nome.clone() loading="lazy" /> })}
+                {(sp > 0).then(|| view! { <img class=forma(&nome) src=sprite(sp, shiny) alt=nome.clone() loading="lazy" /> })}
             </div>
             <div>
                 <div class="scan-sub">{format!("{} · treinador Nv {}", txt(&conta, "nick"), txt(&conta, "trLv"))}</div>
@@ -66,7 +77,7 @@ pub fn Escaneamento(conta: Value) -> impl IntoView {
                 <div class="chips">{chips.into_iter().map(|c| view! { <span class="chip">{c}</span> }).collect_view()}</div>
                 {medidor("HP", txt(&ativo, "hp"), "hp")}
                 {medidor("XP", txt(&ativo, "xp"), "xp")}
-                <div class="pilula">"Caçada: "{txt(&conta, "hunt")}</div>
+                <div class="pilula-neon">"Caçada: "{txt(&conta, "hunt")}</div>
             </div>
         </div>
     }
@@ -87,5 +98,7 @@ mod testes {
         assert_eq!(especie_da_imagem(3006), 6);
         assert_eq!(especie_da_imagem(9445), 445);
         assert_eq!(especie_da_imagem(25), 25);
+        assert_eq!(forma("Furious Scizor"), "forma-furious");
+        assert_eq!(forma("Scizor"), "");
     }
 }

@@ -14,8 +14,11 @@ fn noite() -> bool {
     !(6..18).contains(&h)
 }
 
-/// Troca o fundo quando muda a conta ativa ou o bioma dela.
-pub fn fundo(e: Estado) {
+/// Tema guardado no navegador: "" (automático pelo relógio), "Claro" ou "Escuro".
+pub const CHAVE_TEMA: &str = "nexus.tema";
+
+/// Troca o fundo quando muda a conta ativa, o bioma dela ou o tema.
+pub fn fundo(e: Estado, tema: RwSignal<String>) {
     Effect::new(move |_| {
         let ativa = e.conta_ativa.get();
         let contas = lista_contas(&e.contas_txt.get());
@@ -37,7 +40,11 @@ pub fn fundo(e: Estado) {
         else {
             return;
         };
-        let n = noite();
+        let n = match tema.get().as_str() {
+            "Claro" => false,
+            "Escuro" => true,
+            _ => noite(),
+        };
         // Só campos e penhascos tem a versão noturna; os outros escurecem por CSS.
         let arquivo = match (bioma.as_deref(), n) {
             (Some("campos-penhascos"), true) => "bioma-campos-penhascos-noite".to_owned(),
@@ -51,6 +58,29 @@ pub fn fundo(e: Estado) {
         );
         let _ = corpo.class_list().toggle_with_force("noite", n);
     });
+}
+
+/// Botão do tema: Auto → Claro → Escuro.
+#[component]
+pub fn Tema(tema: RwSignal<String>) -> impl IntoView {
+    let proximo = move |_| {
+        let novo = match tema.get_untracked().as_str() {
+            "" => "Claro",
+            "Claro" => "Escuro",
+            _ => "",
+        };
+        crate::guardar(CHAVE_TEMA, novo);
+        tema.set(novo.to_owned());
+    };
+    view! {
+        <button class="pilula vidro" title="Tema (automático segue o relógio: escuro das 18 h às 6 h)" on:click=proximo>
+            {move || match tema.get().as_str() {
+                "Claro" => "☀ Claro",
+                "Escuro" => "☾ Escuro",
+                _ => "◐ Auto",
+            }}
+        </button>
+    }
 }
 
 /// Busca rápida: telas e contas; Enter ou clique leva até lá.
