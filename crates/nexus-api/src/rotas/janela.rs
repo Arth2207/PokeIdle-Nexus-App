@@ -52,8 +52,20 @@ pub async fn gravar(
 }
 
 pub async fn contas(State(estado): State<Estado>) -> Response {
+    let motor = estado.equipes.motor().await.ok();
     match persistencia::motor::contas_do_app(&estado.db).await {
-        Ok(c) => Json(json!({ "contas": c })).into_response(),
+        Ok(mut c) => {
+            // Bioma do fundo do painel, pela hunt da conta.
+            if let Some(m) = motor.as_ref() {
+                for x in &mut c {
+                    let b = m.bioma_da_hunt(x.get("hunt").and_then(Value::as_str).unwrap_or(""));
+                    if let Value::Object(o) = x {
+                        o.insert("bioma".into(), json!(b));
+                    }
+                }
+            }
+            Json(json!({ "contas": c })).into_response()
+        }
         Err(e) => {
             tracing::warn!(erro = %e, "contas do app");
             erro(StatusCode::SERVICE_UNAVAILABLE, "banco indisponível")

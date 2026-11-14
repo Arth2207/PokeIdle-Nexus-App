@@ -219,6 +219,21 @@ impl MotorEquipes {
         self.dex.por_id(id).and_then(|sp| self.dex_base(sp))
     }
 
+    /// Bioma (fundo do painel) de uma hunt pelo texto da tela ("Furious Scizor · Outland 2 ·
+    /// nível 150"): a Outland tem o seu; senão, pelo tipo principal da espécie da hunt.
+    pub fn bioma_da_hunt(&self, hunt: &str) -> &'static str {
+        if hunt.contains("Outland") {
+            return "outland";
+        }
+        let nome = hunt.split(" · ").next().unwrap_or("").trim();
+        self.dex
+            .especies()
+            .iter()
+            .find(|e| e.nome.eq_ignore_ascii_case(nome))
+            .and_then(|e| e.tipos.first())
+            .map_or("floresta", |t| bioma_do_tipo(*t))
+    }
+
     /// `spriteDe`.
     pub fn sprite(&self, sp: Option<&EspecieCombate>, shiny: bool) -> Value {
         sp.and_then(|sp| self.dex_base(sp))
@@ -921,4 +936,34 @@ pub fn comparar_modelos(
             })
         })
         .collect()
+}
+
+/// Bioma do tipo principal (`docs/design/telas.md`, Biomas). Templo, montanha nevada e pico
+/// ainda não têm imagem: caem em montanha e cânion.
+pub fn bioma_do_tipo(t: crate::combate::tipos::Tipo) -> &'static str {
+    use crate::combate::tipos::Tipo as T;
+    match t {
+        T::Water => "riacho-lago",
+        T::Normal | T::Flying => "campos-penhascos",
+        T::Grass | T::Bug => "floresta",
+        T::Ghost | T::Dark => "floresta-sombria",
+        T::Psychic | T::Fairy => "clareira-mistica",
+        T::Fire => "vulcao",
+        T::Electric => "planicie-tempestuosa",
+        T::Poison => "pantano",
+        _ => "montanha-canion",
+    }
+}
+
+#[cfg(test)]
+mod testes_bioma {
+    use super::*;
+    use crate::combate::tipos::Tipo;
+
+    #[test]
+    fn bioma_pelo_tipo() {
+        assert_eq!(bioma_do_tipo(Tipo::Water), "riacho-lago");
+        assert_eq!(bioma_do_tipo(Tipo::Bug), "floresta");
+        assert_eq!(bioma_do_tipo(Tipo::Steel), "montanha-canion");
+    }
 }

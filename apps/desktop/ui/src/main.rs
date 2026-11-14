@@ -1,6 +1,7 @@
 //! Tela do app A2 em Leptos (CSR). Fala com o Tauri pela ponte global `window.__TAURI__`.
 mod comp;
 mod dados;
+mod globais;
 mod telas;
 
 use js_sys::{Array, Date, Object, Reflect};
@@ -25,6 +26,13 @@ const CSS: &str = r#"
 * { box-sizing: border-box; }
 html, body { height:100%; }
 body { margin:0; font:14px/1.45 Inter, system-ui, "Segoe UI", sans-serif; color:var(--texto); background:#cfe3d2 url("biomas/bioma-floresta-dia.webp") center/cover no-repeat fixed; overflow:hidden; }
+body.noite { background-color:#3a4658; background-blend-mode:multiply; }
+.sobre { position:fixed; inset:0; background:rgba(22,24,28,.25); display:flex; justify-content:center; align-items:flex-start; padding-top:12vh; z-index:50; }
+.paleta { width:min(520px,90vw); padding:12px; border-radius:18px; display:flex; flex-direction:column; gap:4px; }
+.opcao { padding:8px 10px; border-radius:10px; cursor:pointer; font-size:13px; }
+.opcao:hover { background:var(--neon); }
+.alertas { position:fixed; top:64px; right:24px; width:min(380px,90vw); max-height:60vh; overflow:auto; padding:10px; border-radius:16px; z-index:40; }
+.contagem { background:var(--piora); color:#fff; border-radius:999px; font-size:10px; padding:1px 6px; margin-left:4px; }
 .nevoa { position:fixed; inset:0; background:linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,.10)); pointer-events:none; }
 .casca { position:relative; display:flex; gap:16px; height:100vh; padding:16px; }
 .vidro { background:var(--vidro); border:1px solid var(--vidro-borda); border-radius:var(--raio); backdrop-filter:blur(22px); -webkit-backdrop-filter:blur(22px); box-shadow:var(--sombra); position:relative; }
@@ -150,7 +158,7 @@ fn args(pares: &[(&str, JsValue)]) -> JsValue {
     o.into()
 }
 
-fn lista_contas(texto: &str) -> Vec<String> {
+pub fn lista_contas(texto: &str) -> Vec<String> {
     texto
         .split(',')
         .map(str::trim)
@@ -191,7 +199,7 @@ fn registrar(reg: RwSignal<Vec<Linha>>, texto: impl Into<String>, erro: bool) {
 
 /// (grupo, [(nome, slug, ícone)]).
 type ItemMenu = (&'static str, &'static str, &'static str);
-const MENU: [(&str, &[ItemMenu]); 5] = [
+pub const MENU: [(&str, &[ItemMenu]); 5] = [
     (
         "Operação",
         &[
@@ -238,7 +246,7 @@ fn slug_da_pagina(nome: &str) -> &'static str {
 }
 
 /// Ícones de linha fina (24x24, traço 1.6, `currentColor`), desenhados aqui, sem CDN.
-fn icone(nome: &str) -> impl IntoView {
+pub fn icone(nome: &str) -> impl IntoView {
     let d = match nome {
         "visao" => {
             r#"<rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/>"#
@@ -431,6 +439,8 @@ struct Estado {
     reg: RwSignal<Vec<Linha>>,
     /// (rótulo da conta no app, nick no jogo), de `/api/contas`.
     nicks: RwSignal<Vec<(String, String)>>,
+    /// (rótulo da conta, bioma da hunt), de `/api/contas`.
+    biomas: RwSignal<Vec<(String, String)>>,
 }
 
 fn atualizar_token(e: Estado) {
@@ -876,8 +886,10 @@ fn App() -> impl IntoView {
         }),
         reg: RwSignal::new(Vec::new()),
         nicks: RwSignal::new(Vec::new()),
+        biomas: RwSignal::new(Vec::new()),
     };
     let pagina = e.pagina;
+    globais::fundo(e);
     let periodo = RwSignal::new(String::from("Últimos 7 dias"));
     let moeda = RwSignal::new(String::from("Orbs"));
     let desempenho = RwSignal::new(true);
@@ -889,7 +901,7 @@ fn App() -> impl IntoView {
     {
         // Nick do jogo de cada conta (as rotas de equipe e PvP usam o nick); como site, as
         // contas também vêm daqui (as que o app manda).
-        let (contas, nicks, url) = (e.contas_txt, e.nicks, e.url.get_untracked());
+        let (contas, nicks, biomas, url) = (e.contas_txt, e.nicks, e.biomas, e.url.get_untracked());
         spawn_local(async move {
             if let Ok(v) = dados::api(&url, "/api/contas").await {
                 let pares: Vec<(String, String)> = dados::lista(&v, "contas")
@@ -907,6 +919,13 @@ fn App() -> impl IntoView {
                     );
                 }
                 nicks.set(pares);
+                biomas.set(
+                    dados::lista(&v, "contas")
+                        .iter()
+                        .map(|c| (dados::txt(c, "conta"), dados::txt(c, "bioma")))
+                        .filter(|(_, b)| !b.is_empty())
+                        .collect(),
+                );
             }
         });
     }
@@ -1035,8 +1054,8 @@ fn App() -> impl IntoView {
                         </select>
                     </div>
                     <span class="esp"></span>
-                    <button class="pilula vidro" title="Busca rápida (em breve)">{icone("busca")}"⌘K"</button>
-                    <button class="pilula vidro" title="Alertas">{icone("sino")}</button>
+                    <globais::Busca e=e />
+                    <globais::Alertas e=e />
                     <button class="pilula vidro" title="Modo desempenho" on:click=move |_| desempenho.update(|v| *v = !*v)>
                         "Modo desempenho"
                         <span class="chave" class:on=move || desempenho.get()></span>
