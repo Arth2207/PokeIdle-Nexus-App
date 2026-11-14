@@ -58,6 +58,10 @@ pub struct Sombra {
     ultimo_ciclo: i64,
     /// Com escrita: conta do app e trava contra repetir o mesmo comando.
     envio: crate::motor_envio::Envio,
+    /// Com escrita: o que anotar no `D.acoes` (resultado dos comandos, alertas, registros).
+    registros: crate::motor_registro::Registros,
+    /// O laço guardado no banco já foi lido (uma vez, ao iniciar).
+    laco_restaurado: bool,
 }
 
 impl Sombra {
@@ -69,11 +73,17 @@ impl Sombra {
                 .build()?,
             fuso_ms,
             escrita,
-            laco: EstadoLaco::default(),
+            // Lendo do próprio Nexus, o laço é dele: as marcas não vêm mais do legado.
+            laco: EstadoLaco {
+                proprio: url == FONTE_NEXUS,
+                ..EstadoLaco::default()
+            },
             linhas: HashMap::new(),
             dex: None,
             ultimo_ciclo: 0,
             envio: crate::motor_envio::Envio::default(),
+            registros: crate::motor_registro::Registros::default(),
+            laco_restaurado: false,
         })
     }
 
@@ -133,6 +143,13 @@ impl Sombra {
     /// Um ciclo: devolve (decisões gravadas, ações novas do legado).
     pub async fn ciclo(&mut self, db: &PgPool) -> anyhow::Result<(u64, u64)> {
         self.pokedex(db, crate::bolsa::agora_ms()).await?;
+        if self.laco.proprio && !self.laco_restaurado {
+            if let Some(v) = repo::carregar_laco(db).await? {
+                self.laco.restaurar(&v);
+            }
+            self.laco_restaurado = true;
+        }
+        self.conferir(db).await?;
         let (dados, janela) = if self.url == FONTE_NEXUS {
             self.ler_do_nexus(db).await?
         } else {
@@ -225,22 +242,69 @@ impl Sombra {
             .collect();
         let n = repo::gravar_decisoes(db, &linhas).await?;
         if self.escrita {
-            let fila: Vec<(String, String, Value)> = decisoes
-                .iter()
-                .filter_map(|x| {
-                    x.decisao
-                        .comando_da_fila()
-                        .map(|(tipo, params)| (x.nick.clone(), tipo, params))
-                })
-                .collect();
-            let fila =
-                self.envio
-                    .filtrar(agora, &crate::motor_envio::contas_por_nick(&janela), fila);
-            // Vale até o próximo ciclo: comando velho com o estado já mudado não serve.
-            let ids = repo::enfileirar(db, agora, &fila, agora + 2 * 30_000).await?;
-            metrics::counter!("nexus_motor_comandos_total").increment(ids.len() as u64);
+            self.escrever(db, agora, &janela, &decisoes).await?;
+        }
+        if self.laco.proprio {
+            repo::gravar_laco(db, &self.laco.para_json()).await?;
         }
         Ok((n, novas))
+    }
+
+    /// Com escrita: enfileira os comandos do ciclo (conta do app, sem repetir) e anota os
+    /// alertas e registros em `D.acoes`.
+    async fn escrever(
+        &mut self,
+        db: &PgPool,
+        agora: i64,
+        janela: &Value,
+        decisoes: &[laco::DecisaoDoCiclo],
+    ) -> anyhow::Result<()> {
+        let mut cmds = Vec::new();
+        let mut regs = Vec::new();
+        for x in decisoes {
+            if let Some((tipo, params)) = x.decisao.comando_da_fila() {
+                cmds.push((x.nick.clone(), tipo, params));
+                regs.push(registro_de(&x.decisao));
+            }
+        }
+        let saem = self
+            .envio
+            .filtrar(agora, &crate::motor_envio::contas_por_nick(janela), &cmds);
+        let fila: Vec<(String, String, Value)> = saem
+            .iter()
+            .filter_map(|(i, conta)| {
+                let (_, tipo, params) = cmds.get(*i)?;
+                Some((conta.clone(), tipo.clone(), params.clone()))
+            })
+            .collect();
+        // Vale até o próximo ciclo: comando velho com o estado já mudado não serve.
+        let ids = repo::enfileirar(db, agora, &fila, agora + 2 * 30_000).await?;
+        metrics::counter!("nexus_motor_comandos_total").increment(ids.len() as u64);
+        let aguardar = ids
+            .iter()
+            .zip(&saem)
+            .filter_map(|(id, (i, _))| {
+                let r = regs.get(*i)?.clone()?;
+                Some((*id, cmds.get(*i)?.0.clone(), r))
+            })
+            .collect();
+        self.registros.aguardar(agora, aguardar);
+        let acoes = self.registros.das_decisoes(agora, decisoes);
+        repo::gravar_acoes(db, &acoes).await?;
+        self.registros.anotados();
+        Ok(())
+    }
+
+    /// Resultado dos comandos que o app já executou → `D.acoes` (antes de ler o `D`).
+    async fn conferir(&mut self, db: &PgPool) -> anyhow::Result<()> {
+        let ids = self.registros.ids();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let r = repo::resultados_comandos(db, &ids).await?;
+        let acoes = self.registros.dos_resultados(crate::bolsa::agora_ms(), &r);
+        repo::gravar_acoes(db, &acoes).await?;
+        Ok(())
     }
 
     /// Laço até o cancelamento.
@@ -320,6 +384,17 @@ pub async fn relatorio(db: &PgPool, desde_h: i64, tolerancia_ms: i64) -> anyhow:
         }
     );
     Ok(())
+}
+
+/// O registro que segue um comando (o legado o gravava com a resposta do jogo).
+fn registro_de(d: &nucleo::motor::regras::Decisao) -> Option<nucleo::motor::regras::Registro> {
+    use nucleo::motor::regras::Decisao;
+    match d {
+        Decisao::Comando { registro, .. } | Decisao::TrocarHunt { registro, .. } => {
+            registro.clone()
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

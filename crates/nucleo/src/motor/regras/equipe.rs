@@ -2878,6 +2878,7 @@ fn registro(tipo: &str, ok: String, falha: String) -> Registro {
         tipo: tipo.to_owned(),
         texto_ok: ok,
         texto_falha: falha,
+        custo: None,
     }
 }
 

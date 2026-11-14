@@ -40,6 +40,7 @@ mod limite;
 mod metricas;
 mod motor;
 mod motor_envio;
+mod motor_registro;
 mod motor_sombra;
 mod raros;
 mod rotas;

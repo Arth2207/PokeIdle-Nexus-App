@@ -143,6 +143,7 @@ pub fn bola(_d: &Value, laco: &mut EstadoLaco, r: &Relogio, conta: &ContaViva) -
         nick: conta.nick.clone(),
         comando: Value::Object(cmd),
         registro: Some(Registro {
+            custo: None,
             tipo: "bola".into(),
             texto_ok: "A bola automática estava desligada: religuei (captura tudo que der).".into(),
             texto_falha: "Não consegui religar a bola automática ({r}).".into(),
@@ -304,6 +305,7 @@ pub fn extras(d: &Value, laco: &mut EstadoLaco, r: &Relogio, conta: &ContaViva) 
                     nome,
                     nivel,
                     registro: Some(Registro {
+                        custo: None,
                         tipo: "retomar".into(),
                         texto_ok: format!("{ate} (ok)."),
                         texto_falha: format!("{ate} ({{r}})."),

@@ -734,6 +734,7 @@ pub fn motor_compra_com(
             nick: nick.into(),
             comando: json!({"t": "shop.buy", "kind": kind, "id": cat.get("id").cloned().unwrap_or(Value::Null), "qty": js::json_num(qty)}),
             registro: Some(Registro {
+                custo: Some(custo),
                 tipo: "compra".into(),
                 texto_ok: format!(
                     "Comprou {} {} por {} de ouro (tinha {}{}).",
@@ -867,6 +868,7 @@ pub fn motor_pocao_com(
         nick: nick.into(),
         comando: Value::Object(cmd),
         registro: Some(Registro {
+            custo: None,
             tipo: "pocao".into(),
             texto_ok,
             texto_falha: "Não consegui mudar a ordem das poções ({r}).".into(),

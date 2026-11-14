@@ -584,12 +584,17 @@ fn Configuracoes(e: Estado) -> impl IntoView {
                 on:change=move |ev| {
                     let v = event_target_value(&ev);
                     guardar(CHAVE_DESCOBERTA, &v);
+                    let ligado = v == "sim";
                     e.descoberta.set(v);
+                    // Vale na hora, sem reconectar (reconectar perde a fila de eventos).
+                    spawn_local(async move {
+                        let _ = invoke("definir_descoberta", args(&[("ligado", JsValue::from_bool(ligado))])).await;
+                    });
                 }>
                 <option value="nao">"Desligada"</option>
                 <option value="sim">"Ligada: grava tudo o que o jogo manda e recebe (sem senhas e tokens)"</option>
             </select>
-            <div class="dica">"Para descobrir dados novos (PvP, boss). Vale ao clicar em Conectar."</div>
+            <div class="dica">"Para descobrir dados novos (PvP, boss). Vale na hora, sem reconectar."</div>
             <label class="campo" for="aprender">"Aprender PvP"</label>
             <select id="aprender" class="caixa"
                 prop:value=move || e.aprender.get()

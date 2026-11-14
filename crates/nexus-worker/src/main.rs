@@ -178,12 +178,15 @@ async fn loop_etl_eficiencia(
     escrita: bool,
     parar: CancellationToken,
 ) {
-    // Dorme primeiro: a primeira rodada é 1 hora (ou o intervalo configurado) depois do boot
+    // A primeira rodada sai 5 min depois do boot (o worker reinicia a cada deploy: esperar o
+    // intervalo cheio deixava a tabela parada em dia de vários deploys); depois, no intervalo.
+    let mut espera = intervalo.min(Duration::from_secs(5 * 60));
     loop {
         tokio::select! {
-            _ = tokio::time::sleep(intervalo) => {}
+            _ = tokio::time::sleep(espera) => {}
             _ = parar.cancelled() => break,
         }
+        espera = intervalo;
 
         match jobs::etl_eficiencia::ciclo(&db, escrita).await {
             Ok(n) => info!(upsertados = n, "etl_eficiencia: ciclo ok"),

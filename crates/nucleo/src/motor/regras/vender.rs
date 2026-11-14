@@ -384,6 +384,7 @@ fn mover(nick: &str, it: &Value, para: &str) -> Decisao {
         nick: nick.to_owned(),
         comando: Value::Object(cmd),
         registro: Some(Registro {
+            custo: None,
             tipo: "depot".into(),
             // o legado só registra quando o jogo recusa
             texto_ok: String::new(),
@@ -500,6 +501,7 @@ pub fn executar_vender(
         nick: nick.to_owned(),
         comando: json!({"t": "shop.sellAllPokemons", "ateId": js::json_num(ate_id)}),
         registro: Some(Registro {
+            custo: None,
             tipo: "depot".into(),
             texto_ok: texto.clone(),
             texto_falha: texto,
@@ -683,6 +685,7 @@ pub fn motor_pedras(
             nick: nick.to_owned(),
             comando: Value::Object(cmd),
             registro: Some(Registro {
+                custo: None,
                 tipo: "refino".into(),
                 texto_ok: texto.clone(),
                 texto_falha: texto,

@@ -1666,6 +1666,7 @@ pub fn motor_hunt_completo(
                 nome: de.clone(),
                 nivel: u.get("nivelDe").cloned().unwrap_or(Value::Null),
                 registro: Some(Registro {
+                    custo: None,
                     tipo: "hunt".into(),
                     texto_ok: format!("{base_txt} {fim}"),
                     texto_falha: format!("{base_txt} — falhou: {{r}} {fim}"),
@@ -2076,6 +2077,7 @@ pub fn motor_hunt_completo(
         nome: alvo.nome.clone(),
         nivel: jn(alvo.nivel),
         registro: Some(Registro {
+            custo: None,
             tipo: "hunt".into(),
             texto_ok,
             texto_falha,

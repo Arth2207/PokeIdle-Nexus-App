@@ -43,23 +43,27 @@ fn chave(conta: &str, tipo: &str, params: &Value) -> String {
 }
 
 impl Envio {
-    /// `(nick, tipo, params)` do ciclo → `(conta do app, tipo, params)` que podem sair agora.
+    /// `(nick, tipo, params)` do ciclo → os que podem sair agora: `(índice em cmds, conta do
+    /// app)`.
     pub fn filtrar(
         &mut self,
         agora: i64,
         contas: &HashMap<String, String>,
-        cmds: Vec<(String, String, Value)>,
-    ) -> Vec<(String, String, Value)> {
+        cmds: &[(String, String, Value)],
+    ) -> Vec<(usize, String)> {
         self.enviados.retain(|_, t| agora - *t < REPETIR_MS);
         let mut s = Vec::new();
-        for (nick, tipo, params) in cmds {
-            let conta = contas.get(&nick.to_lowercase()).cloned().unwrap_or(nick);
-            let k = chave(&conta, &tipo, &params);
+        for (i, (nick, tipo, params)) in cmds.iter().enumerate() {
+            let conta = contas
+                .get(&nick.to_lowercase())
+                .cloned()
+                .unwrap_or_else(|| nick.clone());
+            let k = chave(&conta, tipo, params);
             if self.enviados.contains_key(&k) {
                 continue;
             }
             self.enviados.insert(k, agora);
-            s.push((conta, tipo, params));
+            s.push((i, conta));
         }
         s
     }
@@ -89,21 +93,22 @@ mod testes {
             )
         };
         let mut e = Envio::default();
-        let s = e.filtrar(0, &contas, vec![compra(100), mover(1)]);
-        assert_eq!(s.len(), 2);
-        assert_eq!(s[0].0, "alllphha");
+        let s = e.filtrar(0, &contas, &[compra(100), mover(1)]);
+        assert_eq!(
+            s,
+            vec![(0, "alllphha".to_owned()), (1, "alllphha".to_owned())]
+        );
         // Ciclo seguinte: mesma compra (outra quantidade) e o mesmo pokémon não saem; outro sai.
-        let s = e.filtrar(30_000, &contas, vec![compra(90), mover(1), mover(2)]);
-        assert_eq!(s.len(), 1);
-        assert_eq!(s[0].2["pokemonId"], 2);
+        let s = e.filtrar(30_000, &contas, &[compra(90), mover(1), mover(2)]);
+        assert_eq!(s, vec![(2, "alllphha".to_owned())], "só o pokémon 2");
         // Passado o tempo, pode de novo. Conta fora da janela segue com o nick.
-        let s = e.filtrar(REPETIR_MS, &contas, vec![compra(90)]);
+        let s = e.filtrar(REPETIR_MS, &contas, &[compra(90)]);
         assert_eq!(s.len(), 1);
         let s = e.filtrar(
             REPETIR_MS,
             &contas,
-            vec![("Outro".into(), "x".into(), json!({}))],
+            &[("Outro".into(), "x".into(), json!({}))],
         );
-        assert_eq!(s[0].0, "Outro");
+        assert_eq!(s, vec![(0, "Outro".to_owned())]);
     }
 }

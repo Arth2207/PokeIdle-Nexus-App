@@ -522,6 +522,21 @@ impl Avaliador for Janelas {
     }
 }
 
+/// Liga ou desliga o modo Descoberta na hora, sem reiniciar o núcleo (reiniciar perdia a fila de
+/// eventos ainda não enviada).
+#[tauri::command]
+fn definir_descoberta(ligado: bool, app: AppHandle, estado: State<'_, Estado>) {
+    estado.descoberta.store(ligado, Ordering::Relaxed);
+    let contas: Vec<String> = travar(&estado.contas).keys().cloned().collect();
+    for c in contas {
+        if let Some(w) = app.get_webview(&rotulo_da_conta(&c)) {
+            let _ = w.eval(format!(
+                "window.__nexus&&window.__nexus.bruto&&window.__nexus.bruto({ligado})"
+            ));
+        }
+    }
+}
+
 /// Abre as janelas das contas e liga o núcleo. `modo`: `ativo` ou `sombra` (padrão).
 /// Segunda chamada reinicia o núcleo.
 #[tauri::command]
@@ -678,6 +693,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             api::api_get,
             iniciar_nucleo,
+            definir_descoberta,
             salvar_token,
             tem_token,
             posicionar_conta,

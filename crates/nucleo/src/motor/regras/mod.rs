@@ -127,6 +127,9 @@ pub struct Registro {
     pub tipo: String,
     pub texto_ok: String,
     pub texto_falha: String,
+    /// Ouro gasto se o jogo responder `ok` (compra): entra na ação, para o teto por hora.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custo: Option<f64>,
 }
 
 /// O que uma regra decidiu. Em sombra, só é gravado.
@@ -178,9 +181,60 @@ pub struct EstadoLaco {
     pub marcas: HashMap<(String, String), f64>,
     /// `ultimaHunt`: a última hunt vista por conta (`{nome, lvl, slug, t}`).
     pub ultima_hunt: HashMap<String, Value>,
+    /// O Nexus é o dono do laço (Fase 4 sem o legado): os campos que a janela traz entram sem
+    /// apagar as marcas que as regras gravaram.
+    pub proprio: bool,
 }
 
 impl EstadoLaco {
+    /// Para guardar no banco (sobrevive a reinícios): marcas finitas, alertas e última hunt.
+    pub fn para_json(&self) -> Value {
+        let mut marcas: Vec<_> = self
+            .marcas
+            .iter()
+            .filter(|(_, v)| v.is_finite())
+            .map(|((n, c), v)| serde_json::json!([n, c, v]))
+            .collect();
+        marcas.sort_by_key(ToString::to_string);
+        serde_json::json!({"marcas": marcas, "avisado": self.avisado, "ultimaHunt": self.ultima_hunt})
+    }
+
+    /// Volta o que [`EstadoLaco::para_json`] guardou (mantém `proprio`).
+    pub fn restaurar(&mut self, v: &Value) {
+        for m in v
+            .get("marcas")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let (Some(n), Some(c), Some(x)) = (
+                m.get(0).and_then(Value::as_str),
+                m.get(1).and_then(Value::as_str),
+                m.get(2).and_then(Value::as_f64),
+            ) {
+                self.marcar(n, c, x);
+            }
+        }
+        for (k, t) in v
+            .get("avisado")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(t) = t.as_i64() {
+                self.avisado.insert(k.clone(), t);
+            }
+        }
+        for (k, h) in v
+            .get("ultimaHunt")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            self.ultima_hunt.insert(k.clone(), h.clone());
+        }
+    }
+
     /// `conta.<campo> || 0`.
     pub fn marca(&self, nick: &str, campo: &str) -> f64 {
         self.marcas
@@ -197,7 +251,9 @@ impl EstadoLaco {
     /// Em sombra, o estado do laço do legado vale a cada ciclo: as marcas da conta passam a
     /// ser os campos numéricos e lógicos que a rota `janela` mandou (`true` = 1).
     pub fn adotar_campos(&mut self, nick: &str, campos: &serde_json::Map<String, Value>) {
-        self.marcas.retain(|(n, _), _| n != nick);
+        if !self.proprio {
+            self.marcas.retain(|(n, _), _| n != nick);
+        }
         for (k, v) in campos {
             let x = match v {
                 Value::Bool(b) => f64::from(u8::from(*b)),
@@ -276,6 +332,39 @@ pub fn shiny_bolas(
 mod testes {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn laco_proprio_mescla_campos_e_volta_do_banco() {
+        let campos = json!({"sessaoInicio": 5, "venderBusy": false});
+        let campos = campos.as_object().cloned().unwrap_or_default();
+        let mut sombra = EstadoLaco::default();
+        sombra.marcar("A", "mediasEm", 100.0);
+        sombra.adotar_campos("A", &campos);
+        assert_eq!(
+            sombra.marca("A", "mediasEm"),
+            0.0,
+            "em sombra a janela do legado manda"
+        );
+        let mut l = EstadoLaco {
+            proprio: true,
+            ..EstadoLaco::default()
+        };
+        l.marcar("A", "mediasEm", 100.0);
+        l.adotar_campos("A", &campos);
+        assert_eq!(
+            l.marca("A", "mediasEm"),
+            100.0,
+            "o Nexus guarda as suas marcas"
+        );
+        assert_eq!(l.marca("A", "sessaoInicio"), 5.0);
+        l.avisado.insert("A|bolas".into(), 7);
+        l.ultima_hunt.insert("A".into(), json!({"slug": "x"}));
+        let mut volta = EstadoLaco::default();
+        volta.restaurar(&l.para_json());
+        assert_eq!(volta.marca("A", "mediasEm"), 100.0);
+        assert_eq!(volta.avisado.get("A|bolas"), Some(&7));
+        assert_eq!(volta.ultima_hunt.get("A"), Some(&json!({"slug": "x"})));
+    }
 
     #[test]
     fn de_json_prefere_a_foto_do_comeco_do_ciclo() {

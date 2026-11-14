@@ -158,7 +158,8 @@ pub async fn carregar_dados(db: &PgPool) -> Result<Value, ErroMotor> {
         }
     }
     let acoes: Vec<String> = sqlx::query_scalar(
-        "SELECT coalesce(texto::text, dados::text) FROM nexus.motor_acao ORDER BY id DESC",
+        // As 300 mais recentes, como o `D.acoes` do legado (que cortava em 300).
+        "SELECT coalesce(texto::text, dados::text) FROM nexus.motor_acao ORDER BY id DESC LIMIT 300",
     )
     .fetch_all(&mut *tx)
     .await?;
@@ -497,6 +498,56 @@ pub async fn janelas_frescas(db: &PgPool, max_s: i64) -> Result<Vec<Value>, sqlx
             j
         })
         .collect())
+}
+
+/// Estado do laço do motor guardado (marcas, alertas, última hunt), se houver.
+pub async fn carregar_laco(db: &PgPool) -> Result<Option<Value>, sqlx::Error> {
+    sqlx::query_scalar("SELECT dados FROM nexus.motor_laco WHERE id = 1")
+        .fetch_optional(db)
+        .await
+}
+
+pub async fn gravar_laco(db: &PgPool, dados: &Value) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO nexus.motor_laco (id, em, dados) VALUES (1, now(), $1)
+         ON CONFLICT (id) DO UPDATE SET em = now(), dados = EXCLUDED.dados",
+    )
+    .bind(dados)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Ações do motor do Nexus (resultado dos comandos) no `D.acoes`: `{t, nick, tipo, texto, ok,
+/// custo?}`, como o legado gravava.
+pub async fn gravar_acoes(db: &PgPool, acoes: &[Value]) -> Result<u64, sqlx::Error> {
+    let mut n = 0;
+    for a in acoes {
+        n += sqlx::query(
+            "INSERT INTO nexus.motor_acao (nick, t, tipo, ok, dados)
+             VALUES ($1::jsonb->>'nick', ($1::jsonb->>'t')::bigint, $1::jsonb->>'tipo',
+                     ($1::jsonb->>'ok')::boolean, $1::jsonb)",
+        )
+        .bind(a)
+        .execute(db)
+        .await?
+        .rows_affected();
+    }
+    Ok(n)
+}
+
+/// Resultado dos comandos já executados entre `ids`: `(id, resultado)`.
+pub async fn resultados_comandos(
+    db: &PgPool,
+    ids: &[i64],
+) -> Result<Vec<(i64, String)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT id, coalesce(resultado, '') FROM nexus.comando
+          WHERE id = ANY($1) AND executado_em IS NOT NULL",
+    )
+    .bind(ids)
+    .fetch_all(db)
+    .await
 }
 
 #[cfg(test)]
