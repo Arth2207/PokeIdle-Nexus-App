@@ -550,6 +550,20 @@ pub async fn resultados_comandos(
     .await
 }
 
+/// Contas do app: `{conta, nick, em}` (última janela recebida), da mais recente.
+pub async fn contas_do_app(db: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
+    let linhas: Vec<(String, Option<String>, i64)> = sqlx::query_as(
+        "SELECT conta, janela->>'nick', (extract(epoch FROM em) * 1000)::bigint
+           FROM nexus.motor_janela ORDER BY conta",
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(linhas
+        .into_iter()
+        .map(|(conta, nick, em)| serde_json::json!({"conta": conta, "nick": nick, "em": em}))
+        .collect())
+}
+
 #[cfg(test)]
 mod testes {
     use super::*;

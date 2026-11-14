@@ -1,5 +1,6 @@
 //! `POST /api/motor/janela` `{conta, janela}`: a janela da conta montada pelo app (Fase 4).
 //! O motor do Nexus lê daqui quando roda sem o motor do legado (`NEXUS_MOTOR_SOMBRA_URL=nexus`).
+//! `GET /api/contas`: as contas do app (rótulo, nick no jogo e a última janela), para o painel.
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -43,6 +44,16 @@ pub async fn gravar(
         Ok(()) => Json(json!({"ok": true})).into_response(),
         Err(e) => {
             tracing::warn!(erro = %e, "janela do motor");
+            erro(StatusCode::SERVICE_UNAVAILABLE, "banco indisponível")
+        }
+    }
+}
+
+pub async fn contas(State(estado): State<Estado>) -> Response {
+    match persistencia::motor::contas_do_app(&estado.db).await {
+        Ok(c) => Json(json!({ "contas": c })).into_response(),
+        Err(e) => {
+            tracing::warn!(erro = %e, "contas do app");
             erro(StatusCode::SERVICE_UNAVAILABLE, "banco indisponível")
         }
     }

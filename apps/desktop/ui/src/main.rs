@@ -830,7 +830,10 @@ fn App() -> impl IntoView {
     let hash = web_sys::window()
         .and_then(|j| j.location().hash().ok())
         .unwrap_or_default();
-    let inicial = pagina_do_slug(hash.trim_start_matches('#')).unwrap_or(if url_valida(&url) {
+    // Como site (sem o app), não há jogo nem configuração local: começa na Visão geral.
+    let inicial = pagina_do_slug(hash.trim_start_matches('#')).unwrap_or(if !tem_tauri() {
+        "Visão geral"
+    } else if url_valida(&url) {
         "Jogo"
     } else {
         "Configurações"
@@ -880,6 +883,22 @@ fn App() -> impl IntoView {
             let _ = j.location().set_hash(slug_da_pagina(pagina.get()));
         }
     });
+    if !tem_tauri() {
+        // Como site: as contas vêm do servidor (as que o app manda).
+        let contas = e.contas_txt;
+        spawn_local(async move {
+            if let Ok(v) = dados::api("", "/api/contas").await {
+                let l: Vec<String> = dados::lista(&v, "contas")
+                    .iter()
+                    .map(|c| dados::txt(c, "conta"))
+                    .filter(|c| !c.is_empty())
+                    .collect();
+                if !l.is_empty() {
+                    contas.set(l.join(", "));
+                }
+            }
+        });
+    }
     if tem_tauri() {
         atualizar_token(e);
         // Conecta sozinho se endereço e contas já estão salvos.

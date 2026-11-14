@@ -7,8 +7,19 @@ use wasm_bindgen::JsValue;
 
 use crate::{args, erro_texto, invoke, Estado};
 
-/// `GET` numa rota `/api/...` do Nexus.
+/// Dentro do app (ponte do Tauri) ou como site (navegador)?
+pub fn no_app() -> bool {
+    web_sys::window()
+        .and_then(|w| js_sys::Reflect::has(&w, &JsValue::from_str("__TAURI_INTERNALS__")).ok())
+        .unwrap_or(false)
+}
+
+/// `GET` numa rota `/api/...` do Nexus. No app, pelo comando `api_get` (o token fica no Rust);
+/// como site, `fetch` em `api/...` relativo à página (o Nginx põe o token e só deixa GET).
 pub async fn api(url: &str, rota: &str) -> Result<Value, String> {
+    if !no_app() {
+        return api_site(rota).await;
+    }
     let a = args(&[
         ("url", JsValue::from_str(url)),
         ("rota", JsValue::from_str(rota)),
@@ -17,6 +28,25 @@ pub async fn api(url: &str, rota: &str) -> Result<Value, String> {
     let texto = js_sys::JSON::stringify(&r)
         .ok()
         .and_then(|s| s.as_string())
+        .unwrap_or_default();
+    serde_json::from_str(&texto).map_err(|e| e.to_string())
+}
+
+async fn api_site(rota: &str) -> Result<Value, String> {
+    let rel = format!("api{}", rota.strip_prefix("/api").unwrap_or(rota));
+    let w = web_sys::window().ok_or("sem janela")?;
+    let resp = wasm_bindgen_futures::JsFuture::from(w.fetch_with_str(&rel))
+        .await
+        .map_err(|e| erro_texto(&e))?;
+    let resp: web_sys::Response =
+        wasm_bindgen::JsCast::dyn_into(resp).map_err(|_| "resposta inválida")?;
+    if !resp.ok() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let texto = wasm_bindgen_futures::JsFuture::from(resp.text().map_err(|e| erro_texto(&e))?)
+        .await
+        .map_err(|e| erro_texto(&e))?
+        .as_string()
         .unwrap_or_default();
     serde_json::from_str(&texto).map_err(|e| e.to_string())
 }
