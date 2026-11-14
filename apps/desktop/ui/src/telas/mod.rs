@@ -3,6 +3,7 @@
 
 pub mod automacao;
 pub mod bestiario;
+pub mod bosses;
 pub mod cacada;
 pub mod combate;
 pub mod escaneamento;

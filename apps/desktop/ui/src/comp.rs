@@ -285,6 +285,11 @@ pub const CSS: &str = r#"
 .diario-m div { display:grid; grid-template-columns:44px 90px 1fr; gap:8px; }
 .diario-m .h { font-variant-numeric:tabular-nums; color:var(--texto-3); }
 .diario-m .falha { color:var(--piora); }
+.grade-bosses { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px; margin-bottom:12px; }
+.boss { display:grid; grid-template-columns:96px 1fr; gap:10px; align-items:center; background:rgba(255,255,255,.6); border:1px solid var(--vidro-borda); border-radius:16px; padding:10px; cursor:pointer; }
+.boss img { width:96px; height:96px; object-fit:contain; filter:drop-shadow(0 8px 10px rgba(22,24,28,.25)); }
+.boss .n { font-weight:700; } .boss .s { font-size:12px; color:var(--texto-2); margin-bottom:4px; }
+.boss.sel { outline:2px solid var(--melhora); }
 .linha { width:100%; height:180px; }
 .linha path { fill:none; stroke:var(--melhora); stroke-width:2.5; vector-effect:non-scaling-stroke; }
 .linha .faixa { fill:var(--trilho); }

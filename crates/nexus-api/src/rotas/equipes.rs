@@ -87,6 +87,53 @@ pub async fn bosses(
     }
 }
 
+/// `GET /api/equipes/resumo?nick=`: o plano de cada boss num pedido só (grade do Combate):
+/// os dados do boss, se a conta alcança e já venceu, e a cobertura da melhor equipe da conta
+/// e da ideal (dano total ÷ HP do boss).
+pub async fn resumo(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Query(p): Params,
+) -> Response {
+    let nick = match nick_de(cliente.as_ref(), p.get("nick").map(String::as_str)) {
+        Ok(n) => n,
+        Err(()) => return proibido(),
+    };
+    let (motor, est) = dados!(estado);
+    let r = tokio::task::spawn_blocking(move || {
+        let b = equipes::resposta_bosses(&motor, &est, nick.as_deref());
+        let lista: Vec<Value> = b
+            .get("bosses")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|boss| {
+                let key = boss.get("key").and_then(Value::as_str).unwrap_or_default();
+                let plano =
+                    equipes::resposta_plano(&motor, &est, nick.as_deref(), Some(key), None).ok();
+                let c = |k: &str| {
+                    plano
+                        .as_ref()
+                        .and_then(|p| p.pointer(&format!("/{k}/cobertura")).cloned())
+                        .unwrap_or(Value::Null)
+                };
+                let mut o = boss.clone();
+                if let Value::Object(m) = &mut o {
+                    m.insert("minha".into(), c("minha"));
+                    m.insert("ideal".into(), c("ideal"));
+                }
+                o
+            })
+            .collect();
+        serde_json::json!({"bosses": lista, "conta": b.get("conta")})
+    })
+    .await;
+    match r {
+        Ok(v) => Json(v).into_response(),
+        Err(_) => erro(500, "falha no cálculo"),
+    }
+}
+
 pub async fn plano(
     State(estado): State<Estado>,
     cliente: Option<Extension<Cliente>>,

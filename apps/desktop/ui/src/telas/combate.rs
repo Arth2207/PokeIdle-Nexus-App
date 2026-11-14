@@ -31,62 +31,6 @@ fn tabuleiro(pecas: Vec<(i64, i64, String)>) -> impl IntoView {
     }
 }
 
-fn aba_bosses(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
-    let bosses = recurso(e, versao, || Some("/api/equipes/bosses".into()));
-    let escolhido = RwSignal::new(String::new());
-    let plano = recurso(e, versao, move || {
-        let b = escolhido.get();
-        let n = nick_ativo(e)?;
-        (!b.is_empty()).then(|| format!("/api/equipes/plano?nick={n}&boss={b}"))
-    });
-    view! {
-        {move || carregado(bosses.get(), move |v| view! {
-            <div class="grade-cards">
-                {lista(&v, "bosses").iter().map(|b| {
-                    let key = txt(b, "key");
-                    let k2 = key.clone();
-                    let (selo, classe) = if b.get("feito").and_then(Value::as_bool) == Some(true) {
-                        ("vencido", "selo ok")
-                    } else if b.get("alcanca").and_then(Value::as_bool) == Some(true) {
-                        ("ao alcance", "selo")
-                    } else {
-                        ("fora de alcance", "selo nao")
-                    };
-                    view! {
-                        <div class="mini" class:sel=move || escolhido.get() == k2 on:click=move |_| escolhido.set(key.clone())>
-                            <img src=txt(b, "sprite") alt="" />
-                            <div class="n">{txt(b, "nome")}</div>
-                            <div class="s">{format!("nível {} · {}", inteiro(num(b, "teamLevel").unwrap_or(0.0)), lista(b, "tipos").iter().filter_map(Value::as_str).collect::<Vec<_>>().join("/"))}</div>
-                            <span class=classe>{selo}</span>
-                        </div>
-                    }
-                }).collect_view()}
-            </div>
-        })}
-        {move || (!escolhido.get().is_empty()).then(|| carregado(plano.get(), |p| {
-            let minha = p.get("minha").cloned().unwrap_or(Value::Null);
-            let linhas: Vec<Vec<String>> = lista(&minha, "equipe").iter().map(|x| vec![
-                txt(x, "nome"),
-                inteiro(num(x, "nivel").unwrap_or(0.0)),
-                lista(x, "tipos").iter().filter_map(Value::as_str).collect::<Vec<_>>().join("/"),
-                x.pointer("/bate/mult").and_then(Value::as_f64).map_or("—".into(), |m| format!("×{m}")),
-                x.pointer("/apanha/mult").and_then(Value::as_f64).map_or("—".into(), |m| format!("×{m}")),
-            ]).collect();
-            view! {
-                <div class="secao">{format!("Plano contra {}", p.pointer("/boss/nome").and_then(Value::as_str).unwrap_or(""))}</div>
-                <div class="kpis">
-                    <Kpi titulo="Força vs ideal" valor=format!("{:.0}%", num(&minha, "poderVsIdeal").unwrap_or(0.0) * 100.0)
-                        ajuda="Poder da melhor equipe que a conta tem, contra a equipe ideal para este boss." />
-                    <Kpi titulo="Cobertura" valor=format!("{:.0}%", num(&minha, "cobertura").unwrap_or(0.0) * 100.0) />
-                    <Kpi titulo="Avaliados" valor=inteiro(num(&minha, "avaliados").unwrap_or(0.0)) unidade="pokémon" />
-                </div>
-                <Tabela cab=vec!["Pokémon", "Nível", "Tipos", "Bate", "Apanha"] linhas=linhas />
-                <div class="dica">{txt(&p, "nota")}</div>
-            }
-        }))}
-    }
-}
-
 fn aba_pvp(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
     let sug = recurso(e, versao, move || {
         nick_ativo(e).map(|n| format!("/api/pvp/sugestao?nick={n}"))
@@ -204,7 +148,7 @@ pub fn Combate(e: Estado) -> impl IntoView {
         {cabecalho("Combate", "Como venço este boss ou esta partida, e o que me falta para isso?", versao)}
         <Abas opcoes=ABAS ativa=aba />
         {move || match aba.get() {
-            "Bosses" => aba_bosses(e, versao).into_any(),
+            "Bosses" => super::bosses::aba(e, versao).into_any(),
             "PvP" => aba_pvp(e, versao).into_any(),
             "Treinamento" => aba_treino(e, versao).into_any(),
             _ => aba_raid(e, versao).into_any(),
