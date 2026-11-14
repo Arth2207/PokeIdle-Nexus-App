@@ -70,6 +70,7 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/comandos/fila", get(pvp::fila_comandos))
         .route("/api/equipes/colecao", get(pvp::colecao))
         .route("/api/contas", get(janela::contas))
+        .route("/api/cacada", get(janela::cacada))
         .merge(motor::rotas())
         .route_layer(middleware::from_fn(|req, next| {
             auth::exigir_escopo(LEITURA, req, next)

@@ -82,6 +82,67 @@ pub fn Colunas(linhas: Vec<(String, f64, String)>) -> impl IntoView {
     }
 }
 
+/// Linha no tempo (SVG): os pontos e, se houver, a faixa esperada (média ± 20%) atrás.
+#[component]
+pub fn Linha(pontos: Vec<(String, f64)>, #[prop(optional)] media: Option<f64>) -> impl IntoView {
+    let (w, h) = (600.0, 180.0);
+    let max = pontos
+        .iter()
+        .map(|p| p.1)
+        .chain(media.map(|m| m * 1.2))
+        .fold(0.0_f64, f64::max)
+        .max(1e-9);
+    let n = pontos.len().max(2) as f64 - 1.0;
+    let xy = |i: usize, v: f64| (i as f64 / n * w, h - v / max * (h - 10.0));
+    let caminho: String = pontos
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let (x, y) = xy(i, p.1);
+            format!("{}{x:.1},{y:.1}", if i == 0 { "M" } else { " L" })
+        })
+        .collect();
+    let faixa = media.map(|m| {
+        let (a, b) = (xy(0, m * 1.2).1, xy(0, m * 0.8).1);
+        view! { <rect x="0" y=format!("{a:.1}") width=w height=format!("{:.1}", b - a) class="faixa" /> }
+    });
+    let rotulos: Vec<String> = pontos.iter().map(|p| p.0.clone()).collect();
+    let passo = (rotulos.len() / 6).max(1);
+    view! {
+        <svg class="linha" viewBox=format!("0 0 {w} {h}") preserveAspectRatio="none">
+            {faixa}
+            <path d=caminho />
+        </svg>
+        <div class="linha-rot">
+            {rotulos.into_iter().step_by(passo).map(|r| view! { <span>{r}</span> }).collect_view()}
+        </div>
+    }
+}
+
+/// Mapa de calor: linhas × 24 horas, a cor mais forte é o maior valor da tabela.
+#[component]
+pub fn Calor(linhas: Vec<(String, Vec<Option<f64>>)>) -> impl IntoView {
+    let max = linhas
+        .iter()
+        .flat_map(|l| l.1.iter().flatten())
+        .copied()
+        .fold(0.0_f64, f64::max)
+        .max(1e-9);
+    view! {
+        <div class="calor">
+            <span></span>
+            {(0..24).map(|h| view! { <span class="calor-h">{if h % 2 == 0 { format!("{h:02}") } else { String::new() }}</span> }).collect_view()}
+            {linhas.into_iter().map(|(nome, v)| view! {
+                <span class="calor-n">{nome}</span>
+                {v.into_iter().map(|x| {
+                    let o = x.map_or(0.0, |x| 0.12 + 0.88 * x / max);
+                    view! { <span class="calor-c" style=format!("opacity:{o:.2}") title=x.map(|x| format!("{x:.0}")).unwrap_or_default()></span> }
+                }).collect_view()}
+            }).collect_view()}
+        </div>
+    }
+}
+
 /// Tabela densa com cabeçalho; a primeira coluna à esquerda, o resto alinhado à direita.
 #[component]
 pub fn Tabela(cab: Vec<&'static str>, linhas: Vec<Vec<String>>) -> impl IntoView {
@@ -224,6 +285,14 @@ pub const CSS: &str = r#"
 .diario-m div { display:grid; grid-template-columns:44px 90px 1fr; gap:8px; }
 .diario-m .h { font-variant-numeric:tabular-nums; color:var(--texto-3); }
 .diario-m .falha { color:var(--piora); }
+.linha { width:100%; height:180px; }
+.linha path { fill:none; stroke:var(--melhora); stroke-width:2.5; vector-effect:non-scaling-stroke; }
+.linha .faixa { fill:var(--trilho); }
+.linha-rot { display:flex; justify-content:space-between; font-size:11px; color:var(--texto-3); }
+.calor { display:grid; grid-template-columns:minmax(110px,auto) repeat(24,1fr); gap:2px; font-size:11px; align-items:center; }
+.calor-h { color:var(--texto-3); text-align:center; }
+.calor-n { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-right:6px; }
+.calor-c { height:18px; border-radius:3px; background:var(--melhora); }
 .horas { display:grid; grid-template-columns:repeat(24,1fr); gap:2px; }
 .horas div { height:26px; border-radius:4px; background:var(--melhora); }
 .horas-rot { display:grid; grid-template-columns:repeat(24,1fr); font-size:10px; color:var(--texto-3); text-align:center; }

@@ -1,8 +1,9 @@
 //! `POST /api/motor/janela` `{conta, janela}`: a janela da conta montada pelo app (Fase 4).
 //! O motor do Nexus lê daqui quando roda sem o motor do legado (`NEXUS_MOTOR_SOMBRA_URL=nexus`).
 //! `GET /api/contas`: as contas do app (rótulo, nick no jogo e a última janela), para o painel.
+//! `GET /api/cacada?conta=`: sessão da conta por hora, hunts e drops (tela Caçada).
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
@@ -54,6 +55,33 @@ pub async fn contas(State(estado): State<Estado>) -> Response {
         Ok(c) => Json(json!({ "contas": c })).into_response(),
         Err(e) => {
             tracing::warn!(erro = %e, "contas do app");
+            erro(StatusCode::SERVICE_UNAVAILABLE, "banco indisponível")
+        }
+    }
+}
+
+pub async fn cacada(
+    State(estado): State<Estado>,
+    Query(p): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    use persistencia::cacada as c;
+    let rotulo = p.get("conta").map(String::as_str).unwrap_or_default();
+    let sessao = match c::conta_id(rotulo) {
+        Some(id) => c::sessao(&estado.db, id).await.map(Some),
+        None => Ok(None),
+    };
+    let r = async {
+        Ok::<_, sqlx::Error>(json!({
+            "sessao": sessao?,
+            "hunts": c::hunts(&estado.db).await?,
+            "drops": c::drops(&estado.db, rotulo).await?,
+        }))
+    }
+    .await;
+    match r {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => {
+            tracing::warn!(erro = %e, "caçada");
             erro(StatusCode::SERVICE_UNAVAILABLE, "banco indisponível")
         }
     }

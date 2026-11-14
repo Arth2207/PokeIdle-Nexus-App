@@ -26,6 +26,7 @@ pub(crate) const FONTE_A2: Fonte = Fonte {
 };
 
 /// Nick (minúsculo, como o app grava em `nexus.evento.conta`) de cada conta do ETL.
+/// shortcut: cópia de `persistencia::cacada::CONTAS_A2` (o worker não depende de persistencia); conta nova muda as duas.
 const NICKS: &[(&str, &str)] = &[
     ("mvxorqh6", "alllphha"),
     ("mvxoui28", "sikien"),

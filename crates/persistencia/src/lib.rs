@@ -5,6 +5,7 @@
 //! que ficam desligadas em produção até o cutover.
 
 pub mod bolsa_equipe;
+pub mod cacada;
 pub mod comandos;
 pub mod equipes;
 pub mod eventos;

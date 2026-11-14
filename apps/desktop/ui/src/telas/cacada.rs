@@ -1,114 +1,223 @@
-//! Caçada: onde caçar, e a caçada atual está rendendo o esperado?
+//! Caçada: onde caçar, e a caçada atual está rendendo o esperado? (mockups 03, 04 e 05)
+//! Sessão e mapa de hunts vêm de `/api/cacada` (Postgres: `fato_kill`, `fato_hunt_eficiencia`).
 
 use leptos::prelude::*;
 use serde_json::Value;
 
 use super::{cabecalho, nick_ativo};
-use crate::comp::{carregado, Abas, Barras, Kpi, Tabela};
+use crate::comp::{carregado, Abas, Barras, Calor, Kpi, Linha, Tabela, Veredito};
 use crate::dados::{curto, inteiro, lista, num, recurso, txt};
 use crate::Estado;
 
-const ABAS: &[&str] = &["Sessão", "Mapa de hunts", "Shiny"];
+const ABAS: &[&str] = &["Sessão ao vivo", "Mapa de hunts", "Shiny"];
+const METRICAS: &[&str] = &["Ouro/h", "XP/h", "Abates/h"];
 
-/// A conta do `/api/financeiro` com o nick (sem diferenciar maiúsculas; o legado tem nicks
-/// com letras repetidas, então compara sem as repetições também).
-fn conta_fin<'a>(f: &'a Value, nick: &str) -> Option<&'a Value> {
-    let simples = |s: &str| {
+/// "furious_scizor" → "Furious Scizor".
+fn nome_hunt(slug: &str) -> String {
+    slug.split('_')
+        .map(|p| {
+            let mut c = p.chars();
+            c.next()
+                .map(|a| a.to_uppercase().chain(c).collect::<String>())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Hora local (UTC−3) "HH:00" de um instante em ms.
+fn hh(t: f64) -> String {
+    let h = (((t / 1000.0) as i64 - 3 * 3600).rem_euclid(86_400)) / 3600;
+    format!("{h:02}h")
+}
+
+/// Comparação "x% vs. média" de um valor contra a média (e se melhorou).
+fn vs(v: f64, m: Option<f64>) -> (String, Option<bool>) {
+    match m.filter(|m| *m > 0.0) {
+        Some(m) => (
+            format!("{:+.0}% vs. média de 7 dias", (v / m - 1.0) * 100.0),
+            Some(v >= m),
+        ),
+        None => ("sem média ainda".to_owned(), None),
+    }
+}
+
+fn sessao(c: &Value, hist: Option<Value>, nick: &str) -> AnyView {
+    let s = &c["sessao"];
+    let horas = lista(s, "horas");
+    // A hora corrente está pela metade: a última hora cheia é a penúltima.
+    let ultima = horas
+        .len()
+        .checked_sub(2)
+        .and_then(|i| horas.get(i))
+        .or(horas.last());
+    let Some(u) = ultima.cloned() else {
+        return view! { <div class="vazio">"Sem abates desta conta nas últimas 24 h."</div> }
+            .into_any();
+    };
+    let m = &s["media"];
+    let (ck, bk) = vs(num(&u, "kills").unwrap_or(0.0), num(m, "kills"));
+    let (co, bo) = vs(num(&u, "ouro").unwrap_or(0.0), num(m, "ouro"));
+    let (cx, bx) = vs(num(&u, "xp").unwrap_or(0.0), num(m, "xp"));
+    let pontos: Vec<(String, f64)> = horas
+        .iter()
+        .map(|h| {
+            (
+                hh(num(h, "hora").unwrap_or(0.0)),
+                num(h, "ouro").unwrap_or(0.0),
+            )
+        })
+        .collect();
+    let drops: Vec<Vec<String>> = lista(c, "drops")
+        .iter()
+        .map(|d| {
+            vec![
+                txt(d, "item"),
+                inteiro(num(d, "qtd").unwrap_or(0.0)),
+                txt(d, "de"),
+            ]
+        })
+        .collect();
+    let simples = |n: &str| {
         let mut o = String::new();
-        for c in s.to_lowercase().chars() {
-            if !o.ends_with(c) {
-                o.push(c);
+        for ch in n.to_lowercase().chars() {
+            if !o.ends_with(ch) {
+                o.push(ch);
             }
         }
         o
     };
-    let alvo = simples(nick);
-    lista(f, "contas")
+    let eventos: Vec<Vec<String>> = hist
+        .map(|h| {
+            lista(&h, "acoes")
+                .iter()
+                .filter(|a| simples(&txt(a, "nick")) == simples(nick))
+                .take(8)
+                .map(|a| vec![hh(num(a, "t").unwrap_or(0.0)), txt(a, "texto")])
+                .collect()
+        })
+        .unwrap_or_default();
+    view! {
+        <div class="dica">{format!("Hunt atual: {} · última hora cheia: {}", nome_hunt(&txt(s, "atual")), hh(num(&u, "hora").unwrap_or(0.0)))}</div>
+        <div class="kpis">
+            <Kpi titulo="Abates/h" valor=inteiro(num(&u, "kills").unwrap_or(0.0)) comparacao=ck bom=bk ajuda="Abates na última hora cheia." />
+            <Kpi titulo="Ouro/h" valor=curto(num(&u, "ouro").unwrap_or(0.0)) unidade="gold" comparacao=co bom=bo ajuda="Ouro dos abates na última hora cheia." />
+            <Kpi titulo="XP/h" valor=curto(num(&u, "xp").unwrap_or(0.0)) comparacao=cx bom=bx ajuda="XP do treinador na última hora cheia." />
+        </div>
+        <div class="caixa">
+            <div class="caixa-t">"Rendimento da sessão (ouro/h, 24 h)"</div>
+            <Linha pontos=pontos media=num(m, "ouro").unwrap_or(0.0) />
+            <div class="dica">"Faixa cinza: a média por hora dos 7 dias anteriores, ±20%."</div>
+        </div>
+        <div class="vg-base" style="margin-top:16px">
+            <div class="caixa">
+                <div class="caixa-t">"Drops da sessão (últimas 3 h)"</div>
+                <Tabela cab=vec!["Item", "Qtd", "De"] linhas=drops />
+            </div>
+            <div class="caixa">
+                <div class="caixa-t">"Linha do tempo"</div>
+                <Tabela cab=vec!["Hora", "O que houve"] linhas=eventos />
+            </div>
+        </div>
+    }
+    .into_any()
+}
+
+fn mapa(c: &Value, metrica: &'static str) -> AnyView {
+    let h = &c["hunts"];
+    let k = match metrica {
+        "XP/h" => "xp",
+        "Abates/h" => "kills",
+        _ => "ouro",
+    };
+    let atual = txt(&c["sessao"], "atual");
+    let mut l: Vec<Value> = lista(h, "lista").to_vec();
+    l.sort_by(|a, b| {
+        num(b, k)
+            .unwrap_or(0.0)
+            .total_cmp(&num(a, k).unwrap_or(0.0))
+    });
+    let melhor = l.first().cloned().unwrap_or(Value::Null);
+    let da_atual = l
         .iter()
-        .find(|c| simples(&txt(c, "nick")) == alvo)
+        .find(|x| txt(x, "hunt") == atual)
+        .and_then(|x| num(x, k));
+    let ganho = da_atual.map(|a| num(&melhor, k).unwrap_or(0.0) - a);
+    let barras: Vec<(String, f64, String)> = l
+        .iter()
+        .map(|x| {
+            let v = num(x, k).unwrap_or(0.0);
+            (
+                nome_hunt(&txt(x, "hunt")),
+                v,
+                format!(
+                    "{} · {} h medidas",
+                    curto(v),
+                    inteiro(num(x, "horas").unwrap_or(0.0))
+                ),
+            )
+        })
+        .collect();
+    let mut grade: std::collections::BTreeMap<String, Vec<Option<f64>>> = Default::default();
+    for x in lista(h, "calor") {
+        let linha = grade
+            .entry(nome_hunt(&txt(x, "hunt")))
+            .or_insert_with(|| vec![None; 24]);
+        if let Some(hr) = num(x, "hora").map(|h| h as usize).filter(|h| *h < 24) {
+            linha[hr] = num(x, "ouro");
+        }
+    }
+    let trocar = ganho.filter(|g| *g > 0.0 && txt(&melhor, "hunt") != atual);
+    view! {
+        <div class="kpis">
+            <Kpi titulo="Melhor hunt (7 dias)" valor=nome_hunt(&txt(&melhor, "hunt")) comparacao=format!("{} {metrica}", curto(num(&melhor, k).unwrap_or(0.0))) />
+            <Kpi titulo="Sua hunt atual" valor=nome_hunt(&atual) comparacao=da_atual.map_or("sem medida nos 7 dias".into(), |v| format!("{} {metrica}", curto(v))) />
+            <Kpi titulo="Ganho potencial" valor=ganho.map_or("—".into(), |g| format!("{g:+.0}")) unidade=metrica bom=ganho.map(|g| g <= 0.0) />
+        </div>
+        {trocar.map(|g| view! {
+            <Veredito titulo=format!("Trocar para {}", nome_hunt(&txt(&melhor, "hunt")))
+                motivo=format!("+{} {metrica} medidos nos últimos 7 dias (todas as contas, sessões de 30 min ou mais).", curto(g))
+                acao="O motor troca de hunt sozinho quando a regra da conta permite.".to_owned() tom="bom" />
+        })}
+        <div class="vg-base" style="margin-top:16px">
+            <div class="caixa">
+                <div class="caixa-t">{format!("Hunts por {metrica}")}</div>
+                <Barras linhas=barras destaque=nome_hunt(&atual) />
+            </div>
+            <div class="caixa">
+                <div class="caixa-t">"Mapa de calor · hunt × hora (ouro/h)"</div>
+                <Calor linhas=grade.into_iter().collect() />
+            </div>
+        </div>
+    }
+    .into_any()
 }
 
 #[component]
 pub fn Cacada(e: Estado) -> impl IntoView {
     let versao = RwSignal::new(0u32);
-    let aba = RwSignal::new("Sessão");
-    let fin = recurso(e, versao, || Some("/api/financeiro".into()));
+    let aba = RwSignal::new("Sessão ao vivo");
+    let metrica = RwSignal::new("Ouro/h");
+    let cacada = recurso(e, versao, move || {
+        Some(format!(
+            "/api/cacada?conta={}",
+            nick_ativo(e).unwrap_or_default()
+        ))
+    });
     let hist = recurso(e, versao, || Some("/api/historico".into()));
     let shiny = recurso(e, versao, || Some("/api/shiny/servidor?dias=7".into()));
     view! {
         {cabecalho("Caçada", "Onde caçar, e a caçada atual está rendendo o esperado?", versao)}
         <Abas opcoes=ABAS ativa=aba />
         {move || match aba.get() {
-            "Sessão" => carregado(fin.get(), move |f| {
-                let nick = nick_ativo(e).unwrap_or_default();
-                let Some(c) = conta_fin(&f, &nick).cloned() else {
-                    return view! { <div class="vazio">"Sem histórico desta conta ainda."</div> }.into_any();
-                };
-                let dias = lista(&c, "semana").to_vec();
-                let hoje = dias.last().cloned().unwrap_or(Value::Null);
-                let anteriores: Vec<&Value> = dias.iter().rev().skip(1).take(7).collect();
-                let media = |k: &str| {
-                    let n = anteriores.len().max(1) as f64;
-                    anteriores.iter().map(|d| num(d, k).unwrap_or(0.0)).sum::<f64>() / n
-                };
-                let comp = |k: &str| {
-                    let m = media(k);
-                    let h = num(&hoje, k).unwrap_or(0.0);
-                    (format!("média dos 7 anteriores {}", curto(m)), (!anteriores.is_empty()).then_some(h >= m))
-                };
-                let dia = txt(&hoje, "dia");
-                let (ck, bk) = comp("kills");
-                let (cl, bl) = comp("loot");
-                let (cx, bx) = comp("xp");
-                let linhas: Vec<Vec<String>> = dias.iter().rev().map(|d| vec![
-                    txt(d, "dia"),
-                    inteiro(num(d, "kills").unwrap_or(0.0)),
-                    curto(num(d, "loot").unwrap_or(0.0)),
-                    curto(num(d, "xp").unwrap_or(0.0)),
-                    inteiro(num(d, "bolas").unwrap_or(0.0)),
-                    inteiro(num(d, "capt").unwrap_or(0.0)),
-                    inteiro(num(d, "shiny").unwrap_or(0.0)),
-                    inteiro(num(d, "pot").unwrap_or(0.0)),
-                ]).collect();
-                view! {
-                    <div class="dica">{format!("Último dia com dado: {dia}.")}</div>
-                    <div class="kpis">
-                        <Kpi titulo="Abates no dia" valor=inteiro(num(&hoje, "kills").unwrap_or(0.0)) comparacao=ck bom=bk
-                            ajuda="Abates do dia (UTC−3) contra a média dos 7 dias anteriores." />
-                        <Kpi titulo="Loot no dia" valor=curto(num(&hoje, "loot").unwrap_or(0.0)) unidade="gold" comparacao=cl bom=bl
-                            ajuda="Ouro do loot da caçada no dia." />
-                        <Kpi titulo="XP no dia" valor=curto(num(&hoje, "xp").unwrap_or(0.0)) comparacao=cx bom=bx
-                            ajuda="XP do treinador no dia." />
-                        <Kpi titulo="Capturas no dia" valor=inteiro(num(&hoje, "capt").unwrap_or(0.0))
-                            comparacao=format!("{} bolas", inteiro(num(&hoje, "bolas").unwrap_or(0.0))) />
-                    </div>
-                    <div class="secao">"Dia a dia"</div>
-                    <Tabela cab=vec!["Dia", "Abates", "Loot", "XP", "Bolas", "Capturas", "Shiny", "Poções"] linhas=linhas />
-                }.into_any()
+            "Sessão ao vivo" => carregado(cacada.get(), move |c| {
+                let h = hist.get().and_then(|h| h.and_then(Result::ok));
+                sessao(&c, h, &nick_ativo(e).unwrap_or_default())
             }),
-            "Mapa de hunts" => carregado(hist.get(), move |h| {
-                let nick = nick_ativo(e).unwrap_or_default();
-                let mut linhas: Vec<(String, f64, String)> = Vec::new();
-                for (conta, m) in h.get("medidas").and_then(Value::as_object).into_iter().flatten() {
-                    let prefixo: String = nick.chars().take(5).collect();
-                    let minha = conta.to_lowercase().starts_with(&prefixo);
-                    for (k, x) in m.as_object().into_iter().flatten() {
-                        if let Some(xph) = num(x, "xpH") {
-                            let hunt = k.split('|').next().unwrap_or(k).to_owned();
-                            let nome = if minha { hunt } else { format!("{hunt} ({conta})") };
-                            linhas.push((nome, xph, format!("{}/h · {} kills/h", curto(xph), inteiro(num(x, "kph").unwrap_or(0.0)))));
-                        }
-                    }
-                }
-                linhas.sort_by(|a, b| b.1.total_cmp(&a.1));
-                linhas.truncate(20);
-                let melhor = linhas.first().map(|l| l.0.clone());
-                view! {
-                    <div class="secao">"XP por hora medido em cada hunt"</div>
-                    <Barras linhas=linhas destaque=melhor.unwrap_or_default() />
-                    <div class="dica">"Medido pelo motor nas sessões reais de cada conta (kills/h × XP por abate)."</div>
-                }.into_any()
-            }),
+            "Mapa de hunts" => view! {
+                <Abas opcoes=METRICAS ativa=metrica />
+                {move || carregado(cacada.get(), move |c| mapa(&c, metrica.get()))}
+            }.into_any(),
             _ => carregado(shiny.get(), move |s| {
                 let chance = hist.get().and_then(|h| h.and_then(Result::ok)).and_then(|h| num(&h, "chanceShiny"));
                 let linhas: Vec<(String, f64, String)> = lista(&s, "especies").iter().take(15).map(|x| {
@@ -119,11 +228,11 @@ pub fn Cacada(e: Estado) -> impl IntoView {
                 let max = horas.iter().copied().fold(1.0_f64, f64::max);
                 view! {
                     <div class="kpis">
+                        <Kpi titulo="Sua chance" valor=chance.map_or("—".into(), |c| format!("1 em {}", inteiro(1.0 / c.max(1e-12))))
+                            ajuda="Chance de shiny por encontro com os bônus atuais da conta." />
                         <Kpi titulo="Shiny no servidor" valor=inteiro(num(&s, "total").unwrap_or(0.0)) unidade="7 dias"
                             ajuda="Avisos globais de shiny capturado, cada pokémon contado uma vez." />
                         <Kpi titulo="Ritmo do servidor" valor=format!("{:.1}", num(&s, "por_hora").unwrap_or(0.0)) unidade="shiny/h" />
-                        <Kpi titulo="Sua chance" valor=chance.map_or("—".into(), |c| format!("1 em {}", inteiro(1.0 / c.max(1e-12))))
-                            ajuda="Chance de shiny por encontro com os bônus atuais da conta." />
                     </div>
                     <div class="secao">"Espécies mais capturadas shiny"</div>
                     <Barras linhas=linhas />
@@ -133,5 +242,21 @@ pub fn Cacada(e: Estado) -> impl IntoView {
                 }.into_any()
             }),
         }}
+    }
+}
+
+#[cfg(test)]
+mod testes {
+    use super::*;
+
+    #[test]
+    fn nomes_e_comparacao() {
+        assert_eq!(nome_hunt("furious_scizor"), "Furious Scizor");
+        assert_eq!(
+            vs(110.0, Some(100.0)),
+            ("+10% vs. média de 7 dias".into(), Some(true))
+        );
+        assert_eq!(vs(1.0, None).1, None);
+        assert_eq!(hh(1_794_682_800_000.0), "16h");
     }
 }
