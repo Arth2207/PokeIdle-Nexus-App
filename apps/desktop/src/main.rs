@@ -275,7 +275,7 @@ fn recarregar_conta(conta: String, app: AppHandle) -> Result<(), String> {
 
 /// Abre a janela do Tracker. Só abre a página inicial; o resto é navegação do usuário.
 #[tauri::command]
-fn abrir_tracker(app: AppHandle) -> Result<(), String> {
+async fn abrir_tracker(app: AppHandle) -> Result<(), String> {
     criar_janela(
         &app,
         ROTULO_TRACKER,
@@ -365,7 +365,7 @@ impl Avaliador for Janelas {
 /// Abre as janelas das contas e liga o núcleo. `modo`: `ativo` ou `sombra` (padrão).
 /// Segunda chamada reinicia o núcleo.
 #[tauri::command]
-fn iniciar_nucleo(
+async fn iniciar_nucleo(
     url: String,
     contas: Vec<String>,
     modo: Option<String>,
