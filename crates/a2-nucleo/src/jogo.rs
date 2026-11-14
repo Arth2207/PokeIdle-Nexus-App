@@ -411,6 +411,26 @@ pub fn passos(cmd: &ComandoNovo) -> Result<Vec<Value>, String> {
             }
             Ok(v)
         }
+        // Time e casas do PvP (a sugestão do Nexus ou o que o aprendizado no treino achou).
+        "pvp.formacao" => {
+            let ids = p
+                .get("pokemonIds")
+                .and_then(Value::as_array)
+                .filter(|a| !a.is_empty() && a.len() <= 5 && a.iter().all(Value::is_i64))
+                .ok_or("params.pokemonIds inválido")?;
+            let casas = p
+                .get("casas")
+                .and_then(Value::as_object)
+                .filter(|c| {
+                    c.len() == ids.len()
+                        && c.values()
+                            .all(|v| v.as_i64().is_some_and(|x| (1..=25).contains(&x)))
+                })
+                .ok_or("params.casas inválido")?;
+            Ok(vec![
+                json!({"t": "pvp.time.salvar", "casas": casas, "pokemonIds": ids}),
+            ])
+        }
         outro => Err(format!("tipo sem execução no app: {}", limitar(outro, 60))),
     }
 }
@@ -639,6 +659,30 @@ mod testes {
             1
         )
         .is_none());
+    }
+
+    #[test]
+    fn formacao_do_pvp() {
+        let ok = cmd(
+            "pvp.formacao",
+            json!({"pokemonIds": [1, 2], "casas": {"1": 17, "2": 3}}),
+        );
+        assert_eq!(
+            passos(&ok),
+            Ok(vec![
+                json!({"t": "pvp.time.salvar", "casas": {"1": 17, "2": 3}, "pokemonIds": [1, 2]})
+            ])
+        );
+        let casa_ruim = cmd(
+            "pvp.formacao",
+            json!({"pokemonIds": [1], "casas": {"1": 40}}),
+        );
+        assert!(passos(&casa_ruim).is_err());
+        let sem_casa = cmd(
+            "pvp.formacao",
+            json!({"pokemonIds": [1, 2], "casas": {"1": 3}}),
+        );
+        assert!(passos(&sem_casa).is_err());
     }
 
     #[test]

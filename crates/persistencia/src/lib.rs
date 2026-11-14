@@ -13,6 +13,7 @@ pub mod ingestao;
 pub mod mercado;
 pub mod motor;
 pub mod paridade;
+pub mod pvp;
 pub mod raros;
 
 pub use mercado::PgRepoMercado;

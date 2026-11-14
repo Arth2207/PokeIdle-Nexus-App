@@ -32,6 +32,7 @@ mod comandos;
 mod configuracao;
 mod conversao;
 mod desligamento;
+mod dossie;
 mod equipes;
 mod estado;
 mod etag;

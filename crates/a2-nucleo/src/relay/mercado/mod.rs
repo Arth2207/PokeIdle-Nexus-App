@@ -123,7 +123,7 @@ impl Fluxo for Mercado {
         self.alvos_em = agora;
     }
 
-    fn entregar(&mut self) -> Vec<Entrega> {
+    fn entregar(&mut self, _agora: i64) -> Vec<Entrega> {
         let todas = std::mem::take(&mut self.prontas);
         todas
             .chunks(LOTE_OFERTAS)
@@ -155,7 +155,7 @@ mod testes {
         }
         assert_eq!(m.voltas, 1);
         assert_eq!(m.pedir(t + 1), None);
-        let e = m.entregar();
+        let e = m.entregar(0);
         assert!(matches!(&e[..], [Entrega::Ofertas(o)] if o.len() == 20));
         assert!(m.pedir(t + PAUSA_MS + 1).is_some());
     }

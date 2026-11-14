@@ -14,4 +14,5 @@ pub mod js;
 pub mod motor;
 pub mod otimizador;
 pub mod precificador;
+pub mod pvp;
 pub mod raros;

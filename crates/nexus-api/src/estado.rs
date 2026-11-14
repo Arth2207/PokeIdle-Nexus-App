@@ -48,6 +48,8 @@ pub struct Estado {
     pub origens_cors: Arc<Vec<String>>,
     /// Serializa as gravações do inventário (ler, aplicar, gravar).
     pub meus_itens_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Ponte para o Dossiê (vendas do mercado que o app coleta).
+    pub dossie: Option<Arc<crate::dossie::PonteDossie>>,
 }
 
 impl Estado {
@@ -84,6 +86,7 @@ impl Estado {
                 cfg.limite_ingestao_rajada,
             )),
             origens_cors: Arc::new(cfg.origens_cors()),
+            dossie: crate::dossie::PonteDossie::nova(cfg).map(Arc::new),
             ..Self::com_pool(db)
         })
     }
@@ -113,6 +116,7 @@ impl Estado {
             limite_ingestao: Arc::new(Limitador::novo(50.0, 200.0)),
             origens_cors: Arc::new(Vec::new()),
             meus_itens_lock: Arc::new(tokio::sync::Mutex::new(())),
+            dossie: None,
         }
     }
 }

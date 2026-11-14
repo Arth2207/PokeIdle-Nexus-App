@@ -16,12 +16,12 @@ use tracing::{info, warn};
 
 /// Conta com seu cursor de ETL.
 #[derive(Debug, Clone)]
-struct Conta {
-    conta_id: &'static str,
-    sessao_etl: i32,
+pub(crate) struct Conta {
+    pub(crate) conta_id: &'static str,
+    pub(crate) sessao_etl: i32,
 }
 
-const CONTAS: &[Conta] = &[
+pub(crate) const CONTAS: &[Conta] = &[
     Conta {
         conta_id: "mvxorqh6",
         sessao_etl: 100,
@@ -45,16 +45,16 @@ const BATCH: usize = 5_000;
 const SENTINELA_MS: i64 = 1_234_567_890_000;
 
 /// Linha lida do SQLite.
-#[derive(Debug)]
-struct Evento {
-    ts_ms: i64,
-    hunt_slug: Option<String>,
-    xp_treinador: Option<i64>,
-    xp_pokemon: Option<i64>,
-    ouro: Option<i64>,
-    ouro_loot_bonus: Option<i64>,
-    loot_boost: bool,
-    shiny: bool,
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Evento {
+    pub(crate) ts_ms: i64,
+    pub(crate) hunt_slug: Option<String>,
+    pub(crate) xp_treinador: Option<i64>,
+    pub(crate) xp_pokemon: Option<i64>,
+    pub(crate) ouro: Option<i64>,
+    pub(crate) ouro_loot_bonus: Option<i64>,
+    pub(crate) loot_boost: bool,
+    pub(crate) shiny: bool,
 }
 
 /// Roda um ciclo completo do ETL para todas as contas.
@@ -210,7 +210,7 @@ fn ler_sqlite_batch(
 }
 
 /// Garante que a sessão ETL da conta existe.
-async fn garantir_sessao(db: &PgPool, conta: &Conta, escrita: bool) -> Result<()> {
+pub(crate) async fn garantir_sessao(db: &PgPool, conta: &Conta, escrita: bool) -> Result<()> {
     let agora_ms = chrono_now_ms();
     let tabela = if escrita {
         "fato_sessao_contexto"
@@ -235,7 +235,7 @@ async fn garantir_sessao(db: &PgPool, conta: &Conta, escrita: bool) -> Result<()
 }
 
 /// Insere hunt_slugs novos em dim_hunt (somente em modo escrita).
-async fn garantir_dim_hunt(db: &PgPool, slugs: &[&str], escrita: bool) -> Result<()> {
+pub(crate) async fn garantir_dim_hunt(db: &PgPool, slugs: &[&str], escrita: bool) -> Result<()> {
     if slugs.is_empty() || !escrita {
         return Ok(());
     }
@@ -258,13 +258,37 @@ async fn garantir_dim_hunt(db: &PgPool, slugs: &[&str], escrita: bool) -> Result
     Ok(())
 }
 
-/// Insere o batch e atualiza o cursor na mesma transação.
+/// De onde vêm os eventos: nome do cursor em `nexus.etl_cursor` e valor da coluna `source`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Fonte {
+    pub(crate) cursor: &'static str,
+    pub(crate) source: &'static str,
+}
+
+/// SQLite do legado (`mapa.db`), gravado como `vps`.
+pub(crate) const FONTE_SQLITE: Fonte = Fonte {
+    cursor: "mapa.db",
+    source: "vps",
+};
+
 async fn inserir_e_avançar(
     db: &PgPool,
     conta: &Conta,
     eventos: &[Evento],
     novo_cursor: i64,
     escrita: bool,
+) -> Result<u64> {
+    inserir_e_avancar_de(db, conta, eventos, novo_cursor, escrita, FONTE_SQLITE).await
+}
+
+/// Insere o batch e atualiza o cursor da fonte na mesma transação.
+pub(crate) async fn inserir_e_avancar_de(
+    db: &PgPool,
+    conta: &Conta,
+    eventos: &[Evento],
+    novo_cursor: i64,
+    escrita: bool,
+    fonte: Fonte,
 ) -> Result<u64> {
     let tabela = if escrita {
         "public.fato_kill"
@@ -307,7 +331,7 @@ async fn inserir_e_avançar(
            (ts_at, ts_ms, conta_id, sessao_id, hunt_slug,
             xp_treinador, xp_pokemon, ouro, ouro_loot_bonus, loot_boost, shiny, source)
          SELECT
-           to_timestamp(t), ms, $1, s, h, xt, xp, o, olb, lb, sh, 'vps'
+           to_timestamp(t), ms, $1, s, h, xt, xp, o, olb, lb, sh, $12
          FROM UNNEST(
            $2::float8[], $3::bigint[], $4::int[], $5::text[],
            $6::bigint[], $7::bigint[], $8::bigint[], $9::bigint[],
@@ -328,6 +352,7 @@ async fn inserir_e_avançar(
         .bind(&ouro_lb_vec)
         .bind(&loot_vec)
         .bind(&shiny_vec)
+        .bind(fonte.source)
         .execute(&mut *tx)
         .await
         .context("INSERT fato_kill falhou")?;
@@ -337,12 +362,13 @@ async fn inserir_e_avançar(
     // Atualiza o cursor na mesma transação — se o commit falhar, nada avança
     sqlx::query(
         "INSERT INTO nexus.etl_cursor (conta_id, fonte, ts_ms, atualizado_em)
-         VALUES ($1, 'mapa.db', $2, NOW())
+         VALUES ($1, $3, $2, NOW())
          ON CONFLICT (conta_id, fonte) DO UPDATE
            SET ts_ms = EXCLUDED.ts_ms, atualizado_em = NOW()",
     )
     .bind(conta.conta_id)
     .bind(novo_cursor)
+    .bind(fonte.cursor)
     .execute(&mut *tx)
     .await
     .context("UPDATE etl_cursor falhou")?;

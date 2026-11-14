@@ -22,6 +22,12 @@ pub const TIPOS: &[&str] = &[
     "tracker.captura",
     // Modo Descoberta da A2: mensagem do WS do jogo como veio (segredos removidos no app).
     "ws.bruto",
+    // PvP, Área de Treinamento, shiny do servidor e fichas de raid (A2, `competitivo.rs`).
+    "pvp.partida",
+    "pvp.estado",
+    "treino.resultado",
+    "shiny.servidor",
+    "boss.fichas",
 ];
 
 /// Campos que não entram na chave: o instante e o tipo já vão separados.

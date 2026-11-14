@@ -136,6 +136,11 @@ pub struct Configuracao {
     /// `motor`), para o app executar. Desligada: só grava as decisões (sombra).
     #[serde(default)]
     pub escrita_motor: bool,
+    /// Dossiê que recebe as vendas do mercado (`POST /api/bolsa/vendas` repassa para lá com a
+    /// chave do servidor). Sem ela, a rota responde 503.
+    pub dossie_url: Option<String>,
+    /// Chave do Dossiê (`x-chave`); vem de `NEXUS_DOSSIE_CHAVE_FILE`.
+    pub dossie_chave: Option<Segredo>,
 }
 
 impl Configuracao {
@@ -234,6 +239,11 @@ impl Configuracao {
             let url = std::fs::read_to_string(&caminho)
                 .map_err(|fonte| ErroConfiguracao::Arquivo { caminho, fonte })?;
             construtor = construtor.set_override("database_url", url.trim())?;
+        }
+        if let Ok(caminho) = std::env::var("NEXUS_DOSSIE_CHAVE_FILE") {
+            let chave = std::fs::read_to_string(&caminho)
+                .map_err(|fonte| ErroConfiguracao::Arquivo { caminho, fonte })?;
+            construtor = construtor.set_override("dossie_chave", chave.trim())?;
         }
 
         Ok(construtor.build()?.try_deserialize()?)

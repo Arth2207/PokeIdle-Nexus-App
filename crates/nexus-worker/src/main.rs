@@ -151,6 +151,12 @@ async fn loop_etl_continuo(
                 error!(erro = %e, "etl_continuo: ciclo falhou");
             }
         }
+        // Contas no app (A2): abates de `nexus.evento` (o SQLite não recebe mais os delas).
+        match jobs::etl_a2::ciclo(&db, escrita).await {
+            Ok(n) if n > 0 => info!(inseridos = n, "etl_a2: ciclo ok"),
+            Ok(_) => {}
+            Err(e) => error!(erro = %e, "etl_a2: ciclo falhou"),
+        }
         metrics::gauge!("nexus_worker_etl_duracao_s").set(inicio.elapsed().as_secs_f64());
 
         tokio::select! {

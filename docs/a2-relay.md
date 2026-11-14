@@ -6,14 +6,15 @@ O Electron do PC tem dois pedaços: o **motor** local (`/opt/mapper/pacote/motor
 |---|---|---|---|---|
 | 1 | eventos | `/ingest` (WS na A2) | coletor da página | feito |
 | 2 | comandos | `/api/comandos`, `/api/confirmar-comando` (WS na A2) | — | feito (Ativo sem teste real) |
-| 3 | ofertas do mercado | `POST /api/bolsa/ofertas` | varredura `market.listar` (faixas de nível × moeda, ou espécies alvo), 1 pedido a cada 5 s | feito (sombra) |
+| 3 | ofertas do mercado | `POST /api/bolsa/ofertas` | varredura `market.listar` (faixas de nível × moeda, ou espécies alvo), 1 pedido a cada 5 s | feito; lotes de até 500, reenvio com espera |
 | 4 | resumo de itens | `POST /api/bolsa/resumo-itens` | `market.itens` + `market.item` por item e moeda | feito: anúncios de item vão junto das ofertas |
-| 5 | vendas (Dossiê) | `/ingest` | `market.historicoGlobal`, página 0 a cada 3 min, retroage até 36 h | a fazer |
+| 5 | vendas (Dossiê) | `POST /api/bolsa/vendas` (a API repassa ao Dossiê com a chave do servidor) | `market.historicoGlobal`, página 0 a cada 3 min, retroage até 36 h | feito (`relay/vendas.rs`) |
 | 6 | alvos de coleta | `GET /api/bolsa/alvos-coleta` (30 min; 10 min com faltas) | entrada da varredura | feito |
-| 7 | equipe e estado | `POST /api/equipes/ingest` | `welcome`/`estado` do WS | a fazer |
-| 8 | meus itens | `POST /api/bolsa/meus-itens` | inventário do `estado` | a fazer |
-| 9 | raros e histórico | `POST /api/raros/ingest` | coleção + resumo do dia | a fazer |
-| 10 | hunt | `POST /api/hunt-sync` | configuração da conta | a fazer |
+| 7 | equipe e estado | `POST /api/equipes/ingest` | `welcome`/`estado` do WS | feito (`relay/contas`): a cada 5 min e 1 min depois de mudar a coleção |
+| 8 | meus itens | `POST /api/bolsa/meus-itens` | inventário do `estado` | feito; só no modo Ativo (relay oficial) |
+| 9 | raros e histórico | `POST /api/raros/ingest` | inventário + médias de preço (`market.medias`) + diário do HUD | feito; só no modo Ativo; precisa de `NEXUS_ESCRITA_RAROS` |
+| 10 | hunt | `POST /api/hunt-sync` | configuração da conta | feito: `huntSlug` do `estado`, quando muda |
+| 11 | PvP, treino, shiny, raid | `/ingest` (WS) e `GET /api/pvp/meta` | `pvp`, `treino`, `shiny.captura`, `raidFichas` | feito; ver `pvp-e-treino.md` |
 
 ## Como fica
 
@@ -21,5 +22,11 @@ O Electron do PC tem dois pedaços: o **motor** local (`/opt/mapper/pacote/motor
 - **Conversão** para o formato que o relay mandava fica no `a2-nucleo`, com testes contra amostras reais do modo Descoberta.
 - **Envio** pelas rotas HTTP atuais com o mesmo token do app (escopo `relay`).
 - Cada fluxo roda em **sombra** ao lado do Electron (o servidor marca a origem) até bater com o do relay; só então a Fase 3 vira.
+
+## Sombra × oficial
+
+- **Sombra** (modo padrão do app): ofertas, vendas, equipes e hunt já saem, porque não apagam o que o legado manda (as ofertas e vendas se somam por id; equipe e hunt são por conta).
+- **Ativo** (relay oficial, Fase 3): também o inventário somado, os raros e as médias de preço. São estados globais: em sombra, a soma das contas do app apagaria a soma das contas do legado.
+- O diário de contagens (abates, bolas, shiny e drops por dia) fica em `relay-contas.json` na pasta de dados do app e sobrevive a reinícios.
 
 Melhorias que mudam resultado (mais páginas, outra cadência) ficam atrás de `NEXUS_MELHORIAS`.

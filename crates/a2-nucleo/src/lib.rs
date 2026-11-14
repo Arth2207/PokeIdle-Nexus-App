@@ -6,6 +6,7 @@
 pub mod backoff;
 pub mod cliente;
 pub mod comandos;
+pub mod competitivo;
 pub mod eventos;
 pub mod jogo;
 pub mod relay;

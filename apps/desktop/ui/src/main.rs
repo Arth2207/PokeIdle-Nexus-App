@@ -116,6 +116,7 @@ const CHAVE_URL: &str = "nexus.url";
 const CHAVE_CONTAS: &str = "nexus.contas";
 const CHAVE_MODO: &str = "nexus.modo";
 const CHAVE_DESCOBERTA: &str = "nexus.descoberta";
+const CHAVE_APRENDER: &str = "nexus.aprender_pvp";
 
 fn guardado(chave: &str) -> String {
     web_sys::window()
@@ -414,6 +415,8 @@ struct Estado {
     modo: RwSignal<String>,
     /// Modo Descoberta: "sim" grava no Nexus cada mensagem do WS do jogo.
     descoberta: RwSignal<String>,
+    /// "sim": a conta dona testa formações na Área de Treinamento e aplica a melhor no PvP.
+    aprender: RwSignal<String>,
     tem_token: RwSignal<Option<Result<bool, String>>>,
     pagina: RwSignal<&'static str>,
     foco: RwSignal<Option<String>>,
@@ -458,6 +461,7 @@ fn conectar(e: Estado) {
     let contas = lista_contas(&e.contas_txt.get_untracked());
     let m = e.modo.get_untracked();
     let desc = e.descoberta.get_untracked() == "sim";
+    let aprender = e.aprender.get_untracked() == "sim";
     if !url_valida(&u) {
         registrar(
             e.reg,
@@ -482,6 +486,7 @@ fn conectar(e: Estado) {
             ("contas", arr.into()),
             ("modo", JsValue::from_str(&m)),
             ("descoberta", JsValue::from_bool(desc)),
+            ("aprenderPvp", JsValue::from_bool(aprender)),
         ]);
         match invoke("iniciar_nucleo", a).await {
             Ok(_) => {
@@ -491,7 +496,11 @@ fn conectar(e: Estado) {
                         "Núcleo iniciado em modo {m} com {} conta(s){}.",
                         contas.len(),
                         if desc { ", Descoberta ligada" } else { "" }
-                    ),
+                    ) + if aprender && m == "ativo" {
+                        "; aprendendo PvP no Treinamento (1 luta a cada 5 min)"
+                    } else {
+                        ""
+                    },
                     false,
                 );
             }
@@ -577,6 +586,18 @@ fn Configuracoes(e: Estado) -> impl IntoView {
                 <option value="sim">"Ligada: grava tudo o que o jogo manda e recebe (sem senhas e tokens)"</option>
             </select>
             <div class="dica">"Para descobrir dados novos (PvP, boss). Vale ao clicar em Conectar."</div>
+            <label class="campo" for="aprender">"Aprender PvP"</label>
+            <select id="aprender" class="caixa"
+                prop:value=move || e.aprender.get()
+                on:change=move |ev| {
+                    let v = event_target_value(&ev);
+                    guardar(CHAVE_APRENDER, &v);
+                    e.aprender.set(v);
+                }>
+                <option value="nao">"Desligado"</option>
+                <option value="sim">"Ligado: testa posições no Treinamento e aplica a melhor no PvP"</option>
+            </select>
+            <div class="dica">"Só no modo Ativo. Usa a primeira conta da lista; o meta vem das partidas de PvP das suas contas."</div>
             <div class="acoes">
                 <button class="btn prim" on:click=move |_| salvar_config(e)>"Salvar"</button>
                 <button class="btn" prop:disabled=move || e.ocupado.get() on:click=move |_| conectar(e)>"Conectar"</button>
@@ -830,6 +851,11 @@ fn App() -> impl IntoView {
         conta_ativa: RwSignal::new(String::new()),
         ocupado: RwSignal::new(false),
         descoberta: RwSignal::new(if guardado(CHAVE_DESCOBERTA) == "sim" {
+            "sim".to_owned()
+        } else {
+            "nao".to_owned()
+        }),
+        aprender: RwSignal::new(if guardado(CHAVE_APRENDER) == "sim" {
             "sim".to_owned()
         } else {
             "nao".to_owned()

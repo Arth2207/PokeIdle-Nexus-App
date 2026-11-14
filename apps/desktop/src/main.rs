@@ -2,6 +2,7 @@
 //! núcleo (`a2-nucleo`). A lógica testável está em `a2_nucleo::jogo`; aqui só há I/O de janela.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod api;
 mod relay;
 
 use a2_nucleo::cliente::{rodar, Config};
@@ -403,6 +404,14 @@ fn coletor_evento(window: Webview, msg: Value, estado: State<'_, Estado>) {
         estado.relay.receber(&conta, &msg, agora);
         return;
     }
+    // Estado do jogo e linhas do HUD alimentam o relay (equipe, hunt, inventário, diário).
+    let tipo = msg.get("t").and_then(Value::as_str);
+    if matches!(tipo, Some("welcome" | "estado" | "hud" | "pvp" | "treino")) {
+        estado.relay.receber_conta(&conta, &msg, agora);
+    }
+    if tipo == Some("estado") {
+        return;
+    }
     // Sinal de vida: só atualiza o card; não vai ao núcleo.
     if msg.get("t").and_then(Value::as_str) == Some("vivo") {
         if let Some(c) = travar(&estado.contas).get_mut(&conta) {
@@ -410,7 +419,10 @@ fn coletor_evento(window: Webview, msg: Value, estado: State<'_, Estado>) {
         }
         return;
     }
-    for ev in eventos_do_coletor(&msg, agora_ms()) {
+    let mut evs = eventos_do_coletor(&msg, agora_ms());
+    // PvP, treino, shiny do servidor e fichas de raid (o lado do dono vem do nick da conta).
+    evs.extend(a2_nucleo::competitivo::eventos(&msg, &conta, agora));
+    for ev in evs {
         if ev.get("k").and_then(Value::as_str) == Some("kill") {
             let mut m = travar(&estado.contas);
             if let Some(c) = m.get_mut(&conta) {
@@ -518,6 +530,7 @@ async fn iniciar_nucleo(
     contas: Vec<String>,
     modo: Option<String>,
     descoberta: Option<bool>,
+    aprender_pvp: Option<bool>,
     app: AppHandle,
     estado: State<'_, Estado>,
 ) -> Result<(), String> {
@@ -550,6 +563,8 @@ async fn iniciar_nucleo(
         &app,
         &url,
         contas.first().cloned(),
+        modo.as_deref() == Some("ativo"),
+        aprender_pvp.unwrap_or(false),
         parar_rx.clone(),
         avisos_tx.clone(),
     );
@@ -661,6 +676,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            api::api_get,
             iniciar_nucleo,
             salvar_token,
             tem_token,

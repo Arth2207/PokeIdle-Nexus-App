@@ -6,8 +6,10 @@ mod equipes;
 mod eventos;
 pub(crate) mod ingestao;
 mod motor;
+mod pvp;
 mod raros;
 mod saude;
+mod vendas;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::{header, HeaderValue, Method};
@@ -59,6 +61,11 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/raros2", get(raros::raros2))
         .route("/api/shiny", get(raros::shiny))
         .route("/api/eventos", get(eventos::historico))
+        .route("/api/pvp/meta", get(pvp::meta_pvp))
+        .route("/api/pvp/sugestao", get(pvp::sugestao_pvp))
+        .route("/api/pvp/treinos", get(pvp::treinos))
+        .route("/api/shiny/servidor", get(pvp::shiny_servidor))
+        .route("/api/boss/fichas", get(pvp::fichas_raid))
         .merge(motor::rotas())
         .route_layer(middleware::from_fn(|req, next| {
             auth::exigir_escopo(LEITURA, req, next)
@@ -71,6 +78,7 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/bolsa/ofertas", post(bolsa::gravar_ofertas))
         .route("/api/bolsa/resumo-itens", post(bolsa::gravar_resumo))
         .route("/api/bolsa/meus-itens", post(bolsa::gravar_meus_itens))
+        .route("/api/bolsa/vendas", post(vendas::gravar))
         .route("/api/equipes/ingest", post(equipes::ingest))
         .route("/api/boss/tentativa", post(equipes::tentativa))
         .route("/ingest", post(ingestao::ingest))
