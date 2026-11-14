@@ -56,6 +56,8 @@ pub struct Sombra {
     dex: Option<(Pokedex, HashMap<i64, f64>, i64)>,
     /// Instante do último ciclo do legado já processado: cada ciclo dele roda uma vez aqui.
     ultimo_ciclo: i64,
+    /// Com escrita: conta do app e trava contra repetir o mesmo comando.
+    envio: crate::motor_envio::Envio,
 }
 
 impl Sombra {
@@ -71,6 +73,7 @@ impl Sombra {
             linhas: HashMap::new(),
             dex: None,
             ultimo_ciclo: 0,
+            envio: crate::motor_envio::Envio::default(),
         })
     }
 
@@ -230,6 +233,9 @@ impl Sombra {
                         .map(|(tipo, params)| (x.nick.clone(), tipo, params))
                 })
                 .collect();
+            let fila =
+                self.envio
+                    .filtrar(agora, &crate::motor_envio::contas_por_nick(&janela), fila);
             // Vale até o próximo ciclo: comando velho com o estado já mudado não serve.
             let ids = repo::enfileirar(db, agora, &fila, agora + 2 * 30_000).await?;
             metrics::counter!("nexus_motor_comandos_total").increment(ids.len() as u64);
