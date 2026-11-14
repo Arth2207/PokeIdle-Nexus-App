@@ -429,6 +429,8 @@ struct Estado {
     conta_ativa: RwSignal<String>,
     ocupado: RwSignal<bool>,
     reg: RwSignal<Vec<Linha>>,
+    /// (rótulo da conta no app, nick no jogo), de `/api/contas`.
+    nicks: RwSignal<Vec<(String, String)>>,
 }
 
 fn atualizar_token(e: Estado) {
@@ -873,6 +875,7 @@ fn App() -> impl IntoView {
             "nao".to_owned()
         }),
         reg: RwSignal::new(Vec::new()),
+        nicks: RwSignal::new(Vec::new()),
     };
     let pagina = e.pagina;
     let periodo = RwSignal::new(String::from("Últimos 7 dias"));
@@ -883,19 +886,27 @@ fn App() -> impl IntoView {
             let _ = j.location().set_hash(slug_da_pagina(pagina.get()));
         }
     });
-    if !tem_tauri() {
-        // Como site: as contas vêm do servidor (as que o app manda).
-        let contas = e.contas_txt;
+    {
+        // Nick do jogo de cada conta (as rotas de equipe e PvP usam o nick); como site, as
+        // contas também vêm daqui (as que o app manda).
+        let (contas, nicks, url) = (e.contas_txt, e.nicks, e.url.get_untracked());
         spawn_local(async move {
-            if let Ok(v) = dados::api("", "/api/contas").await {
-                let l: Vec<String> = dados::lista(&v, "contas")
+            if let Ok(v) = dados::api(&url, "/api/contas").await {
+                let pares: Vec<(String, String)> = dados::lista(&v, "contas")
                     .iter()
-                    .map(|c| dados::txt(c, "conta"))
-                    .filter(|c| !c.is_empty())
+                    .map(|c| (dados::txt(c, "conta"), dados::txt(c, "nick")))
+                    .filter(|(c, _)| !c.is_empty())
                     .collect();
-                if !l.is_empty() {
-                    contas.set(l.join(", "));
+                if !tem_tauri() && !pares.is_empty() {
+                    contas.set(
+                        pares
+                            .iter()
+                            .map(|p| p.0.clone())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    );
                 }
+                nicks.set(pares);
             }
         });
     }

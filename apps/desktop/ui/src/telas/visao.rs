@@ -4,7 +4,7 @@ use leptos::prelude::*;
 use serde_json::Value;
 
 use super::escaneamento::Escaneamento;
-use super::{cabecalho, nick_ativo};
+use super::{cabecalho, nick_ativo, rotulo_ativo};
 use crate::comp::{carregado, Colunas, Kpi, Veredito};
 use crate::dados::{curto, inteiro, lista, no_app, num, recurso, txt};
 use crate::Estado;
@@ -121,7 +121,7 @@ pub fn VisaoGeral(e: Estado) -> impl IntoView {
             <div class="caixa">
                 <div class="caixa-t">"Escaneamento de campo"</div>
                 {move || carregado(contas.get(), |c| {
-                    let alvo = nick_ativo(e);
+                    let alvo = rotulo_ativo(e);
                     let l = lista(&c, "contas");
                     let conta = l.iter().find(|x| Some(txt(x, "conta")) == alvo).or(l.first()).cloned();
                     conta.map(|x| view! { <Escaneamento conta=x /> })

@@ -4,7 +4,7 @@
 use leptos::prelude::*;
 use serde_json::Value;
 
-use super::{cabecalho, nick_ativo};
+use super::{cabecalho, nick_ativo, rotulo_ativo};
 use crate::comp::{carregado, Abas, Barras, Calor, Kpi, Linha, Tabela, Veredito};
 use crate::dados::{curto, inteiro, lista, num, recurso, txt};
 use crate::Estado;
@@ -201,7 +201,7 @@ pub fn Cacada(e: Estado) -> impl IntoView {
     let cacada = recurso(e, versao, move || {
         Some(format!(
             "/api/cacada?conta={}",
-            nick_ativo(e).unwrap_or_default()
+            rotulo_ativo(e).unwrap_or_default()
         ))
     });
     let hist = recurso(e, versao, || Some("/api/historico".into()));

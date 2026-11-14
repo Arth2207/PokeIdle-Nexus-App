@@ -16,8 +16,8 @@ use leptos::prelude::*;
 
 use crate::{lista_contas, Estado};
 
-/// Nick da conta escolhida no topo (minúsculo), ou a primeira da lista.
-pub fn nick_ativo(e: Estado) -> Option<String> {
+/// Rótulo da conta escolhida no topo (minúsculo), ou a primeira da lista.
+pub fn rotulo_ativo(e: Estado) -> Option<String> {
     let a = e.conta_ativa.get();
     let l = lista_contas(&e.contas_txt.get());
     let n = if l.contains(&a) {
@@ -26,6 +26,19 @@ pub fn nick_ativo(e: Estado) -> Option<String> {
         l.first().cloned()
     };
     n.map(|n| n.to_lowercase())
+}
+
+/// Nick no jogo (minúsculo) da conta escolhida: as rotas de equipe e PvP guardam por ele.
+/// Sem o nick ainda, o rótulo.
+pub fn nick_ativo(e: Estado) -> Option<String> {
+    let r = rotulo_ativo(e)?;
+    let nick = e
+        .nicks
+        .get()
+        .into_iter()
+        .find(|(c, n)| c.eq_ignore_ascii_case(&r) && !n.is_empty())
+        .map(|(_, n)| n.to_lowercase());
+    Some(nick.unwrap_or(r))
 }
 
 /// Cabeçalho padrão: título e a pergunta que a tela responde.
