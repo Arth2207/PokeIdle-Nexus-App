@@ -1,0 +1,12 @@
+# Imagem montada na própria VPS com os binários de release já compilados (sem CI).
+# Mesma libc do host (Ubuntu 24.04); roda como o uid 65532 dos secrets.
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+COPY nexus-api /nexus-api
+COPY nexus-worker /nexus-worker
+USER 65532:65532
+ENV NEXUS_ENDERECO=0.0.0.0 \
+    NEXUS_LOG_FORMATO=json
+EXPOSE 8190 9190
+ENTRYPOINT ["/nexus-api"]

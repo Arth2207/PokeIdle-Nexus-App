@@ -67,13 +67,17 @@ cmd_deploy() {
   ativa=$(cor_ativa)
   nova=$(outra_cor "$ativa")
 
-  if [ ! -t 0 ]; then
-    docker login ghcr.io -u ci --password-stdin >/dev/null
-    trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+  # Imagem montada na própria VPS (deploy/imagem-local.sh, sem CI): não baixa nada.
+  if docker image inspect "$imagem" >/dev/null 2>&1; then
+    log "usando a imagem local $imagem"
+  else
+    if [ ! -t 0 ]; then
+      docker login ghcr.io -u ci --password-stdin >/dev/null
+      trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+    fi
+    log "baixando $imagem"
+    docker pull -q "$imagem" >/dev/null
   fi
-
-  log "baixando $imagem"
-  docker pull -q "$imagem" >/dev/null
 
   definir_imagem "$nova" "$imagem"
   export_imagens
