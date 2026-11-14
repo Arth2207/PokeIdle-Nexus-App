@@ -174,7 +174,7 @@ fn evento_batalha(ev: &Value, ts: i64, saida: &mut Vec<Value>) {
 /// `tracker.captura` não passa aqui (ver [`evento_tracker`]). Desconhecido dá lista vazia.
 /// Tamanho máximo (bytes) da mensagem bruta guardada pelo modo Descoberta. Cabe o `estado`
 /// do login (~200 KB, com a coleção) e o `campeonato` (~280 KB); são raros, o resto é pequeno.
-pub const BRUTO_MAX: usize = 384 * 1024;
+pub const BRUTO_MAX: usize = 850 * 1024;
 
 /// Chaves cujo valor nunca sai do app (sessão, login).
 fn chave_secreta(k: &str) -> bool {
