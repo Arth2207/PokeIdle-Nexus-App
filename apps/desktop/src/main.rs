@@ -166,21 +166,39 @@ fn empurrar(estado: &Estado, conta: &str, mut ev: Value) {
 }
 
 /// Janelas só navegam dentro de `pokeidle.io`.
-/// Navegação permitida nas webviews do jogo: o site e o login dele (Google ou Discord).
-/// A IPC continua só para pokeidle.io (capabilities/jogo.json).
+/// Navegação permitida nas webviews do jogo: o site, o login (Google ou Discord) e a
+/// verificação anti-robô, como no legado. A IPC continua só para pokeidle.io (capabilities/jogo.json).
 fn host_permitido(u: &tauri::Url) -> bool {
-    u.scheme() == "https"
-        && matches!(
-            u.host_str(),
-            Some(
-                "pokeidle.io"
-                    | "www.pokeidle.io"
-                    | "accounts.google.com"
-                    | "accounts.youtube.com"
-                    | "discord.com"
-                    | "www.discord.com"
-            )
-        )
+    const DOMINIOS: [&str; 7] = [
+        "pokeidle.io",
+        "google.com",
+        "youtube.com",
+        "discord.com",
+        "cloudflare.com",
+        "hcaptcha.com",
+        "recaptcha.net",
+    ];
+    if u.scheme() != "https" {
+        return false;
+    }
+    let Some(h) = u.host_str() else {
+        return false;
+    };
+    DOMINIOS
+        .iter()
+        .any(|d| h == *d || h.strip_suffix(d).is_some_and(|r| r.ends_with('.')))
+}
+
+/// Popup de login (`window.open`): abre na mesma sessão da conta, como no legado.
+fn popup_permitido<R: tauri::Runtime>(
+    u: tauri::Url,
+    _f: tauri::webview::NewWindowFeatures,
+) -> tauri::webview::NewWindowResponse<R> {
+    if host_permitido(&u) {
+        tauri::webview::NewWindowResponse::Allow
+    } else {
+        tauri::webview::NewWindowResponse::Deny
+    }
 }
 
 fn criar_janela(
@@ -206,7 +224,8 @@ fn criar_janela(
         .inner_size(1100.0, 760.0)
         .data_directory(dados)
         .initialization_script(script)
-        .on_navigation(host_permitido);
+        .on_navigation(host_permitido)
+        .on_new_window(popup_permitido);
     #[cfg(windows)]
     let b = b.additional_browser_args(ARGS_ECO);
     b.build().map(|_| ()).map_err(|e| e.to_string())
@@ -230,7 +249,8 @@ fn criar_filha(app: &AppHandle, conta: &str) -> Result<(), String> {
     let b = WebviewBuilder::new(&rotulo, WebviewUrl::External(url))
         .data_directory(dados)
         .initialization_script(COLETOR)
-        .on_navigation(host_permitido);
+        .on_navigation(host_permitido)
+        .on_new_window(popup_permitido);
     #[cfg(windows)]
     let b = b.additional_browser_args(ARGS_ECO);
     let w = janela
