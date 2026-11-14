@@ -58,6 +58,15 @@ fn main() {
                 corpo["raros"]["itens"][0]
             );
         }
+        if rota == "/api/motor/janela" {
+            if let Ok(dir) = std::env::var("JANELA_SAIDA") {
+                let conta = corpo["conta"].as_str().unwrap_or("x");
+                let _ = std::fs::write(
+                    format!("{dir}/janela-{conta}.json"),
+                    corpo["janela"].to_string(),
+                );
+            }
+        }
         if rota == "/ingest" {
             println!("diário: {}", corpo["eventos"][0]);
         }

@@ -29,6 +29,8 @@ pub enum Entrega {
     Raros(Value),
     /// Resumo do dia de uma conta (eventos `diario` em `POST /ingest`).
     Diario { conta: String, eventos: Vec<Value> },
+    /// Janela da conta para o motor do Nexus (`POST /api/motor/janela`).
+    Janela { conta: String, corpo: Value },
 }
 
 /// Um fluxo de dados do jogo para o servidor.
@@ -213,6 +215,10 @@ impl Entrega {
             Entrega::Hunt(e) => ("/api/hunt-sync", serde_json::json!({ "eventos": e })),
             Entrega::MeusItens(b) => ("/api/bolsa/meus-itens", b.clone()),
             Entrega::Raros(b) => ("/api/raros/ingest", b.clone()),
+            Entrega::Janela { conta, corpo } => (
+                "/api/motor/janela",
+                serde_json::json!({ "conta": conta, "janela": corpo }),
+            ),
             Entrega::Diario { conta, eventos } => (
                 "/ingest",
                 serde_json::json!({ "conta_id": conta, "nick": conta, "eventos": eventos }),
@@ -242,6 +248,7 @@ impl Entrega {
             Entrega::Diario { conta, eventos } => {
                 format!("Diário: {} dia(s) de {conta} enviados", eventos.len())
             }
+            Entrega::Janela { conta, .. } => format!("Motor: janela de {conta} enviada"),
         }
     }
 }

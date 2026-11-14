@@ -34,7 +34,8 @@ fn substitui(velho: &Entrega, novo: &Entrega) -> bool {
         (Entrega::MeusItens(_), Entrega::MeusItens(_)) | (Entrega::Raros(_), Entrega::Raros(_)) => {
             true
         }
-        (Entrega::Diario { conta: a, .. }, Entrega::Diario { conta: b, .. }) => a == b,
+        (Entrega::Diario { conta: a, .. }, Entrega::Diario { conta: b, .. })
+        | (Entrega::Janela { conta: a, .. }, Entrega::Janela { conta: b, .. }) => a == b,
         _ => false,
     }
 }

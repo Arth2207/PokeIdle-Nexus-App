@@ -17,9 +17,12 @@ use nucleo::motor::regras::{ContaViva, EstadoLaco};
 use nucleo::motor::veredito::Especies;
 use nucleo::motor::{config, laco, Relogio};
 use persistencia::motor::{self as repo, LinhaDecisao};
-use serde_json::Value;
+use serde_json::{json, Value};
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
+
+/// `NEXUS_MOTOR_SOMBRA_URL=nexus`: lê do próprio Nexus (janela mandada pelo app), sem o legado.
+pub const FONTE_NEXUS: &str = "nexus";
 
 /// Linhas do HUD guardadas por conta (o legado guarda 40 mil e corta 10 mil de uma vez).
 const LINHAS_MAX: usize = 40_000;
@@ -82,6 +85,18 @@ impl Sombra {
         Ok(r.json().await?)
     }
 
+    /// Fase 4 sem o legado: o `D` vem de `nexus.motor_estado` e a janela das contas, do que o
+    /// app manda (`nexus.motor_janela`, só as recebidas no último minuto e meio).
+    async fn ler_do_nexus(&self, db: &PgPool) -> anyhow::Result<(Value, Value)> {
+        let dados = repo::carregar_dados(db).await?;
+        let contas = repo::janelas_frescas(db, 90).await?;
+        let agora = crate::bolsa::agora_ms();
+        Ok((
+            dados,
+            json!({"agora": agora, "ciclo": {"t": agora}, "contas": contas}),
+        ))
+    }
+
     async fn pokedex(&mut self, db: &PgPool, agora: i64) -> anyhow::Result<()> {
         if self
             .dex
@@ -115,8 +130,11 @@ impl Sombra {
     /// Um ciclo: devolve (decisões gravadas, ações novas do legado).
     pub async fn ciclo(&mut self, db: &PgPool) -> anyhow::Result<(u64, u64)> {
         self.pokedex(db, crate::bolsa::agora_ms()).await?;
-        let (dados, janela) =
-            tokio::try_join!(self.ler("/api/nexus/dados"), self.ler("/api/nexus/janela"))?;
+        let (dados, janela) = if self.url == FONTE_NEXUS {
+            self.ler_do_nexus(db).await?
+        } else {
+            tokio::try_join!(self.ler("/api/nexus/dados"), self.ler("/api/nexus/janela"))?
+        };
         // As ações novas do legado entram sempre (o legado guarda só as últimas 300).
         let acoes_todas: Vec<Value> = dados
             .get("acoes")

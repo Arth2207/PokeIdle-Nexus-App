@@ -40,6 +40,17 @@ pub struct Conta {
     pub pokemons: BTreeMap<i64, Value>,
     /// Já recebeu o estado cheio (login)?
     pub pronta: bool,
+    pub ouro: Option<f64>,
+    /// `estado.automation` (bolas, poções, limiar de HP, travas).
+    pub automacao: Value,
+    pub ativo: Option<i64>,
+    pub bonus_guild: Option<f64>,
+    /// Tipo do dia sazonal (`diaSazonal.tipo`).
+    pub dia_tipo: Option<String>,
+    /// Tier escolhido na Outland (`outlandTier`).
+    pub tier_outland: Option<i64>,
+    /// XP do treinador: total, início e fim do nível.
+    pub xp: (f64, f64, f64),
 }
 
 fn soma_ivs(p: &Value) -> Option<i64> {
@@ -74,6 +85,28 @@ impl Conta {
         }
         if let Some(l) = e.get("level").and_then(Value::as_i64) {
             self.level = Some(l);
+        }
+        if let Some(g) = e.get("gold").and_then(Value::as_f64) {
+            self.ouro = Some(g);
+        }
+        if let Some(a) = e.get("automation").filter(|a| a.is_object()) {
+            self.automacao = a.clone();
+        }
+        if let Some(a) = e.get("activeId").and_then(Value::as_i64) {
+            self.ativo = Some(a);
+        }
+        if let Some(b) = e.get("guildBonusPct").and_then(Value::as_f64) {
+            self.bonus_guild = Some(b);
+        }
+        if let Some(t) = e.get("outlandTier").and_then(Value::as_i64) {
+            self.tier_outland = Some(t);
+        }
+        let x = |k: &str| e.get(k).and_then(Value::as_f64);
+        if let (Some(a), Some(b), Some(c)) = (x("xp"), x("xpNivel"), x("xpProximo")) {
+            self.xp = (a, b, c);
+        }
+        if let Some(t) = e.pointer("/diaSazonal/tipo").and_then(Value::as_str) {
+            self.dia_tipo = Some(t.to_owned());
         }
         if let Some(h) = e.get("huntSlug") {
             self.hunt = h.as_str().filter(|s| !s.is_empty()).map(str::to_owned);

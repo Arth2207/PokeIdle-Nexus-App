@@ -15,6 +15,8 @@ O Electron do PC tem dois pedaços: o **motor** local (`/opt/mapper/pacote/motor
 | 9 | raros e histórico | `POST /api/raros/ingest` | inventário + médias de preço (`market.medias`) + diário do HUD | feito; só no modo Ativo; precisa de `NEXUS_ESCRITA_RAROS` |
 | 10 | hunt | `POST /api/hunt-sync` | configuração da conta | feito: `huntSlug` do `estado`, quando muda |
 | 11 | PvP, treino, shiny, raid | `/ingest` (WS) e `GET /api/pvp/meta` | `pvp`, `treino`, `shiny.captura`, `raidFichas` | feito; ver `pvp-e-treino.md` |
+| 12 | janela do motor (Fase 4) | `POST /api/motor/janela` | `welcome`/`estado` + linhas do HUD, a cada 30 s (login a cada 30 min) | feito; o motor lê com `NEXUS_MOTOR_SOMBRA_URL=nexus` |
+| 13 | diário do motor | `POST /ingest` (evento `diario`) | linhas do HUD + ouro do `estado`, a cada 5 min | feito; o worker atualiza `motor_estado` (`dia`, `saldo`) |
 
 ## Como fica
 
@@ -30,3 +32,7 @@ O Electron do PC tem dois pedaços: o **motor** local (`/opt/mapper/pacote/motor
 - O diário de contagens (abates, bolas, shiny e drops por dia) fica em `relay-contas.json` na pasta de dados do app e sobrevive a reinícios.
 
 Melhorias que mudam resultado (mais páginas, outra cadência) ficam atrás de `NEXUS_MELHORIAS`.
+
+## Fase 4 sem o PC antigo
+
+O laço do motor (`nexus-sombra`) lê o `D` e a janela de cada conta. Com `NEXUS_MOTOR_SOMBRA_URL=http://<pc>:47821`, lê do motor do legado; com `NEXUS_MOTOR_SOMBRA_URL=nexus`, lê de `nexus.motor_estado` (atualizado pelo diário que o app manda) e de `nexus.motor_janela` (janelas recebidas no último minuto e meio). A janela do app tem os mesmos campos e textos da do legado (testado com mensagens reais e com as regras do motor: `cargo run -p nucleo --example motor_janela`).

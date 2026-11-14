@@ -5,6 +5,7 @@ mod comandos;
 mod equipes;
 mod eventos;
 pub(crate) mod ingestao;
+mod janela;
 mod motor;
 mod pvp;
 mod raros;
@@ -81,6 +82,7 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/bolsa/resumo-itens", post(bolsa::gravar_resumo))
         .route("/api/bolsa/meus-itens", post(bolsa::gravar_meus_itens))
         .route("/api/bolsa/vendas", post(vendas::gravar))
+        .route("/api/motor/janela", post(janela::gravar))
         .route("/api/equipes/ingest", post(equipes::ingest))
         .route("/api/boss/tentativa", post(equipes::tentativa))
         .route("/ingest", post(ingestao::ingest))

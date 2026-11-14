@@ -5,6 +5,7 @@
 
 pub mod conta;
 pub mod diario;
+pub mod janela;
 pub mod raros;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -61,6 +62,8 @@ pub struct Contas {
     /// (nick, dia) → saldo de ouro.
     saldos: HashMap<(String, String), Saldo>,
     diario_em: i64,
+    /// Janela de cada conta para o motor do Nexus (Fase 4).
+    janelas: janela::Janelas,
 }
 
 impl Contas {
@@ -263,12 +266,13 @@ impl Fluxo for Contas {
     }
 
     /// Resposta do jogo na conta dona: só as médias de preço interessam aqui.
-    fn receber(&mut self, msg: &Value, _agora: i64) {
+    fn receber(&mut self, msg: &Value, agora: i64) {
         if msg.get("t").and_then(Value::as_str) != Some("market")
             || msg.get("aba").and_then(Value::as_str) != Some("medias")
         {
             return;
         }
+        self.janelas.medias(msg, agora);
         let m = Medias::da_resposta(msg);
         if msg.get("dias").and_then(Value::as_i64) == Some(1) {
             self.m1 = m;
@@ -282,6 +286,7 @@ impl Fluxo for Contas {
             Some(t @ ("welcome" | "estado")) => {
                 if t == "welcome" {
                     self.welcome(msg);
+                    self.janelas.login(conta, msg, agora);
                 }
                 self.ouro(conta, msg, agora);
                 let e = msg.get("estado");
@@ -298,10 +303,14 @@ impl Fluxo for Contas {
                 {
                     self.mudou.insert(conta.to_owned(), true);
                 }
+                if let Some(c) = self.contas.get(conta) {
+                    self.janelas.estado(conta, c, agora);
+                }
             }
             Some("hud") => {
                 let nick = self.nick(conta);
                 if let Some(l) = msg.get("linhas").and_then(Value::as_array) {
+                    self.janelas.hud(conta, l);
                     self.diario.linhas(&nick, l);
                     self.diario_mudou = true;
                 }
@@ -333,6 +342,9 @@ impl Fluxo for Contas {
         self.entregar_equipes(agora, &mut s);
         self.entregar_hunts(agora, &mut s);
         self.entregar_diario(agora, &mut s);
+        for (conta, corpo) in self.janelas.entregar(&self.contas, agora) {
+            s.push(Entrega::Janela { conta, corpo });
+        }
         if self.oficial {
             self.entregar_itens(agora, &mut s);
             self.entregar_raros(agora, &mut s);
@@ -360,9 +372,12 @@ mod testes {
         let e = c.entregar(0);
         assert!(matches!(&e[0], Entrega::Equipe(b) if b["nick"] == "sikien"));
         assert!(matches!(&e[1], Entrega::Hunt(h) if h[0]["hunt_slug"] == "caterpie"));
-        assert_eq!(e.len(), 2, "sem linhas do HUD ainda, sem diário");
+        assert!(
+            matches!(&e[2], Entrega::Janela { conta, corpo } if conta == "sikien" && corpo.get("welcome").is_some())
+        );
+        assert_eq!(e.len(), 3, "sem linhas do HUD ainda, sem diário");
         // Nada mudou: nada sai até dar o tempo da equipe.
-        assert!(c.entregar(30_000).is_empty());
+        assert!(c.entregar(29_000).is_empty());
         c.receber_conta(
             "Sikien",
             &json!({"t": "estado", "estado": {"pkFora": [1]}}),

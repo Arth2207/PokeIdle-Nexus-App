@@ -457,6 +457,48 @@ fn resumo(v: &Value) -> String {
     }
 }
 
+/// Guarda a janela de uma conta (Fase 4). Se ela trouxer o login (`welcome`), ele vai para a
+/// coluna própria; se não, o login guardado continua valendo.
+pub async fn gravar_janela(db: &PgPool, conta: &str, janela: &Value) -> Result<(), sqlx::Error> {
+    let mut j = janela.clone();
+    let login = j.as_object_mut().and_then(|m| m.remove("welcome"));
+    sqlx::query(
+        "INSERT INTO nexus.motor_janela (conta, em, janela, login, login_em)
+         VALUES ($1, now(), $2, $3, CASE WHEN $3::jsonb IS NULL THEN NULL ELSE now() END)
+         ON CONFLICT (conta) DO UPDATE SET
+           em = now(), janela = EXCLUDED.janela,
+           login = coalesce(EXCLUDED.login, nexus.motor_janela.login),
+           login_em = coalesce(EXCLUDED.login_em, nexus.motor_janela.login_em)",
+    )
+    .bind(conta)
+    .bind(&j)
+    .bind(login)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Janelas recebidas nos últimos `max_s` segundos, com o login de volta em `welcome`.
+pub async fn janelas_frescas(db: &PgPool, max_s: i64) -> Result<Vec<Value>, sqlx::Error> {
+    let linhas: Vec<(Value, Option<Value>)> = sqlx::query_as(
+        "SELECT janela, login FROM nexus.motor_janela
+          WHERE em > now() - make_interval(secs => $1::float8)
+          ORDER BY conta",
+    )
+    .bind(max_s as f64)
+    .fetch_all(db)
+    .await?;
+    Ok(linhas
+        .into_iter()
+        .map(|(mut j, login)| {
+            if let (Some(m), Some(l)) = (j.as_object_mut(), login) {
+                m.insert("welcome".into(), l);
+            }
+            j
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod testes {
     use super::*;
