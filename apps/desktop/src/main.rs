@@ -75,7 +75,6 @@ const SEM_CAPTURA_MS: i64 = 120_000;
 #[derive(Default)]
 struct ContaEstado {
     pausada: bool,
-    aberta_em: i64,
     ultimo_evento: Option<i64>,
     hunt: Option<String>,
     kills: VecDeque<i64>,
@@ -83,10 +82,7 @@ struct ContaEstado {
 
 impl ContaEstado {
     fn novo() -> Self {
-        Self {
-            aberta_em: agora_ms(),
-            ..Self::default()
-        }
+        Self { ..Self::default() }
     }
 
     fn registrar(&mut self, ev: &Value, agora: i64) {
@@ -109,10 +105,14 @@ impl ContaEstado {
     }
 
     fn status(&self, agora: i64) -> &'static str {
-        let visto = self.ultimo_evento.unwrap_or(self.aberta_em);
         if self.pausada {
-            "pausada"
-        } else if agora - visto > SEM_CAPTURA_MS {
+            return "pausada";
+        }
+        // Nunca chegou dado do jogo: conta ainda no login ou fora de caçada; não é erro.
+        let Some(visto) = self.ultimo_evento else {
+            return "aguardando";
+        };
+        if agora - visto > SEM_CAPTURA_MS {
             "erro"
         } else {
             "execucao"
@@ -293,7 +293,6 @@ fn pausar_conta(conta: String, pausada: bool, estado: State<'_, Estado>) -> Resu
     let mut m = travar(&estado.contas);
     let c = m.get_mut(&conta).ok_or("conta desconhecida")?;
     c.pausada = pausada;
-    c.aberta_em = agora_ms();
     Ok(())
 }
 
