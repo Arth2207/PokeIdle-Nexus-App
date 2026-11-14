@@ -462,6 +462,7 @@ async fn iniciar_nucleo(
     }
     let (parar_tx, parar_rx) = watch::channel(false);
     let (eventos_tx, eventos_rx) = mpsc::channel(1024);
+    let (avisos_tx, mut avisos_rx) = mpsc::unbounded_channel::<String>();
     *travar(&estado.eventos) = Some(eventos_tx);
     *travar(&estado.conta_tracker) = contas.first().cloned();
     let cfg = Config {
@@ -474,6 +475,7 @@ async fn iniciar_nucleo(
         contas,
         conta_lote: None,
         lote_max: 50,
+        avisos: Some(avisos_tx),
     };
     if let Some(antigo) = travar(&estado.parar).replace(parar_tx) {
         let _ = antigo.send(true);
@@ -484,10 +486,23 @@ async fn iniciar_nucleo(
         correio: estado.correio.clone(),
     });
     let tela = app_tela;
+    // Avisos de conexão vão ao diário; repetições seguidas (nova tentativa, mesmo erro) não.
+    let tela_avisos = tela.clone();
     tauri::async_runtime::spawn(async move {
-        let fim = match rodar(cfg, armazem, exec, eventos_rx, parar_rx).await {
-            Ok(()) => "núcleo parado".to_owned(),
-            Err(e) => format!("núcleo parou: {e}"),
+        let mut ultimo = String::new();
+        while let Some(a) = avisos_rx.recv().await {
+            if a != ultimo {
+                let _ = tela_avisos.emit("nucleo", a.clone());
+                ultimo = a;
+            }
+        }
+    });
+    let nucleo = tauri::async_runtime::spawn(rodar(cfg, armazem, exec, eventos_rx, parar_rx));
+    tauri::async_runtime::spawn(async move {
+        let fim = match nucleo.await {
+            Ok(Ok(())) => "núcleo parado".to_owned(),
+            Ok(Err(e)) => format!("núcleo parou: {e}"),
+            Err(e) => format!("núcleo caiu: {e}"),
         };
         let _ = tela.emit("nucleo", fim);
     });

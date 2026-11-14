@@ -27,6 +27,8 @@ pub struct Config {
     /// Conta dos lotes de eventos (obrigatória com token global).
     pub conta_lote: Option<String>,
     pub lote_max: usize,
+    /// Avisos de conexão para a tela ("conectado", "sem conexão: …"); `None` = sem aviso.
+    pub avisos: Option<mpsc::UnboundedSender<String>>,
 }
 
 pub fn agora_ms() -> i64 {
@@ -97,6 +99,12 @@ fn texto(msg: &MensagemCliente) -> Option<Message> {
     serde_json::to_string(&env).ok().map(Message::text)
 }
 
+fn avisar(cfg: &Config, msg: String) {
+    if let Some(t) = &cfg.avisos {
+        let _ = t.send(msg);
+    }
+}
+
 enum Fim {
     Parar,
     Caiu { ficou_de_pe: bool },
@@ -136,6 +144,7 @@ pub async fn rodar<E: Executor, A: ArmazemToken>(
         );
         let fim = match tokio_tungstenite::connect_async(req).await {
             Ok((ws, _)) => {
+                avisar(&cfg, "conectado ao Nexus".into());
                 sessao(
                     ws,
                     &cfg,
@@ -146,12 +155,16 @@ pub async fn rodar<E: Executor, A: ArmazemToken>(
                 )
                 .await
             }
-            Err(_) => Fim::Caiu { ficou_de_pe: false },
+            Err(e) => {
+                avisar(&cfg, format!("sem conexão com o Nexus: {e}"));
+                Fim::Caiu { ficou_de_pe: false }
+            }
         };
         match fim {
             Fim::Parar => return Ok(()),
             Fim::Caiu { ficou_de_pe } => {
                 if ficou_de_pe {
+                    avisar(&cfg, "conexão com o Nexus caiu; reconectando".into());
                     backoff.zerar();
                 }
                 let espera = backoff.proximo();
@@ -264,6 +277,7 @@ mod testes {
             contas: vec![],
             conta_lote: None,
             lote_max: 50,
+            avisos: None,
         }
     }
 
