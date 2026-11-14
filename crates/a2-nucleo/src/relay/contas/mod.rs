@@ -48,6 +48,8 @@ pub struct Contas {
     diario_mudou: bool,
     /// Chegou login novo: guardar o que só vem nele.
     login_mudou: bool,
+    /// Último nick do jogo visto em cada conta (sobrevive a reinícios).
+    nicks: HashMap<String, String>,
     nomes: HashMap<i64, String>,
     bosses: Option<Value>,
     chance_shiny: Option<f64>,
@@ -81,11 +83,15 @@ impl Contas {
     }
 
     /// Nick da conta do app (o do jogo, se já veio; senão o nome da conta).
+    /// Nick da conta no jogo: o do estado atual, ou o último visto (guardado em disco), ou o
+    /// rótulo da conta. Sem o guardado, as linhas do HUD logo depois de um reinício iam para o
+    /// rótulo ("Alllphha" no lugar de "Alllphhha") e o diário saía em dobro.
     fn nick(&self, conta: &str) -> String {
         self.contas
             .get(conta)
             .map(|c| c.nick.clone())
             .filter(|n| !n.is_empty())
+            .or_else(|| self.nicks.get(conta).cloned())
             .unwrap_or_else(|| conta.to_owned())
     }
 
@@ -308,6 +314,10 @@ impl Fluxo for Contas {
                 }
                 if let Some(c) = self.contas.get(conta) {
                     self.janelas.estado(conta, c, agora);
+                    if !c.nick.is_empty() && self.nicks.get(conta) != Some(&c.nick) {
+                        self.nicks.insert(conta.to_owned(), c.nick.clone());
+                        self.login_mudou = true;
+                    }
                 }
             }
             Some("hud") => {
@@ -348,6 +358,7 @@ impl Fluxo for Contas {
                 "bosses": self.bosses,
                 "chanceShiny": self.chance_shiny,
                 "janelas": self.janelas.para_json(),
+                "nicks": self.nicks,
             })
         })
     }
@@ -377,6 +388,16 @@ impl Fluxo for Contas {
         }
         if let Some(j) = v.get("janelas") {
             self.janelas.restaurar(j);
+        }
+        for (k, n) in v
+            .get("nicks")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(n) = n.as_str() {
+                self.nicks.entry(k.clone()).or_insert_with(|| n.to_owned());
+            }
         }
     }
 
@@ -431,6 +452,17 @@ mod testes {
     }
 
     #[test]
+    fn nick_do_jogo_volta_depois_do_reinicio() {
+        let mut c = Contas::novo(true);
+        c.receber_conta("alllphha", &login("Alllphhha"), 0);
+        let salvo = c.salvar().unwrap_or_default();
+        let mut novo = Contas::novo(true);
+        novo.restaurar(&salvo);
+        // Antes do estado cheio, a linha do HUD vai para o nick do jogo, não para o rótulo.
+        assert_eq!(novo.nick("alllphha"), "Alllphhha");
+    }
+
+    #[test]
     fn reinicio_do_relay_mantem_a_janela_sem_novo_login() {
         let mut c = Contas::novo(true);
         c.receber_conta("Sikien", &login("Sikien"), 0);
@@ -455,6 +487,11 @@ mod testes {
             Some("Gema Rara")
         );
         assert_eq!(novo.chance_shiny, Some(0.00004));
+        // O nick do jogo também volta: linha do HUD antes do estado cheio conta para ele.
+        let mut outro = Contas::novo(true);
+        outro.restaurar(&salvo);
+        assert_eq!(outro.nick("Sikien"), "Sikien");
+        assert_eq!(outro.nick("Desconhecida"), "Desconhecida");
         // Arquivo do formato antigo (só o diário) ainda abre.
         let mut velho = Contas::novo(true);
         velho.restaurar(&json!({"v": 1, "dias": {}}));

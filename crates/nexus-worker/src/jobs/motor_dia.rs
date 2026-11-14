@@ -97,12 +97,20 @@ async fn gravar(tx: &mut sqlx::PgConnection, chave: &str, v: &Value) -> Result<(
 
 pub async fn ciclo(db: &PgPool) -> Result<usize> {
     let eventos: Vec<(String, String, Value)> = sqlx::query_as(
-        "SELECT DISTINCT ON (dados->>'jogo_nick', dados->>'dia')
-                dados->>'jogo_nick', dados->>'dia', dados
-           FROM nexus.evento
-          WHERE tipo = 'diario' AND em > now() - interval '3 days'
-            AND dados ? 'jogo_nick' AND dados ? 'dia'
-          ORDER BY dados->>'jogo_nick', dados->>'dia', em DESC",
+        // Diário com o rótulo da conta no lugar do nick do jogo (o app, logo depois de um
+        // reinício, contava o HUD para o rótulo) não entra quando o jogo já deu outro nick.
+        "SELECT DISTINCT ON (e.dados->>'jogo_nick', e.dados->>'dia')
+                e.dados->>'jogo_nick', e.dados->>'dia', e.dados
+           FROM nexus.evento e
+          WHERE e.tipo = 'diario' AND e.em > now() - interval '3 days'
+            AND e.dados ? 'jogo_nick' AND e.dados ? 'dia'
+            AND NOT EXISTS (
+                SELECT 1 FROM nexus.motor_janela j
+                 WHERE j.conta = lower(e.conta)
+                   AND lower(e.dados->>'jogo_nick') = j.conta
+                   AND j.janela->>'nick' IS NOT NULL
+                   AND j.janela->>'nick' <> e.dados->>'jogo_nick')
+          ORDER BY e.dados->>'jogo_nick', e.dados->>'dia', e.em DESC",
     )
     .fetch_all(db)
     .await?;
