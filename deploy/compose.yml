@@ -78,8 +78,8 @@ services:
       # Fase 4: comparador das rotas do motor. O motor da VPS roda em UTC (o do PC, -180).
       NEXUS_PARIDADE_MOTOR_URL: http://127.0.0.1:47821
       NEXUS_MOTOR_FUSO_MIN: "0"
-      # Fase 4: laço do motor em sombra contra o motor do PC (Tailscale, só leitura).
-      NEXUS_MOTOR_SOMBRA_URL: http://100.67.28.87:47821
+      # Fase 4: laço do motor em sombra lendo a janela que o app manda (sem o PC antigo).
+      NEXUS_MOTOR_SOMBRA_URL: nexus
       NEXUS_MOTOR_SOMBRA_FUSO_MIN: "-180"
       # Compara também /api/bolsa/equipe e /equipe-propria (dispara o cálculo do legado).
       NEXUS_PARIDADE_EQUIPE: "true"
