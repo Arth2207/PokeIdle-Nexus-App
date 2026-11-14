@@ -173,8 +173,14 @@ pub fn iniciar(
                 }
             };
             salvar(&app, estados);
-            if let Some(p) = pedido {
-                if let Some(w) = app.get_webview(&rotulo_da_conta(&dono)) {
+            if let Some(mut p) = pedido {
+                // Pedido de uma conta (ex.: treino de PvP) vai para a janela dela; o resto, à dona.
+                let alvo = p
+                    .as_object_mut()
+                    .and_then(|o| o.remove("_conta"))
+                    .and_then(|c| c.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| dono.clone());
+                if let Some(w) = app.get_webview(&rotulo_da_conta(&alvo)) {
                     let _ = w.eval(format!("window.__hdxCmd&&window.__hdxCmd({p})"));
                 }
             }

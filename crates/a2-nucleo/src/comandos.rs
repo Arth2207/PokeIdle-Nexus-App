@@ -28,6 +28,9 @@ pub enum Modo {
 }
 
 pub const RESULTADO_SOMBRA: &str = "sombra";
+/// Folga entre dois comandos da mesma conta: o jogo recusa rajadas ("Devagar aí — muitas
+/// mensagens"); o motor antigo esperava o mesmo entre um pedido e outro.
+pub const FOLGA_JOGO: std::time::Duration = std::time::Duration::from_millis(500);
 pub const RESULTADO_EXPIRADO: &str = "expirado";
 const MEMORIA: usize = 512;
 
@@ -106,6 +109,7 @@ impl<E: Executor> Despachante<E> {
             .or_default()
             .clone();
         let _fila_da_conta = trava.lock().await;
+        let mut executou = false;
 
         let resultado = if travar(&i.estado).cancelados.remove(&cmd.id) {
             travar(&i.estado).em_curso.remove(&cmd.id);
@@ -115,17 +119,25 @@ impl<E: Executor> Despachante<E> {
         } else if i.modo == Modo::Sombra {
             RESULTADO_SOMBRA.to_string()
         } else {
+            executou = true;
             match i.exec.executar(cmd).await {
                 Ok(r) => r,
                 Err(m) => format!("erro: {m}"),
             }
         };
 
-        let mut e = travar(&i.estado);
-        e.em_curso.remove(&cmd.id);
-        e.concluidos.push_back((cmd.id, resultado.clone()));
-        while e.concluidos.len() > MEMORIA {
-            e.concluidos.pop_front();
+        {
+            let mut e = travar(&i.estado);
+            e.em_curso.remove(&cmd.id);
+            e.concluidos.push_back((cmd.id, resultado.clone()));
+            while e.concluidos.len() > MEMORIA {
+                e.concluidos.pop_front();
+            }
+        }
+        // Resultado já guardado (a reentrega o recebe na hora); ainda com a vez da conta, o
+        // próximo comando dela espera a folga.
+        if executou {
+            tokio::time::sleep(FOLGA_JOGO).await;
         }
         Some(ComandoResultado {
             id: cmd.id,
@@ -197,6 +209,21 @@ mod testes {
         let r = s.tratar(&cmd(3, "a", "x", None), 0).await;
         assert_eq!(r.map(|r| r.resultado), Some("sombra".into()));
         assert_eq!(n.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn mesma_conta_espera_a_folga_e_outra_conta_nao() {
+        let (d, _) = desp(Modo::Ativo, &[]);
+        let (c1, c2, c3) = (
+            cmd(1, "a", "x", None),
+            cmd(2, "a", "x", None),
+            cmd(3, "b", "x", None),
+        );
+        let t0 = tokio::time::Instant::now();
+        let (a, b, c) = tokio::join!(d.tratar(&c1, 0), d.tratar(&c2, 0), d.tratar(&c3, 0));
+        assert!(a.is_some() && b.is_some() && c.is_some());
+        // Dois da conta "a" em série, cada um com a folga; o de "b" corre em paralelo.
+        assert_eq!(t0.elapsed(), FOLGA_JOGO * 2);
     }
 
     #[tokio::test]
