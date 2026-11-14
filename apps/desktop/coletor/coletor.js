@@ -56,6 +56,53 @@
     };
   } catch (e) {}
 
+  // --- HTTP do jogo (só no modo Descoberta): algumas telas (ex.: perfil de outro jogador)
+  // vêm por fetch/XHR, não pelo WS. Só o próprio site, só JSON, sem a query e sem login.
+  var naoHttp = /auth|login|logout|token|sess|senha|password|cadastro|registr/i;
+  function caminhoJogo(u) {
+    try {
+      var x = new URL(u, location.href);
+      if (x.host !== location.host || naoHttp.test(x.pathname)) return null;
+      return x.pathname;
+    } catch (e) { return null; }
+  }
+  function http(metodo, url, tipo, texto) {
+    var p = caminhoJogo(url);
+    if (!bruto || p === null || typeof texto !== 'string' || String(tipo).indexOf('json') < 0) return;
+    var corpo;
+    try { corpo = JSON.parse(texto.slice(0, 3000000)); } catch (e) { return; }
+    var m = String(metodo || 'GET').toUpperCase();
+    enviar({ t: 'bruto', dir: 'in', dados: JSON.stringify({ t: 'http ' + m + ' ' + p, corpo: corpo }) });
+  }
+  var fetchOrig = window.fetch;
+  if (fetchOrig) {
+    window.fetch = function (entrada, init) {
+      var pr = fetchOrig.apply(this, arguments);
+      if (bruto) {
+        var url = typeof entrada === 'string' ? entrada : (entrada && entrada.url) || '';
+        var met = (init && init.method) || (entrada && entrada.method) || 'GET';
+        pr.then(function (r) {
+          try {
+            var ct = r.headers.get('content-type') || '';
+            if (ct.indexOf('json') >= 0) r.clone().text().then(function (t) { http(met, url, ct, t); }, function () {});
+          } catch (e) {}
+        }, function () {});
+      }
+      return pr;
+    };
+  }
+  var xAbrir = XMLHttpRequest.prototype.open, xEnviar = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function (m, u) { this.__nx = [m, u]; return xAbrir.apply(this, arguments); };
+  XMLHttpRequest.prototype.send = function () {
+    var x = this;
+    if (bruto && x.__nx) {
+      x.addEventListener('load', function () {
+        try { http(x.__nx[0], x.__nx[1], x.getResponseHeader('content-type') || '', x.responseText); } catch (e) {}
+      });
+    }
+    return xEnviar.apply(this, arguments);
+  };
+
   // --- Comando: manda JSON no WS do jogo (mesmo contrato do __hdxCmd legado).
   function cmd(o) {
     var s = window.__hdxWs;
