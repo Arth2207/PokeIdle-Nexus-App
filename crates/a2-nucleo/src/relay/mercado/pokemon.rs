@@ -29,6 +29,44 @@ pub struct Alvo {
     pub nivel_max: String,
 }
 
+/// Alvos de `GET /api/bolsa/alvos-coleta` (`alvos[].speciesId/nivelMin/nivelMax`) e se o
+/// servidor indicou falta de espécies (`faltas`): com falta, busca de novo mais cedo.
+pub fn alvos_da_resposta(v: &Value) -> (Vec<Alvo>, bool) {
+    let nivel = |a: &Value, k: &str| match a.get(k) {
+        Some(Value::Number(n)) => n
+            .as_f64()
+            .map_or(String::new(), |x| format!("{}", x.round() as i64)),
+        Some(Value::String(s)) => s.clone(),
+        _ => String::new(),
+    };
+    let alvos = v
+        .get("alvos")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|a| {
+            let especie = a
+                .get("speciesId")
+                .and_then(Value::as_u64)
+                .filter(|e| *e > 0)?;
+            Some(Alvo {
+                especie,
+                nivel_min: nivel(a, "nivelMin"),
+                nivel_max: nivel(a, "nivelMax"),
+            })
+        })
+        .collect();
+    let faltas = v.get("faltas").is_some_and(|f| match f {
+        Value::Bool(b) => *b,
+        Value::Null => false,
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+        Value::Number(n) => n.as_f64().unwrap_or(0.0) > 0.0,
+        Value::String(s) => !s.is_empty(),
+    });
+    (alvos, faltas)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct Unidade {
     moeda: &'static str,
@@ -170,6 +208,22 @@ mod testes {
             .map(|i| json!({"id": pagina * 100 + i as u64, "tipo": "pokemon", "preco": 1}))
             .collect();
         json!({"t": "market", "aba": "vitrine", "pagina": pagina, "linhas": linhas})
+    }
+
+    #[test]
+    fn alvos_do_servidor() {
+        let (a, f) = alvos_da_resposta(&json!({"alvos": [
+            {"speciesId": 464, "nivelMin": 120.4, "nivelMax": 400},
+            {"speciesId": 0}, {"nome": "x"}]}));
+        assert_eq!(
+            a,
+            vec![Alvo {
+                especie: 464,
+                nivel_min: "120".into(),
+                nivel_max: "400".into()
+            }]
+        );
+        assert!(!f);
     }
 
     #[test]

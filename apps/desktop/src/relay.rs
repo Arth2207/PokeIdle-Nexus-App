@@ -3,6 +3,7 @@
 //! o mesmo token do app.
 
 use a2_nucleo::jogo::rotulo_da_conta;
+use a2_nucleo::relay::mercado::pokemon::alvos_da_resposta;
 use a2_nucleo::relay::{base_http, Entrega, Relay};
 use a2_nucleo::{ArmazemToken, ArquivoToken};
 use serde_json::Value;
@@ -57,6 +58,8 @@ pub fn iniciar(
             return;
         };
         let mut tique = tokio::time::interval(Duration::from_secs(1));
+        // Alvos de coleta: a cada 30 min (10 min enquanto o servidor indicar falta de espécies).
+        let mut alvos_proximo = 0i64;
         loop {
             tokio::select! {
                 _ = tique.tick() => {}
@@ -66,6 +69,27 @@ pub fn iniciar(
                 return;
             }
             let agora = crate::agora_ms();
+            if agora >= alvos_proximo {
+                alvos_proximo = agora + 5 * 60_000;
+                let rota = format!("/api/bolsa/alvos-coleta?nick={}", codificar(&dono));
+                match buscar(&cliente, &base, &rota).await {
+                    Ok(v) => {
+                        let (alvos, faltas) = alvos_da_resposta(&v);
+                        alvos_proximo = agora + if faltas { 10 } else { 30 } * 60_000;
+                        let est = app.state::<crate::Estado>();
+                        if let Some(r) = travar(&est.relay.relay).as_mut() {
+                            r.definir_alvos(&alvos, agora);
+                        }
+                        let _ = avisos.send(format!(
+                            "Mercado: {} espécies alvo do servidor",
+                            alvos.len()
+                        ));
+                    }
+                    Err(er) => {
+                        let _ = avisos.send(format!("relay: alvos de coleta falharam: {er}"));
+                    }
+                }
+            }
             let (pedido, entregas) = {
                 let est = app.state::<crate::Estado>();
                 let mut g = travar(&est.relay.relay);
@@ -93,14 +117,42 @@ pub fn iniciar(
     });
 }
 
-async fn enviar(c: &reqwest::Client, base: &str, rota: &str, corpo: &Value) -> Result<(), String> {
-    let token = ArquivoToken::padrao("nexus")
+/// Codifica o nick para a query (letras, números e `-_.~` passam; o resto vira `%XX`).
+fn codificar(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+fn token() -> Result<String, String> {
+    ArquivoToken::padrao("nexus")
         .and_then(|a| a.ler())
         .map_err(|e| e.to_string())?
-        .ok_or("token ausente")?;
+        .ok_or_else(|| "token ausente".to_owned())
+}
+
+async fn buscar(c: &reqwest::Client, base: &str, rota: &str) -> Result<Value, String> {
+    let r = c
+        .get(format!("{base}{rota}"))
+        .bearer_auth(token()?)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        return Err(format!("HTTP {}", r.status().as_u16()));
+    }
+    r.json().await.map_err(|e| e.to_string())
+}
+
+async fn enviar(c: &reqwest::Client, base: &str, rota: &str, corpo: &Value) -> Result<(), String> {
     let r = c
         .post(format!("{base}{rota}"))
-        .bearer_auth(token)
+        .bearer_auth(token()?)
         .json(corpo)
         .send()
         .await

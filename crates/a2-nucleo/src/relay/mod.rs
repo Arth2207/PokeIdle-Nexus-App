@@ -22,6 +22,8 @@ pub trait Fluxo: Send {
     fn pedir(&mut self, agora: i64) -> Option<Value>;
     /// O que já está pronto para o servidor (esvazia).
     fn entregar(&mut self) -> Vec<Entrega>;
+    /// Espécies alvo do servidor (só o mercado usa).
+    fn definir_alvos(&mut self, _alvos: &[mercado::pokemon::Alvo], _agora: i64) {}
 }
 
 /// Intervalo mínimo entre dois pedidos ao jogo pela mesma conta (o jogo aceita 1/s).
@@ -73,6 +75,12 @@ impl Relay {
 
     pub fn entregar(&mut self) -> Vec<Entrega> {
         self.fluxos.iter_mut().flat_map(|f| f.entregar()).collect()
+    }
+
+    pub fn definir_alvos(&mut self, alvos: &[mercado::pokemon::Alvo], agora: i64) {
+        for f in &mut self.fluxos {
+            f.definir_alvos(alvos, agora);
+        }
     }
 }
 

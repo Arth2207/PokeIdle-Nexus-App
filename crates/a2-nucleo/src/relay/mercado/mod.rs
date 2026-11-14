@@ -49,12 +49,6 @@ impl Mercado {
         }
     }
 
-    /// Espécies alvo do servidor; valem para a próxima volta.
-    pub fn definir_alvos(&mut self, alvos: Vec<Alvo>, agora: i64) {
-        self.alvos = alvos;
-        self.alvos_em = agora;
-    }
-
     fn recolher(&mut self) {
         let o = match &mut self.fase {
             Fase::Pokemon(v) => std::mem::take(&mut v.ofertas),
@@ -121,6 +115,12 @@ impl Fluxo for Mercado {
                 }
             }
         }
+    }
+
+    /// Espécies alvo do servidor; valem a partir da próxima volta.
+    fn definir_alvos(&mut self, alvos: &[Alvo], agora: i64) {
+        self.alvos = alvos.to_vec();
+        self.alvos_em = agora;
     }
 
     fn entregar(&mut self) -> Vec<Entrega> {
