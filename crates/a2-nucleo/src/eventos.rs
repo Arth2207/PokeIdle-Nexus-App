@@ -85,20 +85,29 @@ impl FilaEventos {
             return None;
         }
         let conta = self.pendentes.front().and_then(|(c, _)| c.clone());
-        // Corta por quantidade, por conta e por tamanho (sempre ao menos um evento).
+        // Junta os eventos da conta da frente de qualquer ponto da fila (com várias contas os
+        // eventos chegam intercalados; só os seguidos dava lotes de 1 ou 2), na ordem, até
+        // `max` e [`LOTE_BYTES`] (sempre ao menos um). As outras contas ficam como estavam.
         let mut bytes = 0;
-        let n = self
-            .pendentes
-            .iter()
-            .take(max)
-            .take_while(|(c, _)| *c == conta)
-            .enumerate()
-            .take_while(|(i, (_, v))| {
-                bytes += v.to_string().len() + 1;
-                *i == 0 || bytes <= LOTE_BYTES
-            })
-            .count();
-        let eventos: Vec<Value> = self.pendentes.drain(..n).map(|(_, v)| v).collect();
+        let mut eventos = Vec::new();
+        let mut resto = VecDeque::with_capacity(self.pendentes.len());
+        let mut cheio = false;
+        for (c, v) in self.pendentes.drain(..) {
+            if cheio || c != conta {
+                resto.push_back((c, v));
+                continue;
+            }
+            let t = v.to_string().len() + 1;
+            if !eventos.is_empty() && bytes + t > LOTE_BYTES {
+                cheio = true;
+                resto.push_back((c, v));
+                continue;
+            }
+            bytes += t;
+            eventos.push(v);
+            cheio = eventos.len() >= max;
+        }
+        self.pendentes = resto;
         let lote = EventoLote {
             seq_cliente: self.proximo_seq,
             conta,
@@ -158,6 +167,41 @@ mod testes {
         assert!(!f.adicionar(json!({"t":"kill","n":1})));
         assert!(f.adicionar(json!({"t":"kill","n":2})));
         assert_eq!(f.proximo_lote(10).map(|l| l.eventos.len()), Some(2));
+    }
+
+    #[test]
+    fn contas_intercaladas_saem_em_lotes_cheios_na_ordem() {
+        let mut f = FilaEventos::nova(None, 1);
+        for n in 0..12 {
+            let c = ["a", "b", "c", "d"][n % 4];
+            f.adicionar(json!({"k": "kill", "_conta": c, "n": n}));
+        }
+        let l = f.proximo_lote(10).unwrap_or_else(|| unreachable!());
+        assert_eq!(l.conta.as_deref(), Some("a"));
+        let ns: Vec<i64> = l.eventos.iter().filter_map(|e| e["n"].as_i64()).collect();
+        assert_eq!(ns, vec![0, 4, 8]);
+        f.confirmar(&EventoAck {
+            seq_cliente: l.seq_cliente,
+            ok: true,
+            duplicados: 0,
+            erros: 0,
+        });
+        let l = f.proximo_lote(2).unwrap_or_else(|| unreachable!());
+        assert_eq!(l.conta.as_deref(), Some("b"));
+        let ns: Vec<i64> = l.eventos.iter().filter_map(|e| e["n"].as_i64()).collect();
+        assert_eq!(ns, vec![1, 5], "limite do lote; o 9 fica na fila");
+        f.confirmar(&EventoAck {
+            seq_cliente: l.seq_cliente,
+            ok: true,
+            duplicados: 0,
+            erros: 0,
+        });
+        let l = f.proximo_lote(10).unwrap_or_else(|| unreachable!());
+        assert_eq!(
+            l.conta.as_deref(),
+            Some("c"),
+            "a ordem entre as contas segue a da fila"
+        );
     }
 
     #[test]

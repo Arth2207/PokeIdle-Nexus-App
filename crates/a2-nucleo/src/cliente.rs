@@ -221,6 +221,13 @@ where
                         enviar = estado.ao_receber(env);
                         if era_ack && !estado.fila.em_voo() {
                             enviado_em = None;
+                            // Fila com trabalho: o próximo lote sai já, sem esperar o tique.
+                            if ficou_de_pe {
+                                if let Some(l) = estado.fila.proximo_lote(cfg.lote_max) {
+                                    enviar.push(MensagemCliente::EventoLote(l));
+                                    enviado_em = Some(Instant::now());
+                                }
+                            }
                         }
                     }
                 }
