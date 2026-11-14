@@ -110,7 +110,7 @@ pub fn Linha(pontos: Vec<(String, f64)>, #[prop(optional)] media: Option<f64>) -
     let rotulos: Vec<String> = pontos.iter().map(|p| p.0.clone()).collect();
     let passo = (rotulos.len() / 6).max(1);
     view! {
-        <svg class="linha" viewBox=format!("0 0 {w} {h}") preserveAspectRatio="none">
+        <svg class="grafico-linha" viewBox=format!("0 0 {w} {h}") preserveAspectRatio="none">
             {faixa}
             <path d=caminho />
         </svg>
@@ -358,9 +358,9 @@ pub const CSS: &str = r#"
 .pokedex { display:grid; grid-template-columns:repeat(auto-fill,minmax(48px,1fr)); gap:4px; margin-top:10px; }
 .pokedex img { width:48px; height:48px; object-fit:contain; }
 .pokedex img.falta { filter:brightness(0) opacity(.18); }
-.linha { width:100%; height:180px; }
-.linha path { fill:none; stroke:var(--melhora); stroke-width:2.5; vector-effect:non-scaling-stroke; }
-.linha .faixa { fill:var(--trilho); }
+.grafico-linha { width:100%; height:180px; }
+.grafico-linha path { fill:none; stroke:var(--melhora); stroke-width:2.5; vector-effect:non-scaling-stroke; }
+.grafico-linha .faixa { fill:var(--trilho); }
 .linha-rot { display:flex; justify-content:space-between; font-size:11px; color:var(--texto-3); }
 .calor { display:grid; grid-template-columns:minmax(110px,auto) repeat(24,1fr); gap:2px; font-size:11px; align-items:center; }
 .calor-h { color:var(--texto-3); text-align:center; }

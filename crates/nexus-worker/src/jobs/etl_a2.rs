@@ -113,12 +113,17 @@ async fn processar(db: &PgPool, conta: &Conta, nick: &str, escrita: bool) -> Res
             .fetch_optional(db)
             .await?
             .unwrap_or(0);
-    let hunt: Option<String> =
-        sqlx::query_scalar("SELECT dados->>'hunt_slug' FROM nexus.config_hunt WHERE conta = $1")
-            .bind(nick)
-            .fetch_optional(db)
-            .await?
-            .flatten();
+    // O app grava a hunt pelo nick do jogo (Alllphhha), não pelo rótulo da conta (alllphha).
+    let hunt: Option<String> = sqlx::query_scalar(
+        "SELECT dados->>'hunt_slug' FROM nexus.config_hunt
+          WHERE conta = $1
+             OR conta = (SELECT lower(janela->>'nick') FROM nexus.motor_janela WHERE conta = $1)
+          ORDER BY (conta = $1) DESC, atualizado_em DESC LIMIT 1",
+    )
+    .bind(nick)
+    .fetch_optional(db)
+    .await?
+    .flatten();
     let linhas: Vec<(i64, Value)> = sqlx::query_as(
         "SELECT (extract(epoch FROM em) * 1000)::bigint, dados
            FROM nexus.evento

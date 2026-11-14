@@ -48,7 +48,8 @@ pub async fn sessao(db: &PgPool, conta_id: &str) -> Result<Value, sqlx::Error> {
     .fetch_optional(db)
     .await?;
     let atual: Option<String> = sqlx::query_scalar(
-        "SELECT hunt_slug FROM public.fato_kill WHERE conta_id = $1 ORDER BY ts_at DESC LIMIT 1",
+        "SELECT hunt_slug FROM public.fato_kill
+          WHERE conta_id = $1 AND hunt_slug IS NOT NULL ORDER BY ts_at DESC LIMIT 1",
     )
     .bind(conta_id)
     .fetch_optional(db)
