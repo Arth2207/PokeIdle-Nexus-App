@@ -6,8 +6,8 @@ O Electron do PC tem dois pedaços: o **motor** local (`/opt/mapper/pacote/motor
 |---|---|---|---|---|
 | 1 | eventos | `/ingest` (WS na A2) | coletor da página | feito |
 | 2 | comandos | `/api/comandos`, `/api/confirmar-comando` (WS na A2) | — | feito (Ativo sem teste real) |
-| 3 | ofertas do mercado | `POST /api/bolsa/ofertas` | varredura `market.listar` (faixas de nível × moeda, ou espécies alvo), 1 pedido a cada 5 s | a fazer |
-| 4 | resumo de itens | `POST /api/bolsa/resumo-itens` | `market.itens` + `market.item` por item e moeda | a fazer |
+| 3 | ofertas do mercado | `POST /api/bolsa/ofertas` | varredura `market.listar` (faixas de nível × moeda, ou espécies alvo), 1 pedido a cada 5 s | feito (sombra) |
+| 4 | resumo de itens | `POST /api/bolsa/resumo-itens` | `market.itens` + `market.item` por item e moeda | feito: anúncios de item vão junto das ofertas |
 | 5 | vendas (Dossiê) | `/ingest` | `market.historicoGlobal`, página 0 a cada 3 min, retroage até 36 h | a fazer |
 | 6 | alvos de coleta | `GET /api/bolsa/alvos-coleta` (30 min; 10 min com faltas) | entrada da varredura | a fazer |
 | 7 | equipe e estado | `POST /api/equipes/ingest` | `welcome`/`estado` do WS | a fazer |

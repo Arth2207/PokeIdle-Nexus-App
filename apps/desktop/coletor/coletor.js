@@ -18,6 +18,7 @@
   // o send() também captura conexão criada antes do gancho. Só a conexão do próprio jogo.
   var OrigWS = window.WebSocket;
   var repassa = { welcome: 1, batalha: 1 };
+  var abasMercado = { vitrine: 1, item: 1, itens: 1 };
   function doJogo(s) { try { return new URL(s.url).host === location.host; } catch (e) { return false; } }
   function ouvir(ws) {
     if (ws.__nexusOuvindo) return;
@@ -30,6 +31,8 @@
       try {
         var m = JSON.parse(ev.data);
         if (m && repassa[m.t]) enviar(m);
+        // Respostas do mercado: a varredura do app (relay) depende delas.
+        else if (m && m.t === 'market' && abasMercado[m.aba]) enviar({ t: 'mkt', m: m });
       } catch (e) {}
     });
   }

@@ -16,6 +16,8 @@ tauri-build = { version = "2", features = [] }
 a2-nucleo = { path = "../../crates/a2-nucleo" }
 # Só para escolher o provedor de criptografia do TLS (wss://): sem ele o rustls não conecta.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# HTTP do relay (ofertas da Bolsa etc.); TLS pelo rustls acima.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 tauri = { version = "2", features = ["unstable"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync", "time"] }

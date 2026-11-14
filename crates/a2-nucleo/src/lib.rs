@@ -8,6 +8,7 @@ pub mod cliente;
 pub mod comandos;
 pub mod eventos;
 pub mod jogo;
+pub mod relay;
 pub mod sessao;
 pub mod token;
 

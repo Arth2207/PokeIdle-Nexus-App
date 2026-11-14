@@ -2,6 +2,8 @@
 //! núcleo (`a2-nucleo`). A lógica testável está em `a2_nucleo::jogo`; aqui só há I/O de janela.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod relay;
+
 use a2_nucleo::cliente::{rodar, Config};
 use a2_nucleo::comandos::Modo;
 use a2_nucleo::jogo::{
@@ -54,6 +56,8 @@ struct Estado {
     rects: Mutex<HashMap<String, Rect>>,
     /// Modo Descoberta: o coletor repassa cada mensagem do WS do jogo.
     descoberta: AtomicBool,
+    /// Relay do mercado etc. (ver `relay.rs`).
+    relay: relay::EstadoRelay,
 }
 
 type Rect = (f64, f64, f64, f64, bool);
@@ -394,6 +398,11 @@ fn coletor_evento(window: Webview, msg: Value, estado: State<'_, Estado>) {
     if let Some(c) = travar(&estado.contas).get_mut(&conta) {
         c.coletor_visto = Some(agora);
     }
+    // Respostas do mercado: alimentam o relay (varredura), não viram evento.
+    if msg.get("t").and_then(Value::as_str) == Some("mkt") {
+        estado.relay.receber(&conta, &msg, agora);
+        return;
+    }
     // Sinal de vida: só atualiza o card; não vai ao núcleo.
     if msg.get("t").and_then(Value::as_str) == Some("vivo") {
         if let Some(c) = travar(&estado.contas).get_mut(&conta) {
@@ -537,6 +546,13 @@ async fn iniciar_nucleo(
     let (avisos_tx, mut avisos_rx) = mpsc::unbounded_channel::<String>();
     *travar(&estado.eventos) = Some(eventos_tx);
     *travar(&estado.conta_tracker) = contas.first().cloned();
+    relay::iniciar(
+        &app,
+        &url,
+        contas.first().cloned(),
+        parar_rx.clone(),
+        avisos_tx.clone(),
+    );
     let cfg = Config {
         url,
         modo: if modo.as_deref() == Some("ativo") {
@@ -603,6 +619,8 @@ fn tem_token() -> Result<bool, String> {
 }
 
 fn main() {
+    // Um provedor de criptografia para todo TLS do app (WebSocket e HTTP do relay).
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let r = tauri::Builder::default()
         .manage(Estado::default())
         .setup(|app| {
