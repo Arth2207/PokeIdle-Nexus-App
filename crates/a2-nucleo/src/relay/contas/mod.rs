@@ -25,6 +25,19 @@ const ITENS_MS: i64 = 3 * 60_000;
 const RAROS_MS: i64 = 2 * 60_000;
 /// Médias de preço do mercado (7 dias e hoje): a cada 30 min.
 const MEDIAS_MS: i64 = 30 * 60_000;
+/// Resumo do dia (o `D.dia` do motor) para o Nexus: a cada 5 min.
+const DIARIO_MS: i64 = 5 * 60_000;
+
+/// Saldo de ouro de um dia: início, fim, mínimo, máximo e quando começou e acabou.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Saldo {
+    ini: f64,
+    fim: f64,
+    min: f64,
+    max: f64,
+    t_ini: i64,
+    t_fim: i64,
+}
 
 #[derive(Default)]
 pub struct Contas {
@@ -45,6 +58,9 @@ pub struct Contas {
     itens_sig: String,
     itens_em: i64,
     raros_em: i64,
+    /// (nick, dia) → saldo de ouro.
+    saldos: HashMap<(String, String), Saldo>,
+    diario_em: i64,
 }
 
 impl Contas {
@@ -54,6 +70,7 @@ impl Contas {
             oficial,
             itens_em: i64::MIN / 2,
             raros_em: i64::MIN / 2,
+            diario_em: i64::MIN / 2,
             ..Self::default()
         }
     }
@@ -90,6 +107,65 @@ impl Contas {
             .filter(|c| *c > 0.0)
         {
             self.chance_shiny = Some(c);
+        }
+    }
+
+    fn ouro(&mut self, conta: &str, msg: &Value, agora: i64) {
+        let Some(g) = msg.pointer("/estado/gold").and_then(Value::as_f64) else {
+            return;
+        };
+        let chave = (self.nick(conta), super::tempo::dia_de(agora));
+        let s = self.saldos.entry(chave).or_insert(Saldo {
+            ini: g,
+            fim: g,
+            min: g,
+            max: g,
+            t_ini: agora,
+            t_fim: agora,
+        });
+        s.fim = g;
+        s.min = s.min.min(g);
+        s.max = s.max.max(g);
+        s.t_fim = agora;
+        // Só os dias recentes interessam.
+        let hoje = super::tempo::dia_de(agora);
+        let ontem = super::tempo::dia_de(agora - 86_400_000);
+        self.saldos.retain(|(_, d), _| *d == hoje || *d == ontem);
+    }
+
+    /// O dia de hoje e o de ontem de cada conta, no formato do motor, como eventos `diario`.
+    fn entregar_diario(&mut self, agora: i64, saida: &mut Vec<Entrega>) {
+        if agora - self.diario_em < DIARIO_MS {
+            return;
+        }
+        self.diario_em = agora;
+        let dias = [
+            super::tempo::dia_de(agora),
+            super::tempo::dia_de(agora - 86_400_000),
+        ];
+        for conta in self.contas.keys() {
+            let nick = self.nick(conta);
+            let eventos: Vec<Value> = dias
+                .iter()
+                .filter_map(|dia| {
+                    let mut d = self.diario.dia_json(&nick, dia)?;
+                    d["k"] = json!("diario");
+                    d["ts"] = json!(agora);
+                    d["dia"] = json!(dia);
+                    d["jogo_nick"] = json!(nick);
+                    if let Some(s) = self.saldos.get(&(nick.clone(), dia.clone())) {
+                        d["saldo"] = json!({"ini": s.ini, "fim": s.fim, "min": s.min, "max": s.max,
+                                            "tIni": s.t_ini, "tFim": s.t_fim});
+                    }
+                    Some(d)
+                })
+                .collect();
+            if !eventos.is_empty() {
+                saida.push(Entrega::Diario {
+                    conta: conta.to_lowercase(),
+                    eventos,
+                });
+            }
         }
     }
 
@@ -201,12 +277,13 @@ impl Fluxo for Contas {
         }
     }
 
-    fn receber_conta(&mut self, conta: &str, msg: &Value, _agora: i64) {
+    fn receber_conta(&mut self, conta: &str, msg: &Value, agora: i64) {
         match msg.get("t").and_then(Value::as_str) {
             Some(t @ ("welcome" | "estado")) => {
                 if t == "welcome" {
                     self.welcome(msg);
                 }
+                self.ouro(conta, msg, agora);
                 let e = msg.get("estado");
                 let mexeu_pokemon = t == "welcome"
                     || ["pokemons", "pkMud", "pkFora"]
@@ -255,6 +332,7 @@ impl Fluxo for Contas {
         let mut s = Vec::new();
         self.entregar_equipes(agora, &mut s);
         self.entregar_hunts(agora, &mut s);
+        self.entregar_diario(agora, &mut s);
         if self.oficial {
             self.entregar_itens(agora, &mut s);
             self.entregar_raros(agora, &mut s);
@@ -282,7 +360,7 @@ mod testes {
         let e = c.entregar(0);
         assert!(matches!(&e[0], Entrega::Equipe(b) if b["nick"] == "sikien"));
         assert!(matches!(&e[1], Entrega::Hunt(h) if h[0]["hunt_slug"] == "caterpie"));
-        assert_eq!(e.len(), 2);
+        assert_eq!(e.len(), 2, "sem linhas do HUD ainda, sem diário");
         // Nada mudou: nada sai até dar o tempo da equipe.
         assert!(c.entregar(30_000).is_empty());
         c.receber_conta(
@@ -292,6 +370,50 @@ mod testes {
         );
         assert!(matches!(&c.entregar(61_000)[0], Entrega::Equipe(b) if b["pokemons"] == json!([])));
         assert_eq!(c.pedir(0), None);
+    }
+
+    #[test]
+    fn diario_no_formato_do_motor_com_saldo() {
+        let mut c = Contas::novo(false);
+        let t = 1_794_632_400_000; // 14/11 02:00 em UTC−3
+        let mut w = login("Sikien");
+        w["estado"]["gold"] = json!(1000);
+        c.receber_conta("Sikien", &w, t);
+        c.receber_conta(
+            "Sikien",
+            &json!({"t": "estado", "estado": {"gold": 1500}}),
+            t + 1,
+        );
+        c.receber_conta(
+            "Sikien",
+            &json!({"t": "hud", "linhas": [
+            [1, t, "A derrotado! +10 xp treinador, +20 xp pokemon, +30 ouro"]]}),
+            t + 2,
+        );
+        let e = c.entregar(t + 3);
+        let d = e.iter().find_map(|x| match x {
+            Entrega::Diario { conta, eventos } => Some((conta.clone(), eventos.clone())),
+            _ => None,
+        });
+        let (conta, ev) = d.unwrap_or_default();
+        assert_eq!(conta, "sikien");
+        assert_eq!(ev[0]["dia"], "2026-11-14");
+        assert_eq!(ev[0]["k"], "diario");
+        assert_eq!(
+            (
+                ev[0]["kills"].clone(),
+                ev[0]["ouro"].clone(),
+                ev[0]["xpPk"].clone()
+            ),
+            (json!(1), json!(30.0), json!(20.0))
+        );
+        assert_eq!(ev[0]["saldo"]["ini"], 1000.0);
+        assert_eq!(ev[0]["saldo"]["fim"], 1500.0);
+        // Só a cada 5 min.
+        assert!(!c
+            .entregar(t + 60_000)
+            .iter()
+            .any(|x| matches!(x, Entrega::Diario { .. })));
     }
 
     #[test]

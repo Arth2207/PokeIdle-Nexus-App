@@ -157,6 +157,12 @@ async fn loop_etl_continuo(
             Ok(_) => {}
             Err(e) => error!(erro = %e, "etl_a2: ciclo falhou"),
         }
+        // Diário do motor (Finanças, Caçada, histórico) a partir do resumo que o app manda.
+        if escrita {
+            if let Err(e) = jobs::motor_dia::ciclo(&db).await {
+                error!(erro = %e, "motor_dia: ciclo falhou");
+            }
+        }
         metrics::gauge!("nexus_worker_etl_duracao_s").set(inicio.elapsed().as_secs_f64());
 
         tokio::select! {

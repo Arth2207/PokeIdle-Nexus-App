@@ -17,7 +17,7 @@ O app (A2) tira do WebSocket do jogo o que precisa para o Nexus aprender o PvP e
 | Rota | O que devolve |
 |---|---|
 | `GET /api/pvp/meta?faixa=&dias=` | Por faixa de 100 pontos: espécies (usos, taxa de vitória, alcance, nível médio, casas mais usadas), melhores casas por alcance e times de oponente mais comuns. A taxa é suavizada: pouca amostra fica perto de 50%. |
-| `GET /api/pvp/sugestao?nick=&faixa=` | Time de 5 e casas para a conta: força (`poder`), vantagem de tipo contra as 20 espécies mais usadas do meta e taxa da espécie no meta. Acima do nível mínimo do PvP. Traz o comando pronto (`pvp.formacao`). Com menos de 20 partidas na faixa, usa o meta de todas. |
+| `GET /api/pvp/sugestao?nick=&faixa=` | Time de 5 e casas para a conta: força (`poder`), vantagem de tipo contra as 20 espécies mais usadas do meta e taxa da espécie no meta. Traz o comando pronto (`pvp.formacao`). Com menos de 20 partidas na faixa, usa o meta de todas. |
 | `GET /api/pvp/treinos?nick=` | As 50 últimas lutas da Área de Treinamento. |
 | `GET /api/shiny/servidor?dias=` | Shiny do servidor inteiro: total, por hora, por espécie, por dia e por hora do dia (UTC−3). Cada shiny conta uma vez, mesmo que várias contas recebam o aviso. |
 | `GET /api/boss/fichas` | Última ficha dos bosses de raid. |

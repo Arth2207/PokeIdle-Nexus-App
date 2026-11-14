@@ -1,4 +1,4 @@
-//! ETL do app (A2): abates de `nexus.evento` → `fato_kill` (`source = 'a2'`).
+//! ETL do app (A2): abates de `nexus.evento` → `fato_kill` (`source = 'pc'`: o app roda no PC).
 //!
 //! É o "SQLite → PG" da Fase 7: as contas que rodam no app não passam mais pelo `mapa.db`;
 //! os abates delas chegam pelo WebSocket e ficam em `nexus.evento`. Mesmo esquema do ETL do
@@ -22,7 +22,7 @@ const BATCH: i64 = 5_000;
 
 pub(crate) const FONTE_A2: Fonte = Fonte {
     cursor: "nexus.evento",
-    source: "a2",
+    source: "pc",
 };
 
 /// Nick (minúsculo, como o app grava em `nexus.evento.conta`) de cada conta do ETL.

@@ -1,0 +1,10 @@
+# Fase 3 (ingestão, raros, hunt e comandos no Nexus). Ligado pelo cutover-fase3.sh on, que
+# renomeia este arquivo para fase3-rotas.conf; off volta para .off.
+location ~ ^/(ingest|api/raros|api/raros2|api/shiny|api/hunt-sync|api/comandos|api/inserir-comando|api/confirmar-comando)(/|$|\?) {
+    include /etc/nginx/borda/cors.conf;
+    include /etc/nginx/borda/token.conf;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_pass http://nexus;
+}

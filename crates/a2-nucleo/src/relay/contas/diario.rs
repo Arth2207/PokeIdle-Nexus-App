@@ -19,17 +19,24 @@ pub struct Dia {
     pub bolas: u64,
     pub capt: u64,
     pub shiny: u64,
+    pub pot: u64,
+    pub desm: u64,
+    pub ouro: f64,
+    pub xp: f64,
+    pub xp_pk: f64,
     pub drops: BTreeMap<String, f64>,
 }
 
 impl Dia {
     fn json(&self) -> Value {
         json!({ "kills": self.kills, "bolas": self.bolas, "capt": self.capt,
-                "shiny": self.shiny, "drops": self.drops })
+                "shiny": self.shiny, "pot": self.pot, "desm": self.desm, "ouro": self.ouro,
+                "xp": self.xp, "xpPk": self.xp_pk, "drops": self.drops })
     }
 
     fn de_json(v: &Value) -> Self {
         let n = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
+        let f = |k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(0.0);
         let drops = v
             .get("drops")
             .and_then(Value::as_object)
@@ -44,6 +51,11 @@ impl Dia {
             bolas: n("bolas"),
             capt: n("capt"),
             shiny: n("shiny"),
+            pot: n("pot"),
+            desm: n("desm"),
+            ouro: f("ouro"),
+            xp: f("xp"),
+            xp_pk: f("xpPk"),
             drops,
         }
     }
@@ -52,10 +64,21 @@ impl Dia {
 /// O que uma linha do HUD conta.
 #[derive(Debug, PartialEq)]
 enum Linha {
-    Kill(Vec<(String, f64)>),
-    Captura { shiny: bool },
-    Fuga { shiny: bool },
-    Outra { shiny: bool },
+    /// XP do treinador, XP do pokémon, ouro e drops.
+    Kill(f64, f64, f64, Vec<(String, f64)>),
+    Pocao,
+    Desmaio {
+        shiny: bool,
+    },
+    Captura {
+        shiny: bool,
+    },
+    Fuga {
+        shiny: bool,
+    },
+    Outra {
+        shiny: bool,
+    },
 }
 
 fn num_br(s: &str) -> f64 {
@@ -67,10 +90,11 @@ fn num_br(s: &str) -> f64 {
 }
 
 /// `<nome> derrotado! +X xp treinador, +Y xp pokemon, +Z ouro[ (+W do bônus de loot)][drops]`.
-fn drops_do_kill(t: &str) -> Option<Vec<(String, f64)>> {
+fn ler_kill(t: &str) -> Option<Linha> {
     let (_, resto) = t.split_once(" derrotado! +")?;
-    let (_, resto) = resto.split_once(" xp pokemon, +")?;
-    let (_, resto) = resto.split_once(" ouro")?;
+    let (xt, resto) = resto.split_once(" xp treinador, +")?;
+    let (xp, resto) = resto.split_once(" xp pokemon, +")?;
+    let (ouro, resto) = resto.split_once(" ouro")?;
     let resto = match resto.strip_prefix(" (+") {
         Some(r) => {
             r.split_once(" do b")
@@ -79,27 +103,26 @@ fn drops_do_kill(t: &str) -> Option<Vec<(String, f64)>> {
         }
         None => resto,
     };
-    Some(
-        resto
-            .split('·')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| match s.rsplit_once('×') {
-                Some((n, q))
-                    if !q.trim().is_empty()
-                        && q.trim().chars().all(|c| c.is_ascii_digit() || c == '.') =>
-                {
-                    (n.trim().to_owned(), num_br(q))
-                }
-                _ => (s.to_owned(), 1.0),
-            })
-            .collect(),
-    )
+    let drops = resto
+        .split('·')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| match s.rsplit_once('×') {
+            Some((n, q))
+                if !q.trim().is_empty()
+                    && q.trim().chars().all(|c| c.is_ascii_digit() || c == '.') =>
+            {
+                (n.trim().to_owned(), num_br(q))
+            }
+            _ => (s.to_owned(), 1.0),
+        })
+        .collect();
+    Some(Linha::Kill(num_br(xt), num_br(xp), num_br(ouro), drops))
 }
 
 fn ler_linha(t: &str) -> Linha {
-    if let Some(d) = drops_do_kill(t) {
-        return Linha::Kill(d);
+    if let Some(k) = ler_kill(t) {
+        return k;
     }
     let baixo = t.to_lowercase();
     let shiny = baixo.contains("shiny");
@@ -112,6 +135,13 @@ fn ler_linha(t: &str) -> Linha {
         Linha::Captura { shiny }
     } else if baixo.contains("escapou e sumiu") {
         Linha::Fuga { shiny }
+    } else if ["poção usada", "pocao usada", "poçao usada", "pocão usada"]
+        .iter()
+        .any(|p| baixo.contains(p))
+    {
+        Linha::Pocao
+    } else if baixo.contains("desmai") {
+        Linha::Desmaio { shiny }
     } else {
         Linha::Outra { shiny }
     }
@@ -147,8 +177,11 @@ impl Diario {
             .entry(dia_de(ts))
             .or_default();
         let (bola, kill) = match ler_linha(texto) {
-            Linha::Kill(drops) => {
+            Linha::Kill(xt, xp, ouro, drops) => {
                 d.kills += 1;
+                d.xp += xt;
+                d.xp_pk += xp;
+                d.ouro += ouro;
                 for (n, q) in drops {
                     *d.drops.entry(n).or_default() += q;
                 }
@@ -164,6 +197,15 @@ impl Diario {
                 d.shiny += u64::from(shiny);
                 d.bolas += 1;
                 (true, false)
+            }
+            Linha::Pocao => {
+                d.pot += 1;
+                (false, false)
+            }
+            Linha::Desmaio { shiny } => {
+                d.shiny += u64::from(shiny);
+                d.desm += 1;
+                (false, false)
             }
             Linha::Outra { shiny } => {
                 d.shiny += u64::from(shiny);
@@ -209,6 +251,11 @@ impl Diario {
 
     pub fn dias(&self, nick: &str) -> Option<&BTreeMap<String, Dia>> {
         self.dias.get(nick)
+    }
+
+    /// Registro de um dia no formato do motor (`D.dia[nick][dia]`).
+    pub fn dia_json(&self, nick: &str, dia: &str) -> Option<Value> {
+        self.dias.get(nick)?.get(dia).map(Dia::json)
     }
 
     /// Drops por dia (média dos últimos 7 dias completos), somando as contas: nome → qtd/dia.
@@ -283,11 +330,16 @@ mod testes {
     fn le_as_linhas_como_o_legado() {
         assert_eq!(
             ler_linha("Scizor derrotado! +1.200 xp treinador, +1.200 xp pokemon, +850 ouro (+85 do bônus de loot) · Metal Coat × 2 · Rare Candy"),
-            Linha::Kill(vec![("Metal Coat".into(), 2.0), ("Rare Candy".into(), 1.0)])
+            Linha::Kill(
+                1200.0,
+                1200.0,
+                850.0,
+                vec![("Metal Coat".into(), 2.0), ("Rare Candy".into(), 1.0)]
+            )
         );
         assert_eq!(
             ler_linha("Pidgey derrotado! +10 xp treinador, +10 xp pokemon, +5 ouro"),
-            Linha::Kill(vec![])
+            Linha::Kill(10.0, 10.0, 5.0, vec![])
         );
         assert_eq!(
             ler_linha("Capturado: Pikachu Nv 12 (q 1,5) shiny!"),
@@ -302,6 +354,11 @@ mod testes {
             Linha::Fuga { shiny: false }
         );
         assert_eq!(ler_linha("Um Shiny apareceu"), Linha::Outra { shiny: true });
+        assert_eq!(ler_linha("Poção usada em Charizard"), Linha::Pocao);
+        assert_eq!(
+            ler_linha("Charizard desmaiou"),
+            Linha::Desmaio { shiny: false }
+        );
     }
 
     #[test]
@@ -323,6 +380,7 @@ mod testes {
         let dia = &d.dias("Sikien").unwrap()["2026-11-14"];
         assert_eq!((dia.kills, dia.bolas, dia.capt, dia.shiny), (2, 2, 1, 0));
         assert_eq!(dia.drops["X"], 3.0);
+        assert_eq!((dia.ouro, dia.xp), (2.0, 2.0));
         assert_eq!(d.ritmo("Sikien", T + 4 * 60_000), (8.0, 1.0));
         assert_eq!(d.ritmo("Sikien", T + 60 * 60_000), (0.0, 0.0));
         let volta = Diario::de_json(&d.para_json());

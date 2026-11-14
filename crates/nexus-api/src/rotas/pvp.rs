@@ -129,11 +129,7 @@ pub async fn sugestao_pvp(
         .await
         .ok()
         .and_then(|v| Pokedex::de_valor(v).ok());
-    let nivel_min = atual
-        .as_ref()
-        .and_then(|a| a.pointer("/regras/nivelMin")?.as_i64())
-        .unwrap_or(sugestao::NIVEL_MIN_PADRAO);
-    let s = sugestao::sugerir(&fichas, &m, dex.as_ref(), nivel_min);
+    let s = sugestao::sugerir(&fichas, &m, dex.as_ref());
     Json(json!({
         "nick": nick,
         "atual": atual,
@@ -180,5 +176,57 @@ pub async fn fichas_raid(State(estado): State<Estado>) -> Response {
             "nenhuma ficha de raid ainda (abra a tela de Raid em uma conta)",
         ),
         Err(e) => banco(&e),
+    }
+}
+
+/// `GET /api/comandos/fila?nick=`: os 100 comandos mais recentes (só leitura; não reserva).
+pub async fn fila_comandos(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Query(p): Params,
+) -> Response {
+    let conta = if p.get("nick").is_some_and(|n| !n.is_empty())
+        || cliente
+            .as_ref()
+            .is_some_and(|Extension(c)| c.conta.is_some())
+    {
+        match nick(cliente.as_ref(), &p) {
+            Ok(n) => Some(n),
+            Err((st, msg)) => return erro(st, msg),
+        }
+    } else {
+        None
+    };
+    match persistencia::comandos::fila(&estado.db, conta.as_deref(), 100).await {
+        Ok(v) => Json(json!({ "comandos": v })).into_response(),
+        Err(e) => banco(&e),
+    }
+}
+
+/// `GET /api/equipes/colecao?nick=`: a coleção da conta como o app mandou (fichas).
+pub async fn colecao(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Query(p): Params,
+) -> Response {
+    let nick = match nick(cliente.as_ref(), &p) {
+        Ok(n) => n,
+        Err((st, msg)) => return erro(st, msg),
+    };
+    match estado.equipes.estado_fresco().await {
+        Ok(e) => {
+            let c = e.conta(Some(&nick));
+            Json(json!({
+                "nick": nick,
+                "trLv": c.and_then(|c| c.get("trLv")),
+                "em": c.and_then(|c| c.get("em")),
+                "pokemons": c.and_then(|c| c.get("pokemons")).cloned().unwrap_or_else(|| json!([])),
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            tracing::warn!(erro = %e, "colecao: estado de equipes");
+            erro(StatusCode::SERVICE_UNAVAILABLE, "coleção indisponível")
+        }
     }
 }

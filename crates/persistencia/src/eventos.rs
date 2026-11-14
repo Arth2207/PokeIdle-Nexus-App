@@ -28,6 +28,8 @@ pub const TIPOS: &[&str] = &[
     "treino.resultado",
     "shiny.servidor",
     "boss.fichas",
+    // Resumo do dia de cada conta (o `D.dia` do motor), mandado pelo app a cada 5 min.
+    "diario",
 ];
 
 /// Campos que não entram na chave: o instante e o tipo já vão separados.

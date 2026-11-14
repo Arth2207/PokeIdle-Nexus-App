@@ -8,6 +8,18 @@ fn s<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(Value::as_str)
 }
 
+/// Nick sem maiúsculas e sem letras repetidas em seguida: o rótulo da conta no app pode
+/// diferir do nick do jogo só nisso (`Alllphha` × `Alllphhha`).
+pub fn nick_simples(n: &str) -> String {
+    let mut o = String::new();
+    for c in n.to_lowercase().chars() {
+        if !o.ends_with(c) {
+            o.push(c);
+        }
+    }
+    o
+}
+
 /// Pokémon de um ator do replay, sem o dono.
 fn ator(a: &Value) -> Value {
     json!({
@@ -24,7 +36,10 @@ fn partida(p: &Value, nick: &str, ts: i64) -> Option<Value> {
     // O lado do dono é o do treinador (ator com `tr`) com o nick da conta.
     let lado = atores
         .iter()
-        .find(|a| a.get("tr").is_some() && s(a, "n").is_some_and(|n| n.eq_ignore_ascii_case(nick)))?
+        .find(|a| {
+            a.get("tr").is_some()
+                && s(a, "n").is_some_and(|n| nick_simples(n) == nick_simples(nick))
+        })?
         .get("g")?
         .as_i64()?;
     let (mut meu, mut deles) = (Vec::new(), Vec::new());
@@ -136,6 +151,11 @@ mod testes {
         assert_eq!(e[0]["oponente"][0]["casa"], 1);
         assert!(!e[0].to_string().contains("Outro"));
         assert!(eventos(&m, "ninguem", 5).is_empty());
+        assert_eq!(
+            eventos(&m, "Siikien", 5).len(),
+            1,
+            "rótulo do app com letra repetida"
+        );
     }
 
     #[test]

@@ -12,7 +12,7 @@ use super::meta::Meta;
 use crate::combate::especie::Pokedex;
 use crate::combate::tipos::{efetividade_bruta, Tipo};
 
-/// Nível mínimo do PvP (regra do jogo).
+/// Nível mínimo do treinador para o PvP (regra do jogo; o pokémon pode ter qualquer nível).
 pub const NIVEL_MIN_PADRAO: i64 = 150;
 /// Pokémon no tabuleiro.
 pub const TAMANHO_TIME: usize = 5;
@@ -87,8 +87,17 @@ fn vantagem(meus: &[Tipo], meta: &[(Vec<Tipo>, f64)]) -> f64 {
     }
 }
 
+/// Força de um pokémon: o `poder` do jogo ou, sem ele (coleção vinda do legado), o nível.
+fn forca(p: &Value) -> f64 {
+    p.get("poder")
+        .and_then(Value::as_f64)
+        .filter(|x| *x > 0.0)
+        .or_else(|| p.get("level").and_then(Value::as_f64))
+        .unwrap_or(0.0)
+}
+
 /// Monta a sugestão. `fichas`: a coleção da conta (campos do `/api/equipes/ingest`).
-pub fn sugerir(fichas: &[Value], meta: &Meta, dex: Option<&Pokedex>, nivel_min: i64) -> Sugestao {
+pub fn sugerir(fichas: &[Value], meta: &Meta, dex: Option<&Pokedex>) -> Sugestao {
     // Tipos e peso das 20 espécies mais usadas no meta.
     let meta_tipos: Vec<(Vec<Tipo>, f64)> = meta
         .especies
@@ -99,14 +108,8 @@ pub fn sugerir(fichas: &[Value], meta: &Meta, dex: Option<&Pokedex>, nivel_min: 
     let por_especie: HashMap<i64, &super::meta::Especie> =
         meta.especies.iter().map(|e| (e.especie, e)).collect();
     let n = |p: &Value, k: &str| p.get(k).and_then(Value::as_f64).unwrap_or(0.0);
-    let candidatos: Vec<&Value> = fichas
-        .iter()
-        .filter(|p| n(p, "level") as i64 >= nivel_min && p.get("id").is_some())
-        .collect();
-    let max_poder = candidatos
-        .iter()
-        .map(|p| n(p, "poder"))
-        .fold(1.0_f64, f64::max);
+    let candidatos: Vec<&Value> = fichas.iter().filter(|p| p.get("id").is_some()).collect();
+    let max_poder = candidatos.iter().map(|p| forca(p)).fold(1.0_f64, f64::max);
     let mut notas: Vec<(f64, &Value, String)> = candidatos
         .into_iter()
         .map(|p| {
@@ -118,10 +121,10 @@ pub fn sugerir(fichas: &[Value], meta: &Meta, dex: Option<&Pokedex>, nivel_min: 
                     .map(|e| e.tipos.clone())
                     .unwrap_or_default();
             }
-            let forca = n(p, "poder") / max_poder;
+            let f = forca(p) / max_poder;
             let v = vantagem(&tipos, &meta_tipos);
-            let mut nota = forca * (0.3 * v).exp();
-            let mut motivo = format!("força {:.0}%", forca * 100.0);
+            let mut nota = f * (0.3 * v).exp();
+            let mut motivo = format!("força {:.0}%", f * 100.0);
             if v.abs() > 0.05 {
                 motivo += &format!(
                     ", tipo {:+.0}% contra o meta",
@@ -162,8 +165,10 @@ pub fn sugerir(fichas: &[Value], meta: &Meta, dex: Option<&Pokedex>, nivel_min: 
             nome: p
                 .get("nome")
                 .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned(),
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .or_else(|| dex.and_then(|d| d.por_id(especie)).map(|e| e.nome.clone()))
+                .unwrap_or_else(|| format!("#{especie}")),
             nivel: n(p, "level") as i64,
             alcance,
             casa,
@@ -190,7 +195,7 @@ mod testes {
     use serde_json::json;
 
     #[test]
-    fn escolhe_os_fortes_acima_do_nivel_e_casas_sem_repetir() {
+    fn escolhe_os_mais_fortes_e_casas_sem_repetir() {
         // Espécie 2 (alcance 3) vence quase sempre na casa 18.
         let ps: Vec<_> = (0..6)
             .map(|i| partida(i, 450, true, &[(2, 3, 18), (5, 1, 2)], &[(9, 1, 2)]))
@@ -202,10 +207,18 @@ mod testes {
             json!({"id": 3, "speciesId": 7, "nome": "C", "level": 100, "poder": 5000}),
             json!({"id": 4, "speciesId": 5, "nome": "D", "level": 300, "poder": 800}),
         ];
-        let s = sugerir(&fichas, &meta, None, NIVEL_MIN_PADRAO);
+        let s = sugerir(&fichas, &meta, None);
         let ids: Vec<i64> = s.time.iter().map(|e| e.id).collect();
-        assert!(!ids.contains(&3), "nível abaixo do mínimo");
-        assert_eq!(s.time.len(), 3);
+        assert_eq!(
+            ids[0], 3,
+            "o mais forte (poder) vem primeiro, qualquer nível"
+        );
+        assert_eq!(s.time.len(), 4);
+        // Sem `poder`, a força é o nível; sem nome, o número da espécie.
+        let sem = vec![json!({"id": 9, "speciesId": 25, "level": 50})];
+        let s2 = sugerir(&sem, &meta, None);
+        assert_eq!(s2.time[0].nome, "#25");
+        assert!(s2.time[0].nota > 0.0);
         let a = s
             .time
             .iter()
@@ -213,8 +226,8 @@ mod testes {
             .map(|e| (e.alcance, e.casa));
         assert_eq!(a, Some((3, 18)));
         let casas: HashSet<i64> = s.time.iter().map(|e| e.casa).collect();
-        assert_eq!(casas.len(), 3, "casas distintas");
-        assert_eq!(s.casas.len(), 3);
+        assert_eq!(casas.len(), 4, "casas distintas");
+        assert_eq!(s.casas.len(), 4);
     }
 
     #[test]

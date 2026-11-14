@@ -66,6 +66,8 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/pvp/treinos", get(pvp::treinos))
         .route("/api/shiny/servidor", get(pvp::shiny_servidor))
         .route("/api/boss/fichas", get(pvp::fichas_raid))
+        .route("/api/comandos/fila", get(pvp::fila_comandos))
+        .route("/api/equipes/colecao", get(pvp::colecao))
         .merge(motor::rotas())
         .route_layer(middleware::from_fn(|req, next| {
             auth::exigir_escopo(LEITURA, req, next)

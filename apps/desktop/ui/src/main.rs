@@ -1,4 +1,8 @@
 //! Tela do app A2 em Leptos (CSR). Fala com o Tauri pela ponte global `window.__TAURI__`.
+mod comp;
+mod dados;
+mod telas;
+
 use js_sys::{Array, Date, Object, Reflect};
 use leptos::prelude::*;
 use wasm_bindgen::prelude::*;
@@ -934,7 +938,7 @@ fn App() -> impl IntoView {
     });
 
     view! {
-        <style>{CSS}</style>
+        <style>{CSS}{comp::CSS}</style>
         <div class="nevoa"></div>
         <div class="casca">
             <nav class="barra vidro">
@@ -1012,6 +1016,13 @@ fn App() -> impl IntoView {
                     {move || match pagina.get() {
                         "Configurações" => view! { <Configuracoes e=e /> }.into_any(),
                         "Jogo" => ().into_any(),
+                        "Visão geral" => view! { <telas::visao::VisaoGeral e=e /> }.into_any(),
+                        "Caçada" => view! { <telas::cacada::Cacada e=e /> }.into_any(),
+                        "Combate" => view! { <telas::combate::Combate e=e /> }.into_any(),
+                        "Mercado" => view! { <telas::mercado::Mercado e=e moeda=moeda /> }.into_any(),
+                        "Finanças" => view! { <telas::financas::Financas e=e periodo=periodo /> }.into_any(),
+                        "Bestiário" => view! { <telas::bestiario::Bestiario e=e /> }.into_any(),
+                        "Automação" => view! { <telas::automacao::Automacao e=e /> }.into_any(),
                         outra => view! {
                             <h2>{outra}</h2>
                             <div class="vazio">"Em construção."</div>

@@ -490,3 +490,34 @@ pub async fn espelhar(
     }
     Ok((lidas as u64, novas as u64))
 }
+
+/// Fila de comandos para a tela de Automação: os mais recentes primeiro, com o estado
+/// (`pendente`, `executando`, `feito`, `falhou`, `expirado`, `agendado`).
+pub async fn fila(
+    db: &PgPool,
+    conta: Option<&str>,
+    limite: i64,
+) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT jsonb_build_object(
+                  'id', id, 'conta', conta, 'tipo', tipo, 'params', params, 'origem', origem,
+                  'criado', (extract(epoch FROM criado_em) * 1000)::bigint,
+                  'executado', (extract(epoch FROM executado_em) * 1000)::bigint,
+                  'resultado', resultado, 'tentativas', tentativas,
+                  'estado', CASE
+                    WHEN executado_em IS NOT NULL AND resultado ILIKE 'erro%' THEN 'falhou'
+                    WHEN executado_em IS NOT NULL THEN 'feito'
+                    WHEN expira_em IS NOT NULL AND expira_em < now() THEN 'expirado'
+                    WHEN executar_em IS NOT NULL AND executar_em > now() THEN 'agendado'
+                    WHEN reservado_em IS NOT NULL THEN 'executando'
+                    ELSE 'pendente' END)
+           FROM nexus.comando
+          WHERE ($1::text IS NULL OR conta = $1)
+          ORDER BY criado_em DESC
+          LIMIT $2",
+    )
+    .bind(conta)
+    .bind(limite)
+    .fetch_all(db)
+    .await
+}
