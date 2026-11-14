@@ -48,6 +48,23 @@ struct Estado {
     parar: Mutex<Option<watch::Sender<bool>>>,
     /// Estado de cada conta do card (só o que o coletor realmente informou).
     contas: Mutex<HashMap<String, ContaEstado>>,
+    /// Último retângulo (x, y, w, h, visível) que a UI mandou para cada conta.
+    /// A UI pode mandar antes da webview existir; `criar_filha` aplica depois.
+    rects: Mutex<HashMap<String, Rect>>,
+}
+
+type Rect = (f64, f64, f64, f64, bool);
+
+fn aplicar_rect(v: &tauri::Webview, r: Rect) -> Result<(), String> {
+    let (x, y, w, h, visivel) = r;
+    if !visivel || w < 1.0 || h < 1.0 {
+        return v.hide().map_err(|e| e.to_string());
+    }
+    v.set_position(LogicalPosition::new(x, y))
+        .map_err(|e| e.to_string())?;
+    v.set_size(LogicalSize::new(w, h))
+        .map_err(|e| e.to_string())?;
+    v.show().map_err(|e| e.to_string())
 }
 
 /// Janela de kills usada no kills/h (minutos).
@@ -210,7 +227,12 @@ fn criar_filha(app: &AppHandle, conta: &str) -> Result<(), String> {
             LogicalSize::new(320.0, 180.0),
         )
         .map_err(|e| e.to_string())?;
-    w.hide().map_err(|e| e.to_string())
+    let est = app.state::<Estado>();
+    let r = travar(&est.rects).get(conta).copied();
+    match r {
+        Some(r) => aplicar_rect(&w, r),
+        None => w.hide().map_err(|e| e.to_string()),
+    }
 }
 
 /// A UI informa o retângulo (px CSS da janela) da área do jogo de um card.
@@ -224,17 +246,12 @@ fn posicionar_conta(
     visivel: bool,
     app: AppHandle,
 ) -> Result<(), String> {
-    let Some(v) = app.get_webview(&rotulo_da_conta(&conta)) else {
-        return Ok(());
-    };
-    if !visivel || w < 1.0 || h < 1.0 {
-        return v.hide().map_err(|e| e.to_string());
+    let r = (x, y, w, h, visivel);
+    travar(&app.state::<Estado>().rects).insert(conta.clone(), r);
+    match app.get_webview(&rotulo_da_conta(&conta)) {
+        Some(v) => aplicar_rect(&v, r),
+        None => Ok(()),
     }
-    v.set_position(LogicalPosition::new(x, y))
-        .map_err(|e| e.to_string())?;
-    v.set_size(LogicalSize::new(w, h))
-        .map_err(|e| e.to_string())?;
-    v.show().map_err(|e| e.to_string())
 }
 
 /// Pausa/retoma a coleta e os comandos de uma conta.
