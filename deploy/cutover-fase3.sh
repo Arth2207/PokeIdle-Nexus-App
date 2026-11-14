@@ -43,7 +43,7 @@ recriar_api() {
   log "API não ficou saudável"; return 1
 }
 
-recarregar_borda() { compose exec -T nexus-borda nginx -s reload; }
+recarregar_borda() { compose exec -T nexus-borda sh -c "nginx -t -c /etc/nginx/borda/nginx.conf && kill -HUP 1"; }
 
 # Eventos do Electron nos últimos 15 min (o relay antigo grava no mapa.db).
 eventos_electron() {

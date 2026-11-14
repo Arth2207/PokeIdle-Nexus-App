@@ -46,6 +46,8 @@ pub struct Contas {
     contas: BTreeMap<String, Conta>,
     diario: Diario,
     diario_mudou: bool,
+    /// Chegou login novo: guardar o que só vem nele.
+    login_mudou: bool,
     nomes: HashMap<i64, String>,
     bosses: Option<Value>,
     chance_shiny: Option<f64>,
@@ -287,6 +289,7 @@ impl Fluxo for Contas {
                 if t == "welcome" {
                     self.welcome(msg);
                     self.janelas.login(conta, msg, agora);
+                    self.login_mudou = true;
                 }
                 self.ouro(conta, msg, agora);
                 let e = msg.get("estado");
@@ -328,13 +331,53 @@ impl Fluxo for Contas {
         Some(json!({"t": "market.medias", "dias": dias}))
     }
 
-    /// O diário (contagens por dia) sobrevive a reinícios do app.
+    /// O diário (contagens por dia) e o que só vem no login (nomes, bosses, chance de shiny,
+    /// janela do motor) sobrevivem a reinícios do relay e do app.
     fn salvar(&mut self) -> Option<Value> {
-        std::mem::take(&mut self.diario_mudou).then(|| self.diario.para_json())
+        let diario = std::mem::take(&mut self.diario_mudou);
+        let login = std::mem::take(&mut self.login_mudou);
+        (diario || login).then(|| {
+            let nomes: serde_json::Map<String, Value> = self
+                .nomes
+                .iter()
+                .map(|(id, n)| (id.to_string(), Value::from(n.clone())))
+                .collect();
+            json!({
+                "diario": self.diario.para_json(),
+                "nomes": nomes,
+                "bosses": self.bosses,
+                "chanceShiny": self.chance_shiny,
+                "janelas": self.janelas.para_json(),
+            })
+        })
     }
 
     fn restaurar(&mut self, v: &Value) {
-        self.diario = Diario::de_json(v);
+        // Formato antigo: só o diário.
+        let Some(d) = v.get("diario") else {
+            self.diario = Diario::de_json(v);
+            return;
+        };
+        self.diario = Diario::de_json(d);
+        for (id, n) in v
+            .get("nomes")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            if let (Ok(id), Some(n)) = (id.parse::<i64>(), n.as_str()) {
+                self.nomes.entry(id).or_insert_with(|| n.to_owned());
+            }
+        }
+        if self.bosses.is_none() {
+            self.bosses = v.get("bosses").filter(|b| b.is_array()).cloned();
+        }
+        if self.chance_shiny.is_none() {
+            self.chance_shiny = v.get("chanceShiny").and_then(Value::as_f64);
+        }
+        if let Some(j) = v.get("janelas") {
+            self.janelas.restaurar(j);
+        }
     }
 
     fn entregar(&mut self, agora: i64) -> Vec<Entrega> {
@@ -385,6 +428,37 @@ mod testes {
         );
         assert!(matches!(&c.entregar(61_000)[0], Entrega::Equipe(b) if b["pokemons"] == json!([])));
         assert_eq!(c.pedir(0), None);
+    }
+
+    #[test]
+    fn reinicio_do_relay_mantem_a_janela_sem_novo_login() {
+        let mut c = Contas::novo(true);
+        c.receber_conta("Sikien", &login("Sikien"), 0);
+        let salvo = c.salvar().unwrap_or_default();
+        assert!(c.salvar().is_none(), "nada mudou, nada a guardar");
+        let mut novo = Contas::novo(true);
+        novo.restaurar(&salvo);
+        // Sem login, só o estado cheio (que o jogo reenvia de tempos em tempos).
+        novo.receber_conta(
+            "Sikien",
+            &json!({"t": "estado", "estado": {"cheio": true, "nick": "Sikien", "level": 50}}),
+            1,
+        );
+        let e = novo.entregar(1);
+        let j = e.iter().find_map(|x| match x {
+            Entrega::Janela { corpo, .. } => Some(corpo.clone()),
+            _ => None,
+        });
+        assert!(j.is_some_and(|j| j.get("welcome").is_some_and(|w| !w.is_null())));
+        assert_eq!(
+            novo.nomes.get(&70013).map(String::as_str),
+            Some("Gema Rara")
+        );
+        assert_eq!(novo.chance_shiny, Some(0.00004));
+        // Arquivo do formato antigo (só o diário) ainda abre.
+        let mut velho = Contas::novo(true);
+        velho.restaurar(&json!({"v": 1, "dias": {}}));
+        assert!(velho.nomes.is_empty());
     }
 
     #[test]

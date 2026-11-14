@@ -401,6 +401,28 @@ impl Janelas {
         self.login_enviado.remove(conta);
     }
 
+    /// O que vem só no login (o resto se refaz com o `estado`), para sobreviver a reinícios do
+    /// relay: sem isso a janela some até a conta logar de novo.
+    pub fn para_json(&self) -> Value {
+        json!({"login": self.login, "publico": self.publico})
+    }
+
+    pub fn restaurar(&mut self, v: &Value) {
+        for (k, w) in v
+            .get("login")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            self.login.entry(k.clone()).or_insert_with(|| w.clone());
+        }
+        if let Some(p) = v.get("publico").filter(|p| !p.is_null()) {
+            if self.publico.is_null() {
+                self.publico = p.clone();
+            }
+        }
+    }
+
     /// Depois de aplicar `welcome`/`estado`: marca troca de hunt e o maior ouro visto.
     pub fn estado(&mut self, conta: &str, c: &Conta, agora: i64) {
         let h = self
