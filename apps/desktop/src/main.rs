@@ -340,10 +340,20 @@ async fn abrir_tracker(app: AppHandle) -> Result<(), String> {
     )
 }
 
+/// Conta dona da janela: o rótulo perde maiúsculas ("Ana" → "jogo-ana"), então compara pelo
+/// rótulo de cada conta cadastrada em vez de decodificar.
+fn conta_da_janela(estado: &Estado, rotulo: &str) -> Option<String> {
+    conta_do_rotulo(rotulo)?;
+    travar(&estado.contas)
+        .keys()
+        .find(|k| rotulo_da_conta(k) == rotulo)
+        .cloned()
+}
+
 /// IPC do coletor: a conta vem do rótulo da janela, nunca do que a página disser.
 #[tauri::command]
 fn coletor_evento(window: Webview, msg: Value, estado: State<'_, Estado>) {
-    let Some(conta) = conta_do_rotulo(window.label()) else {
+    let Some(conta) = conta_da_janela(&estado, window.label()) else {
         return;
     };
     let agora = agora_ms();
@@ -364,7 +374,7 @@ fn coletor_evento(window: Webview, msg: Value, estado: State<'_, Estado>) {
 
 #[tauri::command]
 fn coletor_resultado(window: Webview, id: u64, resultado: String, estado: State<'_, Estado>) {
-    if conta_do_rotulo(window.label()).is_some() {
+    if conta_da_janela(&estado, window.label()).is_some() {
         estado.correio.responder(id, resultado);
     }
 }
