@@ -144,6 +144,48 @@ pub fn Calor(linhas: Vec<(String, Vec<Option<f64>>)>) -> impl IntoView {
     }
 }
 
+/// Cascata (waterfall): cada passo soma ou subtrai do anterior; a última barra é o total.
+#[component]
+pub fn Cascata(passos: Vec<(String, f64)>) -> impl IntoView {
+    let total: f64 = passos.iter().map(|p| p.1).sum();
+    let mut acum = 0.0_f64;
+    let mut barras: Vec<(String, f64, f64, &'static str)> = passos
+        .iter()
+        .map(|(n, d)| {
+            let (de, ate) = (acum, acum + d);
+            acum = ate;
+            (n.clone(), de, ate, if *d >= 0.0 { "sobe" } else { "desce" })
+        })
+        .collect();
+    barras.push(("Resultado".into(), 0.0, total, "total"));
+    let max = barras
+        .iter()
+        .map(|b| b.1.max(b.2))
+        .fold(0.0_f64, f64::max)
+        .max(1e-9);
+    let min = barras.iter().map(|b| b.1.min(b.2)).fold(0.0_f64, f64::min);
+    let faixa = max - min;
+    let n = barras.len() as f64;
+    let (w, h) = (600.0, 200.0);
+    let y = |v: f64| 12.0 + (max - v) / faixa * (h - 40.0);
+    view! {
+        <svg class="cascata" viewBox=format!("0 0 {w} {h}")>
+            {barras.into_iter().enumerate().map(|(i, (nome, de, ate, classe))| {
+                let x = w / n * i as f64 + w / n * 0.15;
+                let (top, base) = (y(de.max(ate)), y(de.min(ate)));
+                let rot = crate::dados::curto(ate - de);
+                view! {
+                    <g class=classe>
+                        <rect x=x y=top width=w / n * 0.7 height=(base - top).max(1.5) rx="4" />
+                        <text x=x + w / n * 0.35 y=top - 4.0 text-anchor="middle">{rot}</text>
+                        <text class="rot" x=x + w / n * 0.35 y=h - 8.0 text-anchor="middle">{nome}</text>
+                    </g>
+                }
+            }).collect_view()}
+        </svg>
+    }
+}
+
 /// Tabela densa com cabeçalho; a primeira coluna à esquerda, o resto alinhado à direita.
 #[component]
 pub fn Tabela(cab: Vec<&'static str>, linhas: Vec<Vec<String>>) -> impl IntoView {
@@ -307,6 +349,12 @@ pub const CSS: &str = r#"
 .ohlc { font-size:12px; color:var(--texto-2); font-variant-numeric:tabular-nums; margin-bottom:4px; }
 .sinal { font:700 30px "Space Grotesk", Inter, sans-serif; } .sinal.bom { color:var(--melhora); } .sinal.alerta { color:var(--piora); }
 .pares { display:grid; grid-template-columns:1fr auto; gap:6px 10px; font-size:13px; margin-top:10px; font-variant-numeric:tabular-nums; }
+.cascata { width:100%; }
+.cascata .sobe rect { fill:var(--melhora); } .cascata .desce rect { fill:var(--piora); } .cascata .total rect { fill:var(--neon); }
+.cascata text { font-size:12px; fill:var(--texto); font-variant-numeric:tabular-nums; } .cascata .rot { fill:var(--texto-3); }
+.cal { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; }
+.cal div { aspect-ratio:1.6; border-radius:6px; background:var(--melhora); display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--texto); }
+.cal div.neg { background:var(--piora); }
 .linha { width:100%; height:180px; }
 .linha path { fill:none; stroke:var(--melhora); stroke-width:2.5; vector-effect:non-scaling-stroke; }
 .linha .faixa { fill:var(--trilho); }

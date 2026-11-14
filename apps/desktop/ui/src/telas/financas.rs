@@ -4,7 +4,7 @@ use leptos::prelude::*;
 use serde_json::Value;
 
 use super::cabecalho;
-use crate::comp::{carregado, Barras, Kpi, Tabela};
+use crate::comp::{carregado, Barras, Cascata, Kpi, Linha, Tabela};
 use crate::dados::{curto, inteiro, lista, num, recurso, txt};
 use crate::Estado;
 
@@ -29,6 +29,7 @@ fn somar(f: &Value, k: &str, n: usize) -> (f64, f64) {
 pub fn Financas(e: Estado, periodo: RwSignal<String>) -> impl IntoView {
     let versao = RwSignal::new(0u32);
     let fin = recurso(e, versao, || Some("/api/financeiro".into()));
+    let hist = recurso(e, versao, || Some("/api/historico".into()));
     view! {
         {cabecalho("Finanças", "Quanto estou ganhando de verdade, com o quê?", versao)}
         {move || carregado(fin.get(), move |f| {
@@ -50,10 +51,9 @@ pub fn Financas(e: Estado, periodo: RwSignal<String>) -> impl IntoView {
             );
             let comp = |a: f64, b: f64| if b.abs() > 0.0 { format!("{:+.0}% vs período anterior", (a / b - 1.0) * 100.0) } else { "sem período anterior".into() };
             let cascata = vec![
-                ("Loot da caçada".to_owned(), loot, format!("+{}", curto(loot))),
-                ("Compras".to_owned(), compras, format!("−{}", curto(compras))),
-                ("Consumo".to_owned(), consumo, format!("−{}", curto(consumo))),
-                ("Lucro líquido".to_owned(), lucro.max(0.0), curto(lucro)),
+                ("Loot da caçada".to_owned(), loot),
+                ("Compras".to_owned(), -compras),
+                ("Consumo".to_owned(), -consumo),
             ];
             let mut por_conta: Vec<(String, f64, String)> = lista(&f, "contas").iter().map(|c| {
                 let l: f64 = lista(c, "semana").iter().rev().take(n)
@@ -61,28 +61,57 @@ pub fn Financas(e: Estado, periodo: RwSignal<String>) -> impl IntoView {
                 (txt(c, "nick"), l, curto(l))
             }).collect();
             por_conta.sort_by(|a, b| b.1.total_cmp(&a.1));
-            let mut dias: std::collections::BTreeMap<String, (f64, f64)> = Default::default();
+            // dia → (lucro, abates, ouro no fim do dia somando as contas).
+            let mut dias: std::collections::BTreeMap<String, (f64, f64, f64)> = Default::default();
             for c in lista(&f, "contas") {
                 for d in lista(c, "semana") {
                     let x = dias.entry(txt(d, "dia")).or_default();
                     x.0 += num(d, "loot").unwrap_or(0.0) - num(d, "compras").unwrap_or(0.0) - num(d, "consumo").unwrap_or(0.0);
                     x.1 += num(d, "kills").unwrap_or(0.0);
+                    x.2 += d.pointer("/saldo/fim").and_then(Value::as_f64).unwrap_or(0.0);
                 }
             }
-            let linhas: Vec<Vec<String>> = dias.iter().rev().map(|(d, (l, k))| vec![d.clone(), curto(*l), inteiro(*k)]).collect();
+            let saldos: Vec<(String, f64)> = dias.iter().filter(|d| d.1 .2 > 0.0).map(|(d, x)| (d.get(5..).unwrap_or(d).to_owned(), x.2)).collect();
+            let (ouro_ini, ouro_fim) = {
+                let ult: Vec<f64> = saldos.iter().rev().take(n).map(|s| s.1).collect();
+                (ult.last().copied().unwrap_or(0.0), ult.first().copied().unwrap_or(0.0))
+            };
+            let max_lucro = dias.values().map(|x| x.0.abs()).fold(1.0_f64, f64::max);
+            let cal: Vec<(String, f64)> = dias.iter().rev().take(28).map(|(d, x)| (d.get(8..).unwrap_or(d).to_owned(), x.0)).collect();
+            let extrato: Vec<Vec<String>> = hist.get().and_then(|h| h.and_then(Result::ok)).map(|h| {
+                lista(&h, "acoes").iter()
+                    .filter(|a| matches!(txt(a, "tipo").as_str(), "compra" | "venda" | "depot" | "pocao"))
+                    .take(30)
+                    .map(|a| vec![txt(a, "nick"), txt(a, "tipo"), txt(a, "texto")])
+                    .collect()
+            }).unwrap_or_default();
+            let linhas: Vec<Vec<String>> = dias.iter().rev().map(|(d, (l, k, o))| vec![d.clone(), curto(*l), inteiro(*k), curto(*o)]).collect();
             view! {
                 <div class="kpis">
                     <Kpi titulo="Lucro líquido" valor=curto(lucro) unidade="gold" comparacao=comp(lucro, lucro_a) bom=b_lucro
                         ajuda="Loot da caçada − compras − consumo no período, somando as contas." />
                     <Kpi titulo="Receitas" valor=curto(loot) unidade="gold" comparacao=comp(loot, loot_a) bom=b_loot />
                     <Kpi titulo="Custos" valor=curto(compras + consumo) unidade="gold" comparacao=comp(compras + consumo, compras_a + consumo_a) bom=b_custo />
+                    <Kpi titulo="Ouro em caixa" valor=curto(ouro_fim) unidade="gold"
+                        comparacao=format!("início do período {}", curto(ouro_ini)) bom=Some(ouro_fim >= ouro_ini)
+                        ajuda="Saldo de ouro das contas no fim do último dia do período, contra o do primeiro." />
                 </div>
                 <div class="duas">
-                    <div><div class="secao">"De onde veio e para onde foi"</div><Barras linhas=cascata destaque="Lucro líquido".to_owned() /></div>
-                    <div><div class="secao">"Lucro por conta"</div><Barras linhas=por_conta /></div>
+                    <div class="caixa"><div class="caixa-t">"De onde veio e para onde foi"</div><Cascata passos=cascata /></div>
+                    <div class="caixa"><div class="caixa-t">"Lucro por conta"</div><Barras linhas=por_conta /></div>
+                </div>
+                <div class="duas" style="margin-top:16px">
+                    <div class="caixa"><div class="caixa-t">"Ouro em caixa ao longo do tempo"</div><Linha pontos=saldos /></div>
+                    <div class="caixa"><div class="caixa-t">"Calendário do lucro"</div>
+                        <div class="cal">{cal.into_iter().rev().map(|(d, l)| { let neg = l < 0.0; view! {
+                            <div class:neg=neg style=format!("opacity:{:.2}", 0.15 + 0.85 * l.abs() / max_lucro) title=curto(l)>{d}</div>
+                        }}).collect_view()}</div>
+                    </div>
                 </div>
                 <div class="secao">"Dia a dia (todas as contas)"</div>
-                <Tabela cab=vec!["Dia", "Lucro", "Abates"] linhas=linhas />
+                <Tabela cab=vec!["Dia", "Lucro", "Abates", "Ouro no fim"] linhas=linhas />
+                <div class="secao">"Extrato (compras, vendas, coleção e poções do motor)"</div>
+                <Tabela cab=vec!["Conta", "Tipo", "O que houve"] linhas=extrato />
             }
         })}
     }
