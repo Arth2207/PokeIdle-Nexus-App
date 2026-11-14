@@ -543,16 +543,23 @@ async fn paridade_motor(cfg: &Configuracao, url: &str) -> anyhow::Result<()> {
 /// publica a última rodada em /metrics.
 async fn paridade_continua(cfg: Configuracao) -> anyhow::Result<()> {
     telemetria::iniciar(cfg.log_formato).context("não consegui iniciar os logs")?;
-    let url = cfg
-        .paridade_url
-        .clone()
-        .context("NEXUS_PARIDADE_URL é obrigatória para o comparador")?;
     let ciclo = Duration::from_secs(cfg.paridade_ciclo_s.max(60));
     let estado = Estado::novo(&cfg).context("NEXUS_DATABASE_URL inválida")?;
-    let comparador = bolsa::paridade::Comparador::novo(Arc::clone(&estado.bolsa), &url)?
-        .com_equipes(estado.clone(), cfg.paridade_equipe)
-        .com_motor(cfg.paridade_motor_url.as_deref());
-    tracing::info!(%url, ciclo_s = ciclo.as_secs(), "comparador de paridade iniciado");
+    // Sem NEXUS_PARIDADE_URL (legado desligado) o container só roda o laço do motor.
+    let comparador = match &cfg.paridade_url {
+        Some(url) => {
+            tracing::info!(%url, ciclo_s = ciclo.as_secs(), "comparador de paridade iniciado");
+            Some(
+                bolsa::paridade::Comparador::novo(Arc::clone(&estado.bolsa), url)?
+                    .com_equipes(estado.clone(), cfg.paridade_equipe)
+                    .com_motor(cfg.paridade_motor_url.as_deref()),
+            )
+        }
+        None => {
+            tracing::info!("sem NEXUS_PARIDADE_URL: comparador desligado, só o motor");
+            None
+        }
+    };
     let parar_sombra = tokio_util::sync::CancellationToken::new();
     // Como no `serve`: sem remontar, o snapshot do mercado fica congelado no início do
     // processo e a equipe da bolsa do Nexus é calculada sobre ofertas velhas.
@@ -574,19 +581,22 @@ async fn paridade_continua(cfg: Configuracao) -> anyhow::Result<()> {
     let parar = desligamento::sinal_de_parada();
     tokio::pin!(parar);
     loop {
-        match comparador.rodada().await {
-            Ok(rel) => {
-                rel.iter().for_each(|(rota, r)| {
-                    tracing::info!(rota, comparados = r.comparados, iguais = r.iguais,
-                        so_legado = r.so_legado, so_nexus = r.so_nexus, exemplos = ?r.exemplos, "paridade");
-                });
-                if let Err(erro) =
-                    persistencia::paridade::gravar(&estado.db, &bolsa::paridade::linhas(&rel)).await
-                {
-                    tracing::warn!(%erro, "não consegui gravar a rodada de paridade");
+        if let Some(c) = &comparador {
+            match c.rodada().await {
+                Ok(rel) => {
+                    rel.iter().for_each(|(rota, r)| {
+                        tracing::info!(rota, comparados = r.comparados, iguais = r.iguais,
+                            so_legado = r.so_legado, so_nexus = r.so_nexus, exemplos = ?r.exemplos, "paridade");
+                    });
+                    if let Err(erro) =
+                        persistencia::paridade::gravar(&estado.db, &bolsa::paridade::linhas(&rel))
+                            .await
+                    {
+                        tracing::warn!(%erro, "não consegui gravar a rodada de paridade");
+                    }
                 }
+                Err(erro) => tracing::warn!(%erro, "rodada de paridade falhou"),
             }
-            Err(erro) => tracing::warn!(%erro, "rodada de paridade falhou"),
         }
         tokio::select! {
             () = &mut parar => break,
