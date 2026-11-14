@@ -166,8 +166,21 @@ fn empurrar(estado: &Estado, conta: &str, mut ev: Value) {
 }
 
 /// Janelas só navegam dentro de `pokeidle.io`.
+/// Navegação permitida nas webviews do jogo: o site e o login dele (Google ou Discord).
+/// A IPC continua só para pokeidle.io (capabilities/jogo.json).
 fn host_permitido(u: &tauri::Url) -> bool {
-    u.scheme() == "https" && matches!(u.host_str(), Some("pokeidle.io") | Some("www.pokeidle.io"))
+    u.scheme() == "https"
+        && matches!(
+            u.host_str(),
+            Some(
+                "pokeidle.io"
+                    | "www.pokeidle.io"
+                    | "accounts.google.com"
+                    | "accounts.youtube.com"
+                    | "discord.com"
+                    | "www.discord.com"
+            )
+        )
 }
 
 fn criar_janela(
@@ -443,6 +456,20 @@ fn main() {
     let r = tauri::Builder::default()
         .manage(Estado::default())
         .setup(|app| {
+            // Janela sem webview padrão: a UI entra como filha primeiro e os jogos depois,
+            // por cima dela (com WebviewWindow a webview padrão cobria as filhas no Windows).
+            let janela = tauri::window::WindowBuilder::new(app, "main")
+                .title("Nexus")
+                .inner_size(1100.0, 720.0)
+                .build()?;
+            let tam = janela
+                .inner_size()?
+                .to_logical::<f64>(janela.scale_factor()?);
+            janela.add_child(
+                WebviewBuilder::new("ui", WebviewUrl::App("index.html".into())).auto_resize(),
+                LogicalPosition::new(0.0, 0.0),
+                tam,
+            )?;
             // Publica para a UI o estado dos cards a cada 2 s.
             let h = app.handle().clone();
             tauri::async_runtime::spawn(async move {

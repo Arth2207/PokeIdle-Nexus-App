@@ -598,7 +598,7 @@ fn Diario(reg: RwSignal<Vec<Linha>>) -> impl IntoView {
 }
 
 /// Envia ao Rust o retângulo da área do jogo (px CSS da janela).
-fn enviar_rect(conta: &str, el: &web_sys::Element) {
+fn enviar_rect(e: Estado, conta: &str, el: &web_sys::Element) {
     if !tem_tauri() {
         return;
     }
@@ -612,8 +612,15 @@ fn enviar_rect(conta: &str, el: &web_sys::Element) {
         ("h", JsValue::from_f64(r.height())),
         ("visivel", JsValue::from_bool(visivel)),
     ]);
+    let nome = conta.to_owned();
     spawn_local(async move {
-        let _ = invoke("posicionar_conta", a).await;
+        if let Err(er) = invoke("posicionar_conta", a).await {
+            registrar(
+                e.reg,
+                format!("{nome}: posicionar jogo: {}", erro_texto(&er)),
+                true,
+            );
+        }
     });
 }
 
@@ -651,7 +658,7 @@ fn Slot(i: usize, e: Estado) -> impl IntoView {
             let cb = Closure::<dyn FnMut(Array, web_sys::ResizeObserver)>::new(
                 move |_: Array, _: web_sys::ResizeObserver| {
                     if let Some(c) = conta() {
-                        enviar_rect(&c, &alvo);
+                        enviar_rect(e, &c, &alvo);
                     }
                 },
             );
@@ -662,7 +669,7 @@ fn Slot(i: usize, e: Estado) -> impl IntoView {
             let alvo = el.clone();
             let rs = Closure::<dyn FnMut()>::new(move || {
                 if let Some(c) = conta() {
-                    enviar_rect(&c, &alvo);
+                    enviar_rect(e, &c, &alvo);
                 }
             });
             if let Some(j) = web_sys::window() {
@@ -675,7 +682,7 @@ fn Slot(i: usize, e: Estado) -> impl IntoView {
     Effect::new(move |_| {
         let _ = (conta(), e.pagina.get(), e.foco.get());
         if let (Some(el), Some(c)) = (area.get(), conta()) {
-            enviar_rect(&c, &el.into());
+            enviar_rect(e, &c, &el.into());
         }
     });
     let demo = demo_ativo();

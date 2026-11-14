@@ -1,6 +1,6 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "windows": ["main"],
+  "webviews": ["ui"],
   "permissions": ["core:default", "allow-iniciar-nucleo", "allow-salvar-token", "allow-tem-token", "allow-posicionar-conta", "allow-pausar-conta", "allow-recarregar-conta", "allow-abrir-tracker"]
 }

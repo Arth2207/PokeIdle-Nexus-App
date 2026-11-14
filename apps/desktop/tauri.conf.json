@@ -9,7 +9,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [{ "title": "Nexus", "width": 1100, "height": 720 }],
+    "windows": [],
     "security": { "csp": null }
   },
   "bundle": {
