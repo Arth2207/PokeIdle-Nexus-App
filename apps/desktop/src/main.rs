@@ -406,8 +406,15 @@ fn coletor_evento(window: Webview, msg: Value, estado: State<'_, Estado>) {
     }
     // Estado do jogo e linhas do HUD alimentam o relay (equipe, hunt, inventário, diário).
     let tipo = msg.get("t").and_then(Value::as_str);
-    if matches!(tipo, Some("welcome" | "estado" | "hud" | "pvp" | "treino")) {
+    if matches!(
+        tipo,
+        Some("welcome" | "estado" | "hud" | "pvp" | "treino" | "pvpTabela" | "perfil")
+    ) {
         estado.relay.receber_conta(&conta, &msg, agora);
+    }
+    // Tabela e perfis do topo do PvP só servem ao treino (não viram evento: têm nicks).
+    if matches!(tipo, Some("pvpTabela" | "perfil")) {
+        return;
     }
     if tipo == Some("estado") {
         return;

@@ -17,7 +17,7 @@
   // --- WebSocket do jogo (mesmo gancho do legado): subclasse preserva WebSocket.OPEN etc.;
   // o send() também captura conexão criada antes do gancho. Só a conexão do próprio jogo.
   var OrigWS = window.WebSocket;
-  var repassa = { welcome: 1, batalha: 1, estado: 1, pvp: 1, treino: 1, 'shiny.captura': 1, raidFichas: 1 };
+  var repassa = { welcome: 1, batalha: 1, estado: 1, pvp: 1, treino: 1, 'shiny.captura': 1, raidFichas: 1, pvpTabela: 1, perfil: 1 };
   var abasMercado = { vitrine: 1, item: 1, itens: 1, historicoGlobal: 1, medias: 1 };
   function doJogo(s) { try { return new URL(s.url).host === location.host; } catch (e) { return false; } }
   function ouvir(ws) {

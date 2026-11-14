@@ -48,6 +48,10 @@ pub struct TreinoConta {
     meta: Option<Value>,
     /// Metas das faixas logo acima (adversários mais fortes que a conta ainda vai pegar).
     pub(super) acima: Vec<Value>,
+    /// Times reais do topo (fichas sem nível), ver `ranking.rs`.
+    pub(super) reais: Vec<Vec<Value>>,
+    /// Nível de cada pokémon da conta (o adversário real luta no nível médio do time).
+    nivel_de: HashMap<i64, i64>,
     livre_em: i64,
     esperando: Option<(i64, Formacao)>,
     notas: BTreeMap<String, (Formacao, Nota)>,
@@ -194,11 +198,66 @@ impl TreinoConta {
             .chain(&self.acima)
             .filter(|m| m.get("partidas").and_then(Value::as_u64).unwrap_or(0) >= MIN_PARTIDAS_META)
             .collect();
-        if metas.is_empty() {
+        // Revezamento: cada meta (sua faixa e as de cima) e cada time real do topo.
+        let n = (metas.len() + self.reais.len()) as u64;
+        if n == 0 {
             return None;
         }
-        let n = metas.len() as u64;
-        adversario_do_meta(metas[(self.rodada % n) as usize], self.rodada / n)
+        let i = (self.rodada % n) as usize;
+        match metas.get(i) {
+            Some(m) => adversario_do_meta(m, self.rodada / n),
+            None => self.adversario_real(self.reais.get(i - metas.len())?),
+        }
+    }
+
+    /// Nível médio do time da conta (o time real do topo luta nele: mede composição e casas,
+    /// não o nível de quem joga há mais tempo).
+    fn nivel_do_time(&self) -> i64 {
+        let ns: Vec<i64> = self
+            .time
+            .iter()
+            .filter_map(|id| self.nivel_de.get(id))
+            .copied()
+            .collect();
+        if ns.is_empty() {
+            100
+        } else {
+            (ns.iter().sum::<i64>() / ns.len() as i64).clamp(1, 10_000)
+        }
+    }
+
+    fn adversario_real(&self, fichas: &[Value]) -> Option<Vec<Value>> {
+        let nivel = self.nivel_do_time();
+        let meta = self.meta.as_ref();
+        let mut usadas = Vec::new();
+        let mut a = Vec::new();
+        for f in fichas {
+            let sp = f.get("speciesId")?.as_i64()?;
+            let e = meta
+                .and_then(|m| m.get("especies")?.as_array())
+                .into_iter()
+                .flatten()
+                .find(|e| e.get("especie").and_then(Value::as_i64) == Some(sp));
+            let alcance = e.and_then(|e| e.get("alcance")?.as_i64()).unwrap_or(1);
+            let preferida = e
+                .and_then(|e| e.get("casas")?.as_array()?.first()?.get(0)?.as_i64())
+                .into_iter();
+            let casas = meta
+                .map(|m| casas_para(m, alcance))
+                .unwrap_or_else(|| casas_para(&Value::Null, alcance));
+            let casa = preferida
+                .chain(casas)
+                .chain(1..=25)
+                .find(|c| !usadas.contains(c))?;
+            usadas.push(casa);
+            let mut teste = f.clone();
+            if let Value::Object(o) = &mut teste {
+                o.insert("level".into(), json!(nivel));
+                o.insert("tmFisico".into(), json!(false));
+            }
+            a.push(json!({"casa": casa, "teste": teste}));
+        }
+        (!a.is_empty()).then_some(a)
     }
 
     /// Próxima formação a testar: a atual até ter amostra; depois, a melhor com um pokémon
@@ -281,6 +340,9 @@ impl TreinoConta {
                         p.get("speciesId").and_then(Value::as_i64),
                     ) {
                         self.especie_de.insert(id, sp);
+                        if let Some(l) = p.get("level").and_then(Value::as_i64) {
+                            self.nivel_de.insert(id, l);
+                        }
                     }
                 }
             }

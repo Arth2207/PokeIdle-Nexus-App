@@ -8,6 +8,7 @@
 
 pub mod comum;
 pub mod conta;
+pub mod ranking;
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -16,6 +17,7 @@ use serde_json::{json, Value};
 use super::{Entrega, Fluxo};
 use comum::Comum;
 use conta::TreinoConta;
+use ranking::Ranking;
 
 pub use conta::{nota_da_luta, Formacao};
 
@@ -36,6 +38,8 @@ pub struct Treino {
     /// Revezamento: a próxima conta a pedir.
     vez: usize,
     comum: Comum,
+    /// Times reais do topo do PvP (adversários de todas as contas).
+    ranking: Ranking,
     mudou: bool,
 }
 
@@ -49,14 +53,27 @@ impl Treino {
             metas: HashMap::new(),
             vez: 0,
             comum: Comum::default(),
+            ranking: Ranking::default(),
             mudou: false,
         }
     }
 
+    /// Os times reais do topo vão para todas as contas.
+    fn repassar_reais(&mut self) {
+        let reais: Vec<Vec<Value>> = self.ranking.times().into_iter().map(|(_, t)| t).collect();
+        for c in self.contas.values_mut() {
+            c.reais.clone_from(&reais);
+        }
+    }
+
     fn conta(&mut self, conta: &str) -> &mut TreinoConta {
-        self.contas
-            .entry(conta.to_lowercase())
-            .or_insert_with(TreinoConta::nova)
+        let k = conta.to_lowercase();
+        if !self.contas.contains_key(&k) {
+            let mut c = TreinoConta::nova();
+            c.reais = self.ranking.times().into_iter().map(|(_, t)| t).collect();
+            self.contas.insert(k.clone(), c);
+        }
+        self.contas.entry(k).or_insert_with(TreinoConta::nova)
     }
 }
 
@@ -78,6 +95,9 @@ impl Fluxo for Treino {
     fn receber_conta(&mut self, conta: &str, msg: &Value, agora: i64) {
         if !self.ligado {
             return;
+        }
+        if self.ranking.receber(msg) {
+            self.repassar_reais();
         }
         if let Some((pares, nota)) = self.conta(conta).receber(msg, agora) {
             self.comum.registrar(&pares, nota);
@@ -126,6 +146,10 @@ impl Fluxo for Treino {
         if !self.ligado || self.contas.is_empty() {
             return None;
         }
+        // Tabela e perfis do topo (na janela da dona).
+        if let Some(p) = self.ranking.pedir(agora) {
+            return Some(p);
+        }
         let nomes: Vec<String> = self.contas.keys().cloned().collect();
         let n = nomes.len();
         for i in 0..n {
@@ -152,7 +176,7 @@ impl Fluxo for Treino {
     }
 
     fn salvar(&mut self) -> Option<Value> {
-        let mut mudou = std::mem::take(&mut self.mudou) | self.comum.mudou();
+        let mut mudou = std::mem::take(&mut self.mudou) | self.comum.mudou() | self.ranking.mudou();
         for c in self.contas.values_mut() {
             mudou |= c.mudou();
         }
@@ -162,7 +186,8 @@ impl Fluxo for Treino {
                 .iter()
                 .map(|(k, c)| (k.clone(), Value::from(c.notas_json())))
                 .collect();
-            json!({"v": 2, "contas": contas, "comum": self.comum.para_json()})
+            json!({"v": 2, "contas": contas, "comum": self.comum.para_json(),
+                   "ranking": self.ranking.para_json()})
         })
     }
 
@@ -175,6 +200,10 @@ impl Fluxo for Treino {
                 }
                 if let Some(c) = v.get("comum") {
                     self.comum.restaurar(c);
+                }
+                if let Some(r) = v.get("ranking") {
+                    self.ranking.restaurar(r);
+                    self.repassar_reais();
                 }
             }
             // v1: só a conta dona aprendia.
@@ -240,6 +269,11 @@ mod testes {
             .filter_map(|r| r.split("faixa=").nth(1)?.split('&').next())
             .collect();
         assert_eq!(faixas, ["400", "500", "600", "1200", "1300", "1400"]);
+        assert_eq!(
+            t.pedir(0).map(|p| p["t"].clone()),
+            Some(json!("pvp.tabela")),
+            "a tabela do topo sai primeiro"
+        );
         assert_eq!(t.pedir(0), None, "sem meta ainda");
         // A faixa de cima tem outro time (espécie 212): entra no revezamento do Sikien.
         let mut forte = meta();
@@ -279,6 +313,18 @@ mod testes {
             t.receber_conta("Sikien", &resultado(!atual), agora);
         }
         assert!(viu_forte, "lutou também contra o time da faixa de cima");
+        // Time real do topo: entra no revezamento, no nível médio do time da conta.
+        t.receber_conta(
+            "Sikien",
+            &json!({"t": "perfil", "perfil": {"nick": "top1", "pvpRank": {"pontos": 8800},
+                "pvpTime": [{"speciesId": 3003, "level": 5331, "quality": 1.4}]}}),
+            agora,
+        );
+        assert_eq!(
+            t.contas["alllphha2"].reais.len(),
+            1,
+            "vale para todas as contas"
+        );
         let p = aplicou.unwrap_or_default();
         assert_eq!(p["pokemonIds"], json!([1, 2]));
         assert_ne!(p["casas"], json!({"1": 2, "2": 17}));
