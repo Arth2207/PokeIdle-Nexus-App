@@ -105,8 +105,11 @@ cmd_deploy() {
   definir_imagem paridade "$imagem"
   export_imagens
   compose up -d --no-deps --force-recreate nexus-paridade || log "aviso: comparador não subiu"
-  # O cliente sombra usa a mesma imagem do comparador.
-  compose up -d --no-deps --force-recreate nexus-sombra || log "aviso: cliente sombra não subiu"
+  # O cliente sombra (teste das fases 1/2) disputa a fila de comandos com o app desde que o
+  # motor manda comandos de verdade (Fase 4): só sobe se pedido (NEXUS_CLIENTE_SOMBRA=1).
+  if [ "${NEXUS_CLIENTE_SOMBRA:-0}" = 1 ]; then
+    compose up -d --no-deps --force-recreate nexus-sombra || log "aviso: cliente sombra não subiu"
+  fi
   # O worker de ETL usa a mesma imagem; reiniciar aqui garante que sempre rode a versão nova.
   definir_imagem worker "$imagem"
   export_imagens
