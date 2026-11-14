@@ -172,6 +172,73 @@ fn evento_batalha(ev: &Value, ts: i64, saida: &mut Vec<Value>) {
 /// Formas aceitas (`t`): `welcome`, `batalha` (`ev[]` do WS do jogo), `hud` (`linhas`
 /// `[seq, ts, texto]`, `hunt_slug`), `mercado` (`avisos[]`), `inventario`, `perfil`.
 /// `tracker.captura` não passa aqui (ver [`evento_tracker`]). Desconhecido dá lista vazia.
+/// Tamanho máximo (bytes) da mensagem bruta guardada pelo modo Descoberta.
+pub const BRUTO_MAX: usize = 16 * 1024;
+
+/// Chaves cujo valor nunca sai do app (sessão, login).
+fn chave_secreta(k: &str) -> bool {
+    let k = k.to_lowercase();
+    [
+        "token", "senha", "password", "passwd", "session", "sessao", "auth", "cookie", "jwt",
+        "secret", "segredo", "apikey", "api_key",
+    ]
+    .iter()
+    .any(|p| k.contains(p))
+}
+
+fn redigir(v: &mut Value) {
+    match v {
+        Value::Object(m) => {
+            for (k, x) in m.iter_mut() {
+                if chave_secreta(k) {
+                    *x = Value::String("<removido>".into());
+                } else {
+                    redigir(x);
+                }
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(redigir),
+        _ => {}
+    }
+}
+
+/// Mensagem do WS do jogo como veio (modo Descoberta): `dir` `in`/`out`, tipo (`t`), tamanho
+/// e o conteúdo sem segredos. Acima de [`BRUTO_MAX`] guarda só o começo do texto.
+fn evento_bruto(msg: &Value, ts: i64) -> Option<Value> {
+    let texto = msg.get("dados")?.as_str()?;
+    let dir = match msg.get("dir").and_then(Value::as_str) {
+        Some("out") => "out",
+        _ => "in",
+    };
+    let tam = texto.len();
+    let (tipo, dados, truncado) = match serde_json::from_str::<Value>(texto) {
+        Ok(mut v) => {
+            let tipo = v.get("t").or_else(|| v.get("type")).cloned();
+            redigir(&mut v);
+            if v.to_string().len() <= BRUTO_MAX {
+                (tipo, v, false)
+            } else {
+                (tipo, Value::String(corte(&v.to_string())), true)
+            }
+        }
+        // Texto que não é JSON: não dá para redigir por chave, então só o tamanho.
+        Err(_) => (None, Value::Null, true),
+    };
+    Some(
+        json!({"k": "ws.bruto", "ts": ts, "dir": dir, "tipo": tipo, "tam": tam,
+        "truncado": truncado, "dados": dados}),
+    )
+}
+
+/// Primeiros [`BRUTO_MAX`] bytes, sem quebrar caractere.
+fn corte(t: &str) -> String {
+    let mut fim = BRUTO_MAX.min(t.len());
+    while !t.is_char_boundary(fim) {
+        fim -= 1;
+    }
+    t[..fim].to_owned()
+}
+
 pub fn eventos_do_coletor(msg: &Value, ts: i64) -> Vec<Value> {
     let mut s = Vec::new();
     match msg.get("t").and_then(Value::as_str) {
@@ -238,6 +305,7 @@ pub fn eventos_do_coletor(msg: &Value, ts: i64) -> Vec<Value> {
                     "texto": copia(av, &["texto"])}));
             }
         }
+        Some("bruto") => s.extend(evento_bruto(msg, ts)),
         Some("inventario") => {
             let (b, p, i) = (
                 copia(msg, &["bolas"]),
@@ -441,6 +509,34 @@ impl<A: Avaliador> Executor for ExecutorJanelas<A> {
             }
             Ok(limitar(&ultimo, RESULTADO_MAX))
         })
+    }
+}
+
+#[cfg(test)]
+mod testes_bruto {
+    use super::*;
+
+    #[test]
+    fn bruto_remove_segredos_e_guarda_tipo() {
+        let m = json!({"t": "bruto", "dir": "in",
+            "dados": r#"{"t":"pvp.fim","sessionToken":"x","jogador":{"authKey":"y","nick":"a"}}"#});
+        let e = eventos_do_coletor(&m, 5);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0]["k"], "ws.bruto");
+        assert_eq!(e[0]["tipo"], "pvp.fim");
+        assert_eq!(e[0]["dados"]["sessionToken"], "<removido>");
+        assert_eq!(e[0]["dados"]["jogador"]["authKey"], "<removido>");
+        assert_eq!(e[0]["dados"]["jogador"]["nick"], "a");
+    }
+
+    #[test]
+    fn bruto_grande_e_cortado_e_texto_nao_json_vai_sem_conteudo() {
+        let grande = format!(r#"{{"t":"x","v":"{}"}}"#, "é".repeat(BRUTO_MAX));
+        let e = eventos_do_coletor(&json!({"t": "bruto", "dados": grande}), 1);
+        assert_eq!(e[0]["truncado"], true);
+        assert!(e[0]["dados"].as_str().is_some_and(|d| d.len() <= BRUTO_MAX));
+        let e = eventos_do_coletor(&json!({"t": "bruto", "dados": "token=abc"}), 1);
+        assert_eq!(e[0]["dados"], Value::Null);
     }
 }
 

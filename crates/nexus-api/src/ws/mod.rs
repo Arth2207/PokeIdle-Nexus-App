@@ -63,7 +63,8 @@ const BANCO: Duration = Duration::from_secs(5);
 /// Quanto esperar a fila de saída esvaziar um pouco antes de considerar o cliente lento.
 const ESPERA_FILA: Duration = Duration::from_secs(2);
 const TEMPO_FECHAR: Duration = Duration::from_secs(5);
-const MAX_MENSAGEM: usize = 64 * 1024;
+/// Lote de eventos da A2 (até 512 KiB de JSON; capturas do Tracker chegam a 200 KB).
+const MAX_MENSAGEM: usize = 1024 * 1024;
 
 /// Códigos de fechamento.
 const FECHA_SAINDO: u16 = 1001;

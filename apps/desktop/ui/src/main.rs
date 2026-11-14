@@ -115,6 +115,7 @@ button.redondo .ico { width:20px; height:20px; }
 const CHAVE_URL: &str = "nexus.url";
 const CHAVE_CONTAS: &str = "nexus.contas";
 const CHAVE_MODO: &str = "nexus.modo";
+const CHAVE_DESCOBERTA: &str = "nexus.descoberta";
 
 fn guardado(chave: &str) -> String {
     web_sys::window()
@@ -411,6 +412,8 @@ struct Estado {
     token: RwSignal<String>,
     contas_txt: RwSignal<String>,
     modo: RwSignal<String>,
+    /// Modo Descoberta: "sim" grava no Nexus cada mensagem do WS do jogo.
+    descoberta: RwSignal<String>,
     tem_token: RwSignal<Option<Result<bool, String>>>,
     pagina: RwSignal<&'static str>,
     foco: RwSignal<Option<String>>,
@@ -454,6 +457,7 @@ fn conectar(e: Estado) {
     let u = e.url.get_untracked().trim().to_owned();
     let contas = lista_contas(&e.contas_txt.get_untracked());
     let m = e.modo.get_untracked();
+    let desc = e.descoberta.get_untracked() == "sim";
     if !url_valida(&u) {
         registrar(
             e.reg,
@@ -477,12 +481,17 @@ fn conectar(e: Estado) {
             ("url", JsValue::from_str(&u)),
             ("contas", arr.into()),
             ("modo", JsValue::from_str(&m)),
+            ("descoberta", JsValue::from_bool(desc)),
         ]);
         match invoke("iniciar_nucleo", a).await {
             Ok(_) => {
                 registrar(
                     e.reg,
-                    format!("Núcleo iniciado em modo {m} com {} conta(s).", contas.len()),
+                    format!(
+                        "Núcleo iniciado em modo {m} com {} conta(s){}.",
+                        contas.len(),
+                        if desc { ", Descoberta ligada" } else { "" }
+                    ),
                     false,
                 );
             }
@@ -508,6 +517,7 @@ fn salvar_config(e: Estado) {
         &lista_contas(&e.contas_txt.get_untracked()).join(", "),
     );
     guardar(CHAVE_MODO, &e.modo.get_untracked());
+    guardar(CHAVE_DESCOBERTA, &e.descoberta.get_untracked());
     registrar(e.reg, "Configurações salvas.", false);
 }
 
@@ -555,6 +565,18 @@ fn Configuracoes(e: Estado) -> impl IntoView {
                 <option value="sombra">"Sombra: só coleta, não executa comandos"</option>
                 <option value="ativo">"Ativo: coleta e executa comandos do Nexus"</option>
             </select>
+            <label class="campo" for="descoberta">"Descoberta"</label>
+            <select id="descoberta" class="caixa"
+                prop:value=move || e.descoberta.get()
+                on:change=move |ev| {
+                    let v = event_target_value(&ev);
+                    guardar(CHAVE_DESCOBERTA, &v);
+                    e.descoberta.set(v);
+                }>
+                <option value="nao">"Desligada"</option>
+                <option value="sim">"Ligada: grava tudo o que o jogo manda e recebe (sem senhas e tokens)"</option>
+            </select>
+            <div class="dica">"Para descobrir dados novos (PvP, boss). Vale ao clicar em Conectar."</div>
             <div class="acoes">
                 <button class="btn prim" on:click=move |_| salvar_config(e)>"Salvar"</button>
                 <button class="btn" prop:disabled=move || e.ocupado.get() on:click=move |_| conectar(e)>"Conectar"</button>
@@ -807,6 +829,11 @@ fn App() -> impl IntoView {
         }),
         conta_ativa: RwSignal::new(String::new()),
         ocupado: RwSignal::new(false),
+        descoberta: RwSignal::new(if guardado(CHAVE_DESCOBERTA) == "sim" {
+            "sim".to_owned()
+        } else {
+            "nao".to_owned()
+        }),
         reg: RwSignal::new(Vec::new()),
     };
     let pagina = e.pagina;
@@ -854,7 +881,8 @@ fn App() -> impl IntoView {
                 .ok()
                 .and_then(|p| p.as_string())
                 .unwrap_or_else(|| "Núcleo parou.".to_owned());
-            registrar(e.reg, msg, true);
+            let alerta = !msg.starts_with("conectado");
+            registrar(e.reg, msg, alerta);
         });
         match listen("nucleo", &tratador).await {
             // O tratador precisa viver enquanto o app viver.

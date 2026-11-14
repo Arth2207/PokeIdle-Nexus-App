@@ -5,5 +5,5 @@
   "windows": ["tracker"],
   "webviews": ["jogo-*", "tracker"],
   "remote": { "urls": ["https://pokeidle.io/*"] },
-  "permissions": ["allow-coletor-evento", "allow-coletor-resultado", "allow-tracker-captura"]
+  "permissions": ["allow-coletor-evento", "allow-coletor-resultado", "allow-coletor-config", "allow-tracker-captura"]
 }

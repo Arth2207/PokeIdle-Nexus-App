@@ -26,6 +26,7 @@
     ws.addEventListener('message', function (ev) {
       if (typeof ev.data !== 'string') return;
       vistoWs = Date.now();
+      if (bruto) enviar({ t: 'bruto', dir: 'in', dados: ev.data.slice(0, 1048576) });
       try {
         var m = JSON.parse(ev.data);
         if (m && repassa[m.t]) enviar(m);
@@ -33,9 +34,14 @@
     });
   }
   var vistoWs = 0;
+  // Modo Descoberta: repassa cada mensagem do WS do jogo (o app tira segredos e limita).
+  var bruto = false;
   var envioOrig = OrigWS.prototype.send;
-  OrigWS.prototype.send = function () {
-    if (doJogo(this)) ouvir(this);
+  OrigWS.prototype.send = function (d) {
+    if (doJogo(this)) {
+      ouvir(this);
+      if (bruto && typeof d === 'string') enviar({ t: 'bruto', dir: 'out', dados: d.slice(0, 1048576) });
+    }
     return envioOrig.apply(this, arguments);
   };
   try {
@@ -56,12 +62,18 @@
   }
   window.__hdxCmd = cmd;
   window.__nexus = {
+    bruto: function (v) { bruto = !!v; },
     executar: function (id, o) {
       var r;
       try { r = String(cmd(o)); } catch (e) { r = 'erro:' + String(e).slice(0, 80); }
       invocar('coletor_resultado', { id: id, resultado: r.slice(0, 200) });
     }
   };
+
+  try {
+    var pc = invocar('coletor_config', {});
+    if (pc && pc.then) pc.then(function (r) { bruto = !!(r && r.bruto); }, function () {});
+  } catch (e) {}
 
   // --- HUD: linhas novas do log (kill/captura são interpretadas no Rust).
   var seq = 0, buf = [];

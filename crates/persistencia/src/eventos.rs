@@ -20,6 +20,8 @@ pub const TIPOS: &[&str] = &[
     "inventario",
     // Captura manual do Tracker pela A2 (1 clique do dono = 1 evento).
     "tracker.captura",
+    // Modo Descoberta da A2: mensagem do WS do jogo como veio (segredos removidos no app).
+    "ws.bruto",
 ];
 
 /// Campos que não entram na chave: o instante e o tipo já vão separados.

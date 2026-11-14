@@ -11,6 +11,7 @@ fn main() {
         "abrir_tracker",
         "coletor_evento",
         "coletor_resultado",
+        "coletor_config",
         "tracker_captura",
     ]);
     if let Err(e) = tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest)) {

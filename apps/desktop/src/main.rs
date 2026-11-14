@@ -14,6 +14,7 @@ use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::webview::WebviewBuilder;
@@ -51,6 +52,8 @@ struct Estado {
     /// Último retângulo (x, y, w, h, visível) que a UI mandou para cada conta.
     /// A UI pode mandar antes da webview existir; `criar_filha` aplica depois.
     rects: Mutex<HashMap<String, Rect>>,
+    /// Modo Descoberta: o coletor repassa cada mensagem do WS do jogo.
+    descoberta: AtomicBool,
 }
 
 type Rect = (f64, f64, f64, f64, bool);
@@ -80,11 +83,42 @@ struct ContaEstado {
     kills: VecDeque<i64>,
     /// Última vez que o coletor da página falou (qualquer mensagem): prova que a IPC funciona.
     coletor_visto: Option<i64>,
+    /// Modo Descoberta: (minuto, quantos) por direção+tipo de mensagem.
+    brutos: HashMap<String, (i64, u32)>,
+    /// Última kill vinda do WS do jogo. Enquanto recente, as kills lidas do HUD (o mesmo
+    /// abate, em outro formato) são descartadas: o HUD é só reserva.
+    kill_ws: Option<i64>,
 }
+
+/// Por quanto tempo uma kill do WS faz o HUD ser ignorado.
+const KILL_WS_VALE_MS: i64 = 120_000;
+
+/// Mensagens brutas por minuto, por conta e por direção+tipo (o resto é descartado).
+const BRUTOS_POR_MINUTO: u32 = 120;
 
 impl ContaEstado {
     fn novo() -> Self {
         Self { ..Self::default() }
+    }
+
+    /// `true` se ainda cabe uma mensagem bruta deste tipo neste minuto.
+    fn cabe_bruto(&mut self, ev: &Value, agora: i64) -> bool {
+        let chave = format!(
+            "{}:{}",
+            ev.get("dir").and_then(Value::as_str).unwrap_or(""),
+            ev.get("tipo").map(Value::to_string).unwrap_or_default()
+        );
+        let minuto = agora / 60_000;
+        let e = self.brutos.entry(chave).or_insert((minuto, 0));
+        if e.0 != minuto {
+            *e = (minuto, 0);
+        }
+        e.1 += 1;
+        let cabe = e.1 <= BRUTOS_POR_MINUTO;
+        if self.brutos.len() > 500 {
+            self.brutos.retain(|_, (m, _)| *m == minuto);
+        }
+        cabe
     }
 
     fn registrar(&mut self, ev: &Value, agora: i64) {
@@ -368,8 +402,37 @@ fn coletor_evento(window: Webview, msg: Value, estado: State<'_, Estado>) {
         return;
     }
     for ev in eventos_do_coletor(&msg, agora_ms()) {
+        if ev.get("k").and_then(Value::as_str) == Some("kill") {
+            let mut m = travar(&estado.contas);
+            if let Some(c) = m.get_mut(&conta) {
+                if ev.get("seq").is_some() {
+                    if c.kill_ws.is_some_and(|t| agora - t <= KILL_WS_VALE_MS) {
+                        continue;
+                    }
+                } else {
+                    c.kill_ws = Some(agora);
+                }
+            }
+        }
+        if ev.get("k").and_then(Value::as_str) == Some("ws.bruto") {
+            let cabe = estado.descoberta.load(Ordering::Relaxed)
+                && travar(&estado.contas)
+                    .get_mut(&conta)
+                    .is_some_and(|c| c.cabe_bruto(&ev, agora));
+            if !cabe {
+                continue;
+            }
+        }
         empurrar(&estado, &conta, ev);
     }
+}
+
+/// O coletor pergunta, ao carregar a página, se o modo Descoberta está ligado.
+#[tauri::command]
+fn coletor_config(window: Webview, estado: State<'_, Estado>) -> Value {
+    let ligado = conta_da_janela(&estado, window.label()).is_some()
+        && estado.descoberta.load(Ordering::Relaxed);
+    serde_json::json!({ "bruto": ligado })
 }
 
 #[tauri::command]
@@ -445,9 +508,12 @@ async fn iniciar_nucleo(
     url: String,
     contas: Vec<String>,
     modo: Option<String>,
+    descoberta: Option<bool>,
     app: AppHandle,
     estado: State<'_, Estado>,
 ) -> Result<(), String> {
+    let descoberta = descoberta.unwrap_or(false);
+    estado.descoberta.store(descoberta, Ordering::Relaxed);
     let armazem = ArquivoToken::padrao("nexus").map_err(|e| e.to_string())?;
     {
         // Mantém o estado das contas que continuam; descarta as removidas.
@@ -459,6 +525,12 @@ async fn iniciar_nucleo(
     }
     for c in &contas {
         criar_filha(&app, c)?;
+        // Páginas já abertas: liga/desliga a Descoberta sem recarregar o jogo.
+        if let Some(w) = app.get_webview(&rotulo_da_conta(c)) {
+            let _ = w.eval(format!(
+                "window.__nexus&&window.__nexus.bruto&&window.__nexus.bruto({descoberta})"
+            ));
+        }
     }
     let (parar_tx, parar_rx) = watch::channel(false);
     let (eventos_tx, eventos_rx) = mpsc::channel(1024);
@@ -580,6 +652,7 @@ fn main() {
             abrir_tracker,
             coletor_evento,
             coletor_resultado,
+            coletor_config,
             tracker_captura
         ])
         .run(tauri::generate_context!());

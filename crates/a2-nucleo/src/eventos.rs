@@ -4,9 +4,14 @@
 use contrato::ws::{EventoAck, EventoLote};
 use serde_json::Value;
 use std::collections::{HashSet, VecDeque};
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// Quantos eventos já enviados lembrar para não reenfileirar o mesmo.
 const MEMORIA: usize = 10_000;
+/// Tamanho (JSON) máximo de um lote; o servidor aceita mensagens de até 1 MiB.
+pub const LOTE_BYTES: usize = 512 * 1024;
+/// Evento sozinho acima disto vira um marcador (`truncado`): nunca trava a fila.
+pub const EVENTO_BYTES: usize = 900 * 1024;
 
 #[derive(Debug)]
 pub struct FilaEventos {
@@ -14,8 +19,9 @@ pub struct FilaEventos {
     pendentes: VecDeque<(Option<String>, Value)>,
     em_voo: Option<EventoLote>,
     proximo_seq: u64,
-    vistos: HashSet<String>,
-    ordem_vistos: VecDeque<String>,
+    /// Hash do JSON de cada evento visto (o texto inteiro custaria memória demais).
+    vistos: HashSet<u64>,
+    ordem_vistos: VecDeque<u64>,
 }
 
 impl FilaEventos {
@@ -36,8 +42,11 @@ impl FilaEventos {
     /// Evento objeto com `_conta` (texto) é do lote dessa conta: o campo sai do evento antes de
     /// enviar. A chave de dedup inclui a conta. Sem `_conta`, vale a conta da fila.
     pub fn adicionar(&mut self, mut ev: Value) -> bool {
-        let chave = ev.to_string();
-        if !self.vistos.insert(chave.clone()) {
+        let texto = ev.to_string();
+        let mut h = DefaultHasher::new();
+        texto.hash(&mut h);
+        let chave = h.finish();
+        if !self.vistos.insert(chave) {
             return false;
         }
         self.ordem_vistos.push_back(chave);
@@ -50,6 +59,11 @@ impl FilaEventos {
             Some(Value::String(c)) => Some(c),
             _ => self.conta.clone(),
         };
+        if texto.len() > EVENTO_BYTES {
+            let k = ev.get("k").cloned().unwrap_or(Value::Null);
+            let ts = ev.get("ts").cloned().unwrap_or(Value::Null);
+            ev = serde_json::json!({"k": k, "ts": ts, "truncado": true, "tam": texto.len()});
+        }
         self.pendentes.push_back((conta, ev));
         true
     }
@@ -71,11 +85,18 @@ impl FilaEventos {
             return None;
         }
         let conta = self.pendentes.front().and_then(|(c, _)| c.clone());
+        // Corta por quantidade, por conta e por tamanho (sempre ao menos um evento).
+        let mut bytes = 0;
         let n = self
             .pendentes
             .iter()
             .take(max)
             .take_while(|(c, _)| *c == conta)
+            .enumerate()
+            .take_while(|(i, (_, v))| {
+                bytes += v.to_string().len() + 1;
+                *i == 0 || bytes <= LOTE_BYTES
+            })
             .count();
         let eventos: Vec<Value> = self.pendentes.drain(..n).map(|(_, v)| v).collect();
         let lote = EventoLote {
@@ -113,6 +134,21 @@ mod testes {
             duplicados: 0,
             erros: 0,
         }
+    }
+
+    #[test]
+    fn lote_corta_por_tamanho_e_evento_enorme_vira_marcador() {
+        let mut f = FilaEventos::nova(None, 1);
+        let meio = "x".repeat(LOTE_BYTES / 2);
+        for i in 0..3 {
+            assert!(f.adicionar(json!({"k": "ws.bruto", "ts": i, "v": meio})));
+        }
+        let l = f.proximo_lote(50).map(|l| l.eventos.len());
+        assert_eq!(l, Some(1));
+        let mut g = FilaEventos::nova(None, 1);
+        g.adicionar(json!({"k": "tracker.captura", "ts": 1, "v": "y".repeat(EVENTO_BYTES)}));
+        let e = g.proximo_lote(50).map(|l| l.eventos[0].clone());
+        assert_eq!(e.as_ref().map(|e| e["truncado"].clone()), Some(json!(true)));
     }
 
     #[test]
