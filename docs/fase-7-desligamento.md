@@ -79,3 +79,20 @@ As diferenças da bolsa (`mercado`, `ticker`, `balao`...) são de dado ao vivo (
 3. Fases 1 e 2: `cutover-fase1-2.sh` (abaixo), depois de corrigir a paridade de `equipe`.
 4. ~~Catálogo de espécies sem Node~~: `nexus-api importar especies-js` (saída idêntica à do Node).
 5. Com a A2: Fases 3 e 4, depois SQLite → PG, e por último `mapper`, 9999, crons e arquivamento do `mapa.db`.
+
+## Concluída (2026-11-14)
+
+Nenhum processo Node do legado serve produção. O app A2 é o relay; o motor roda no Nexus (`nexus-paridade`, só o laço do motor); o ETL lê só do Postgres; o site Leptos (`/painel/` na borda) substitui o painel antigo.
+
+| Item | Como saiu | Volta atrás |
+|---|---|---|
+| pm2 `mapper` (8181/9999) | `pm2 stop mapper` + `pm2 save`; nenhum hostname do túnel aponta para 8181/9999 | `pm2 start mapper && pm2 save` (dump antigo em `/root/.pm2/dump.pm2.bak-20261114-mapper`) |
+| pm2 `holodex-nexus`, `ai-observer`, `etl-eficiencia` | parados com a Fase 4 | `pm2 start /opt/mapper/ecosystem.config.js --only <nome>` |
+| Comparador com o legado | `NEXUS_PARIDADE_URL` fora do compose; sem ela o `paridade-continua` só roda o motor | recolocar `NEXUS_PARIDADE_URL` (backup `compose.yml.bak-20261114-legado`) |
+| Crons `pm2-status-dump.sh` e `lixeira.sh` | comentados no crontab do root | `crontab /root/crontab.bak-20261114-legado` |
+| Cron `precos-nexus` | renomeado para `/etc/cron.d/precos-nexus.desligado-20261114` | tirar o sufixo |
+| `mapa.db` e JSONs de estado | cópia em `/opt/mapper/arquivo-20261114/` (`.backup` do SQLite, `integrity_check` ok); originais intactos | — |
+| Tabelas `nexus.*_shadow` | sem escrita (todas as flags de escrita em produção); mantidas, sem drop | — |
+| Token `telas-teste` | revogado (`revogado_em`) | — |
+
+Pendente: medir RAM/CPU do app com 4 contas no PC (meta ≤ 1,4 GB e ≤ 25%); remover o Node do host quando o dono decidir (o `mapper` segue instalado para a volta atrás).
