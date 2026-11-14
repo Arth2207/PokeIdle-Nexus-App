@@ -14,26 +14,38 @@
   }
   function enviar(msg) { invocar('coletor_evento', { msg: msg }); }
 
-  // --- WebSocket do jogo: guarda a conexão (para comandos) e repassa welcome/batalha.
+  // --- WebSocket do jogo (mesmo gancho do legado): subclasse preserva WebSocket.OPEN etc.;
+  // o send() também captura conexão criada antes do gancho. Só a conexão do próprio jogo.
   var OrigWS = window.WebSocket;
   var repassa = { welcome: 1, batalha: 1 };
-  function Hook(url, protocolos) {
-    var ws = protocolos ? new OrigWS(url, protocolos) : new OrigWS(url);
-    if (typeof url === 'string' && url.indexOf('127.0.0.1') < 0 && url.indexOf('localhost') < 0) {
-      window.__hdxWs = ws;
-      ws.addEventListener('message', function (ev) {
-        if (typeof ev.data !== 'string') return;
-        try {
-          var m = JSON.parse(ev.data);
-          if (m && repassa[m.t]) enviar(m);
-        } catch (e) {}
-      });
-    }
-    return ws;
+  function doJogo(s) { try { return new URL(s.url).host === location.host; } catch (e) { return false; } }
+  function ouvir(ws) {
+    if (ws.__nexusOuvindo) return;
+    ws.__nexusOuvindo = 1;
+    window.__hdxWs = ws;
+    ws.addEventListener('message', function (ev) {
+      if (typeof ev.data !== 'string') return;
+      vistoWs = Date.now();
+      try {
+        var m = JSON.parse(ev.data);
+        if (m && repassa[m.t]) enviar(m);
+      } catch (e) {}
+    });
   }
-  Object.assign(Hook, OrigWS);
-  Hook.prototype = OrigWS.prototype;
-  window.WebSocket = Hook;
+  var vistoWs = 0;
+  var envioOrig = OrigWS.prototype.send;
+  OrigWS.prototype.send = function () {
+    if (doJogo(this)) ouvir(this);
+    return envioOrig.apply(this, arguments);
+  };
+  try {
+    window.WebSocket = class extends OrigWS {
+      constructor(a, b) {
+        super(a, b);
+        if (doJogo(this)) ouvir(this);
+      }
+    };
+  } catch (e) {}
 
   // --- Comando: manda JSON no WS do jogo (mesmo contrato do __hdxCmd legado).
   function cmd(o) {
@@ -74,4 +86,12 @@
   setInterval(function () {
     if (buf.length) enviar({ t: 'hud', linhas: buf.splice(0, buf.length) });
   }, 2000);
+
+  // --- Sinal de vida (fica no app, não vai ao Nexus): conexão do jogo aberta e mensagem recente.
+  function texto(id) { var e = document.getElementById(id); return e ? (e.textContent || '').trim() : ''; }
+  setInterval(function () {
+    var s = window.__hdxWs;
+    enviar({ t: 'vivo', ws: !!(s && s.readyState === 1), msg_ms: vistoWs,
+      hunt: (texto('hud-hunt') || texto('eco-onde')).slice(0, 80) });
+  }, 15000);
 })();

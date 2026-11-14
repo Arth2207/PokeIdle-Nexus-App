@@ -91,6 +91,7 @@ button.pilula { border:1px solid var(--vidro-borda); font:inherit; font-weight:6
 .stat.pausada { background:var(--trilho); color:var(--texto-2); }
 .stat.aguardando { background:var(--trilho); color:var(--texto-2); }
 .stat.erro { background:rgba(229,83,61,.18); color:var(--piora); }
+.stat.sem_coletor { background:rgba(229,83,61,.18); color:var(--piora); }
 .corpo { flex:1; min-height:0; display:flex; gap:14px; }
 .area { flex:1.7; min-width:0; border-radius:14px; background:rgba(22,24,28,.10); overflow:hidden; }
 .area.demo { background:linear-gradient(135deg,#6aa86a,#2f6b3f); }
@@ -707,6 +708,7 @@ fn Slot(i: usize, e: Estado) -> impl IntoView {
                                     "pausada" => view! { {icone("estado-pausa")} "Pausada" }.into_any(),
                                     "erro" => view! { {icone("alerta")} "Erro de captura" }.into_any(),
                                     "aguardando" => view! { {icone("estado-pausa")} "Aguardando jogo" }.into_any(),
+                                    "sem_coletor" => view! { {icone("alerta")} "Coletor sem resposta" }.into_any(),
                                     _ => view! { {icone("execucao")} "Em execução" }.into_any(),
                                 }}
                             </span>
@@ -909,6 +911,7 @@ fn App() -> impl IntoView {
                             "pausada" => ("estado-pausa", "Pausada"),
                             "erro" => ("alerta", "Erro de captura"),
                             "aguardando" => ("estado-pausa", "Aguardando jogo"),
+                            "sem_coletor" => ("alerta", "Coletor sem resposta"),
                             _ => ("execucao", "Em execução"),
                         };
                         view! { <span class=format!("stat {st}")>{icone(ic)}{tx}</span> }

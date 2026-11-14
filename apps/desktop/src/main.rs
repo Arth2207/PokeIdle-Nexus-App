@@ -78,6 +78,8 @@ struct ContaEstado {
     ultimo_evento: Option<i64>,
     hunt: Option<String>,
     kills: VecDeque<i64>,
+    /// Última vez que o coletor da página falou (qualquer mensagem): prova que a IPC funciona.
+    coletor_visto: Option<i64>,
 }
 
 impl ContaEstado {
@@ -97,6 +99,23 @@ impl ContaEstado {
         self.podar(agora);
     }
 
+    /// Sinal de vida do coletor: com a conexão do jogo aberta e mensagem nos últimos 60 s,
+    /// a captura conta como ativa (conta parada sem batalha não é erro).
+    fn vivo(&mut self, msg: &Value, agora: i64) {
+        let ws = msg.get("ws").and_then(Value::as_bool).unwrap_or(false);
+        let ultima = msg.get("msg_ms").and_then(Value::as_i64).unwrap_or(0);
+        if ws && agora - ultima <= 60_000 {
+            self.ultimo_evento = Some(agora);
+        }
+        if let Some(h) = msg
+            .get("hunt")
+            .and_then(Value::as_str)
+            .filter(|h| !h.is_empty())
+        {
+            self.hunt = Some(h.to_owned());
+        }
+    }
+
     fn podar(&mut self, agora: i64) {
         let corte = agora - JANELA_KILLS_MIN * 60_000;
         while self.kills.front().is_some_and(|t| *t < corte) {
@@ -110,7 +129,12 @@ impl ContaEstado {
         }
         // Nunca chegou dado do jogo: conta ainda no login ou fora de caçada; não é erro.
         let Some(visto) = self.ultimo_evento else {
-            return "aguardando";
+            // Nem o coletor falou: a página do jogo não conversa com o app.
+            return if self.coletor_visto.is_some() {
+                "aguardando"
+            } else {
+                "sem_coletor"
+            };
         };
         if agora - visto > SEM_CAPTURA_MS {
             "erro"
@@ -165,7 +189,6 @@ fn empurrar(estado: &Estado, conta: &str, mut ev: Value) {
     }
 }
 
-/// Janelas só navegam dentro de `pokeidle.io`.
 /// Navegação permitida nas webviews do jogo: o site, o login (Google ou Discord) e a
 /// verificação anti-robô, como no legado. A IPC continua só para pokeidle.io (capabilities/jogo.json).
 fn host_permitido(u: &tauri::Url) -> bool {
@@ -323,6 +346,17 @@ fn coletor_evento(window: Webview, msg: Value, estado: State<'_, Estado>) {
     let Some(conta) = conta_do_rotulo(window.label()) else {
         return;
     };
+    let agora = agora_ms();
+    if let Some(c) = travar(&estado.contas).get_mut(&conta) {
+        c.coletor_visto = Some(agora);
+    }
+    // Sinal de vida: só atualiza o card; não vai ao núcleo.
+    if msg.get("t").and_then(Value::as_str) == Some("vivo") {
+        if let Some(c) = travar(&estado.contas).get_mut(&conta) {
+            c.vivo(&msg, agora);
+        }
+        return;
+    }
     for ev in eventos_do_coletor(&msg, agora_ms()) {
         empurrar(&estado, &conta, ev);
     }
