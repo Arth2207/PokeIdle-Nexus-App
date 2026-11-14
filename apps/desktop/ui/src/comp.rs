@@ -355,6 +355,9 @@ pub const CSS: &str = r#"
 .cal { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; }
 .cal div { aspect-ratio:1.6; border-radius:6px; background:var(--melhora); display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--texto); }
 .cal div.neg { background:var(--piora); }
+.pokedex { display:grid; grid-template-columns:repeat(auto-fill,minmax(48px,1fr)); gap:4px; margin-top:10px; }
+.pokedex img { width:48px; height:48px; object-fit:contain; }
+.pokedex img.falta { filter:brightness(0) opacity(.18); }
 .linha { width:100%; height:180px; }
 .linha path { fill:none; stroke:var(--melhora); stroke-width:2.5; vector-effect:non-scaling-stroke; }
 .linha .faixa { fill:var(--trilho); }

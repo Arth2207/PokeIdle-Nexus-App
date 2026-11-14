@@ -20,7 +20,7 @@ pub fn fracao(texto: &str) -> Option<f64> {
 }
 
 /// Espécie para a imagem: formas especiais do jogo (ex.: 3006, mega) caem na forma base.
-fn especie_da_imagem(sp: i64) -> i64 {
+pub fn especie_da_imagem(sp: i64) -> i64 {
     if (1..=1025).contains(&sp) {
         sp
     } else {
