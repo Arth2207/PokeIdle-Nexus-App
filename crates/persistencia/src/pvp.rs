@@ -82,3 +82,23 @@ pub async fn treinos(
     .fetch_all(db)
     .await
 }
+
+/// Extrato do Mercado das contas (`mercado.extrato`, do app a cada 30 min) desde `desde_ms`:
+/// (conta, lado "venda"/"compra", linha). A mesma linha volta em várias leituras; sai uma vez.
+pub async fn extrato_mercado(
+    db: &PgPool,
+    desde_ms: i64,
+) -> Result<Vec<(String, String, Value)>, sqlx::Error> {
+    let linhas: Vec<(String, String, Value)> = sqlx::query_as(
+        "SELECT DISTINCT ON (e.conta, e.dados->>'lado', l->>'id')
+                e.conta, e.dados->>'lado', l
+           FROM nexus.evento e, jsonb_array_elements(e.dados->'linhas') l
+          WHERE e.tipo = 'mercado.extrato'
+            AND (l->>'em')::float8 >= $1
+          ORDER BY e.conta, e.dados->>'lado', l->>'id', e.em DESC",
+    )
+    .bind(desde_ms as f64)
+    .fetch_all(db)
+    .await?;
+    Ok(linhas)
+}

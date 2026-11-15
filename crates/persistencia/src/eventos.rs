@@ -30,6 +30,8 @@ pub const TIPOS: &[&str] = &[
     "boss.fichas",
     // Resumo do dia de cada conta (o `D.dia` do motor), mandado pelo app a cada 5 min.
     "diario",
+    // Vendas e compras do Mercado de cada conta (A2, `relay/extrato.rs`), a cada 30 min.
+    "mercado.extrato",
 ];
 
 /// Campos que não entram na chave: o instante e o tipo já vão separados.

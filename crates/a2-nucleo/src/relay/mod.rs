@@ -3,6 +3,7 @@
 //! ritmo do jogo. Plano em `docs/a2-relay.md`.
 
 pub mod contas;
+pub mod extrato;
 pub mod mercado;
 pub mod raid;
 pub mod saida;
@@ -31,6 +32,8 @@ pub enum Entrega {
     Diario { conta: String, eventos: Vec<Value> },
     /// Janela da conta para o motor do Nexus (`POST /api/motor/janela`).
     Janela { conta: String, corpo: Value },
+    /// Eventos avulsos de uma conta (`POST /ingest`); um não substitui o outro na fila.
+    Eventos { conta: String, eventos: Vec<Value> },
 }
 
 /// Um fluxo de dados do jogo para o servidor.
@@ -89,6 +92,7 @@ impl Relay {
             Box::new(contas::Contas::novo(oficial)),
             Box::new(raid::Raid::novo()),
             Box::new(treino::Treino::novo(dono, oficial && aprender)),
+            Box::new(extrato::Extrato::novo(oficial)),
         ])
     }
 
@@ -219,7 +223,7 @@ impl Entrega {
                 "/api/motor/janela",
                 serde_json::json!({ "conta": conta, "janela": corpo }),
             ),
-            Entrega::Diario { conta, eventos } => (
+            Entrega::Diario { conta, eventos } | Entrega::Eventos { conta, eventos } => (
                 "/ingest",
                 serde_json::json!({ "conta_id": conta, "nick": conta, "eventos": eventos }),
             ),
@@ -249,6 +253,9 @@ impl Entrega {
                 format!("Diário: {} dia(s) de {conta} enviados", eventos.len())
             }
             Entrega::Janela { conta, .. } => format!("Motor: janela de {conta} enviada"),
+            Entrega::Eventos { conta, eventos } => {
+                format!("Extrato: {} evento(s) de {conta} enviados", eventos.len())
+            }
         }
     }
 }

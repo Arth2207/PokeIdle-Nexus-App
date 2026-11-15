@@ -402,6 +402,15 @@ fn coletor_evento(window: Webview, msg: Value, estado: State<'_, Estado>) {
     // Respostas do mercado: alimentam o relay (varredura), não viram evento.
     if msg.get("t").and_then(Value::as_str) == Some("mkt") {
         estado.relay.receber(&conta, &msg, agora);
+        // Extrato do Mercado (vendas e compras) é de cada conta, não só da dona.
+        if let Some(m) = msg.get("m").filter(|m| {
+            matches!(
+                m.get("aba").and_then(Value::as_str),
+                Some("historico" | "historicoCompras")
+            )
+        }) {
+            estado.relay.receber_conta(&conta, m, agora);
+        }
         return;
     }
     // Estado do jogo e linhas do HUD alimentam o relay (equipe, hunt, inventário, diário).

@@ -73,6 +73,39 @@ pub async fn contas(State(estado): State<Estado>) -> Response {
     }
 }
 
+/// `GET /api/financas/mercado?dias=30`: vendas e compras do Mercado de cada conta, com a
+/// moeda de cada uma (o diário do jogo só tem o gold da caçada e da loja).
+pub async fn extrato_mercado(
+    State(estado): State<Estado>,
+    Query(p): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let dias: i64 = p
+        .get("dias")
+        .and_then(|d| d.parse().ok())
+        .unwrap_or(30)
+        .clamp(1, 90);
+    let desde = crate::bolsa::agora_ms() - dias * 86_400_000;
+    match persistencia::pvp::extrato_mercado(&estado.db, desde).await {
+        Ok(l) => {
+            let linhas: Vec<Value> = l
+                .into_iter()
+                .map(|(conta, lado, mut x)| {
+                    if let Value::Object(o) = &mut x {
+                        o.insert("conta".into(), Value::from(conta));
+                        o.insert("lado".into(), Value::from(lado));
+                    }
+                    x
+                })
+                .collect();
+            Json(json!({ "linhas": linhas })).into_response()
+        }
+        Err(e) => {
+            tracing::warn!(erro = %e, "extrato do mercado");
+            erro(StatusCode::SERVICE_UNAVAILABLE, "banco indisponível")
+        }
+    }
+}
+
 pub async fn cacada(
     State(estado): State<Estado>,
     Query(p): Query<std::collections::HashMap<String, String>>,
