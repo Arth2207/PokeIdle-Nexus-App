@@ -374,6 +374,13 @@ img.forma-brave { filter:drop-shadow(0 0 10px rgba(56,132,255,.9)) saturate(1.15
 .faixa-ouro .faixa { position:absolute; top:0; bottom:0; border-radius:999px; background:rgba(31,157,107,.45); }
 .faixa-ouro .marca { position:absolute; top:-3px; width:3px; height:14px; border-radius:2px; background:var(--texto); transform:translateX(-1px); }
 .hunt-drops { display:flex; flex-wrap:wrap; gap:4px; }
+/* Mercado › Para o PvP */
+.ofertas-pvp { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:12px; margin-top:12px; }
+.oferta-pvp { padding:12px 14px; border-radius:18px; background:var(--cartao); border:1px solid var(--vidro-borda); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); display:flex; flex-direction:column; gap:6px; }
+.op-topo { display:flex; gap:10px; align-items:center; }
+.op-topo img { width:56px; height:56px; object-fit:contain; image-rendering:auto; }
+.op-preco { font:700 16px "Space Grotesk", Inter, sans-serif; }
+.op-preco span { font:500 12px Inter, sans-serif; }
 /* Automação › Controles */
 .regras { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:14px; }
 .regra { background:var(--cartao); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); border:1px solid var(--vidro-borda); border-radius:18px; padding:14px 16px; transition:opacity .2s; }

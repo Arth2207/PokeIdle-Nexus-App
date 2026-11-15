@@ -43,6 +43,33 @@ body.noite .opcao:hover, body.noite .ativo.sel { color:var(--sobre-neon); }
 .alertas.vidro { position:fixed; top:64px; right:24px; width:min(380px,90vw); max-height:60vh; overflow:auto; padding:10px; border-radius:16px; z-index:40; }
 .contagem { background:var(--piora); color:#fff; border-radius:999px; font-size:10px; padding:1px 6px; margin-left:4px; }
 .nevoa { position:fixed; inset:0; background:linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,.10)); pointer-events:none; }
+/* ---------- Atmosfera solarpunk ---------- */
+.atmosfera { position:fixed; inset:0; pointer-events:none; overflow:hidden; z-index:0; }
+.atmosfera span { position:absolute; inset:-20%; }
+.raios { background:conic-gradient(from 200deg at 8% -10%, transparent 0deg, rgba(255,246,200,.22) 8deg, transparent 16deg, rgba(255,246,200,.16) 26deg, transparent 34deg, rgba(255,246,200,.12) 46deg, transparent 56deg); mix-blend-mode:screen; animation:raios 18s ease-in-out infinite alternate; transform-origin:8% -10%; }
+@keyframes raios { from { transform:rotate(-3deg); opacity:.75; } to { transform:rotate(4deg); opacity:1; } }
+.polen { background-image:radial-gradient(circle, rgba(255,250,210,.9) 0 1.5px, transparent 2.5px), radial-gradient(circle, rgba(220,255,160,.8) 0 1px, transparent 2px); background-size:180px 220px, 260px 300px; background-position:0 0, 90px 120px; animation:polen 40s linear infinite; opacity:.55; }
+.polen.p2 { background-size:240px 260px, 330px 360px; background-position:40px 60px, 160px 10px; animation-duration:65s; animation-direction:reverse; opacity:.35; filter:blur(.6px); }
+@keyframes polen { from { transform:translate3d(0, 0, 0); } to { transform:translate3d(120px, -420px, 0); } }
+.folhas { background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='600'%3E%3Cg fill='%23a8d86a' fill-opacity='.35'%3E%3Cpath d='M80 90c18-22 46-24 60-10-16 22-44 26-60 10z'/%3E%3Cpath d='M420 260c14-26 42-32 58-20-12 26-40 34-58 20z'/%3E%3Cpath d='M250 470c20-18 48-16 60 0-18 18-46 18-60 0z'/%3E%3C/g%3E%3C/svg%3E"); background-size:600px 600px; animation:folhas 55s linear infinite; }
+@keyframes folhas { from { transform:translate3d(0, -200px, 0) rotate(0deg); } to { transform:translate3d(-160px, 400px, 0) rotate(8deg); } }
+.vagalumes { display:none; background-image:radial-gradient(circle, rgba(200,255,120,.95) 0 2px, rgba(200,255,120,.25) 4px, transparent 8px), radial-gradient(circle, rgba(140,255,220,.9) 0 1.5px, rgba(140,255,220,.2) 4px, transparent 7px); background-size:230px 210px, 310px 290px; background-position:30px 40px, 150px 170px; animation:vagalumes 7s ease-in-out infinite alternate, polen 90s linear infinite; }
+@keyframes vagalumes { from { opacity:.25; } to { opacity:.95; } }
+body.noite .vagalumes { display:block; }
+body.noite .raios, body.noite .polen, body.noite .folhas { display:none; }
+.casca { z-index:1; }
+.logo svg { animation:balanca 5s ease-in-out infinite; transform-origin:20% 90%; }
+@keyframes balanca { 0%,100% { transform:rotate(-6deg); } 50% { transform:rotate(8deg); } }
+.conteudo > * { animation:surgir .35s ease-out both; }
+.item.ativo { box-shadow:0 0 0 0 rgba(200,255,46,.6); animation:brilho 3.2s ease-in-out infinite; }
+@keyframes brilho { 0%,100% { box-shadow:0 0 0 0 rgba(200,255,46,.0); } 50% { box-shadow:0 0 18px 2px rgba(200,255,46,.55); } }
+.trilho .val, .trilho-corte span, .barra-taxa span, .b-val { position:relative; overflow:hidden; }
+.trilho .val::after, .trilho-corte span::after, .barra-taxa span::after, .b-val::after { content:""; position:absolute; inset:0; background:linear-gradient(100deg, transparent 20%, rgba(255,255,255,.55) 50%, transparent 80%); transform:translateX(-100%); animation:varre 3.5s ease-in-out infinite; }
+@keyframes varre { 60%,100% { transform:translateX(100%); } }
+/* Modo desempenho: sem atmosfera nem animações. */
+body.leve .atmosfera { display:none; }
+body.leve *, body.leve *::before, body.leve *::after { animation:none !important; transition:none !important; }
+@media (prefers-reduced-motion: reduce) { .atmosfera { display:none; } *, *::before, *::after { animation:none !important; } }
 .casca { position:relative; display:flex; gap:16px; height:100vh; padding:16px; }
 .vidro { background:var(--vidro); border:1px solid var(--vidro-borda); border-radius:var(--raio); backdrop-filter:blur(22px); -webkit-backdrop-filter:blur(22px); box-shadow:var(--sombra); position:relative; }
 .marca { position:absolute; top:10px; right:16px; font:11px "JetBrains Mono", Consolas, monospace; color:var(--texto-3); }
@@ -861,7 +888,18 @@ fn App() -> impl IntoView {
     globais::fundo(e, tema);
     let periodo = RwSignal::new(String::from("Últimos 7 dias"));
     let moeda = RwSignal::new(String::from("Orbs"));
-    let desempenho = RwSignal::new(true);
+    // Modo desempenho: liga = sem animações (guardado no navegador).
+    let desempenho = RwSignal::new(guardado("nexus.leve") == "sim");
+    Effect::new(move |_| {
+        let leve = desempenho.get();
+        guardar("nexus.leve", if leve { "sim" } else { "nao" });
+        if let Some(b) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.body())
+        {
+            let _ = b.class_list().toggle_with_force("leve", leve);
+        }
+    });
     Effect::new(move |_| {
         if let Some(j) = web_sys::window() {
             let _ = j.location().set_hash(slug_da_pagina(pagina.get()));
@@ -963,6 +1001,14 @@ fn App() -> impl IntoView {
     view! {
         <style>{CSS}{comp::CSS}</style>
         <div class="nevoa"></div>
+        // Atmosfera solarpunk: raios de sol e pólen de dia, vaga-lumes à noite (só CSS).
+        <div class="atmosfera" aria-hidden="true">
+            <span class="raios"></span>
+            <span class="polen p1"></span>
+            <span class="polen p2"></span>
+            <span class="folhas"></span>
+            <span class="vagalumes"></span>
+        </div>
         <div class="casca">
             <nav class="barra vidro">
                 <div class="logo">{icone("folha")}"Nexus"</div>

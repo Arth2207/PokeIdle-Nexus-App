@@ -8,7 +8,7 @@ use crate::comp::{carregado, Abas, Kpi, Tabela, Veredito};
 use crate::dados::{curto, inteiro, lista, num, pct, recurso, txt};
 use crate::Estado;
 
-const ABAS: &[&str] = &["Pregão", "Oportunidades", "Inventário"];
+const ABAS: &[&str] = &["Pregão", "Oportunidades", "Para o PvP", "Inventário"];
 
 fn acao_pt(a: &str) -> String {
     match a {
@@ -151,6 +151,103 @@ fn aba_inventario(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
     }
 }
 
+/// Força de uma espécie no meta, com a taxa puxada para 50% quando há poucas partidas.
+pub fn forca_meta(vitorias: f64, usos: f64) -> f64 {
+    (vitorias + 5.0) / (usos + 10.0)
+}
+
+/// Qualidade do indivíduo (0–1): IV total (até 186), qualidade (até ~2) e potência (até 5).
+pub fn qualidade(iv: f64, q: f64, pot: f64) -> f64 {
+    (iv / 186.0).clamp(0.0, 1.0) * 0.5
+        + (q / 2.0).clamp(0.0, 1.0) * 0.3
+        + (pot / 5.0).clamp(0.0, 1.0) * 0.2
+}
+
+/// Para o PvP: pokémon à venda bons no meta da faixa da conta, baratos e que melhoram a coleção.
+fn aba_pvp(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
+    let of = recurso(e, versao, || {
+        Some("/api/bolsa/ofertas?tipo=pokemon&limite=500".into())
+    });
+    let sug = recurso(e, versao, move || {
+        super::nick_ativo(e).map(|n| format!("/api/pvp/sugestao?nick={n}"))
+    });
+    let col = recurso(e, versao, move || {
+        super::nick_ativo(e).map(|n| format!("/api/pvp/colecao?nick={n}"))
+    });
+    view! {
+        {move || carregado(sug.get(), move |sg| {
+            let faixa = num(&sg["sugestao"], "faixa");
+            let meta = recurso(e, versao, move || Some(match faixa { Some(f) => format!("/api/pvp/meta?faixa={f}"), None => "/api/pvp/meta".into() }));
+            view! {
+                {move || carregado(meta.get(), move |m| carregado(of.get(), move |o| {
+                    let minha: Vec<Value> = match col.get() { Some(Some(Ok(c))) => lista(&c, "pokemons").to_vec(), _ => Vec::new() };
+                    let nivel_min = 150.0;
+                    let mut l: Vec<(f64, Value, Value, Option<Value>)> = lista(&o, "ofertas").iter().filter_map(|x| {
+                        let nome = txt(x, "nome");
+                        let me = lista(&m, "especies").iter().find(|s| txt(s, "nome") == nome)?.clone();
+                        let usos = num(&me, "usos").unwrap_or(0.0);
+                        let fm = forca_meta(num(&me, "vitorias").unwrap_or(0.0), usos);
+                        let f = &x["ficha"];
+                        if usos < 15.0 || fm < 0.47 || num(f, "level").unwrap_or(0.0) < nivel_min {
+                            return None;
+                        }
+                        let ql = qualidade(num(f, "ivTotal").unwrap_or(0.0), num(f, "quality").unwrap_or(0.0), num(f, "potencia").unwrap_or(0.0));
+                        let meu = minha.iter().filter(|p| txt(p, "nome") == nome)
+                            .max_by(|a, b| qualidade(num(a, "ivTotal").unwrap_or(0.0), num(a, "quality").unwrap_or(0.0), num(a, "potencia").unwrap_or(0.0))
+                                .total_cmp(&qualidade(num(b, "ivTotal").unwrap_or(0.0), num(b, "quality").unwrap_or(0.0), num(b, "potencia").unwrap_or(0.0))))
+                            .cloned();
+                        let ql_meu = meu.as_ref().map(|p| qualidade(num(p, "ivTotal").unwrap_or(0.0), num(p, "quality").unwrap_or(0.0), num(p, "potencia").unwrap_or(0.0)));
+                        let melhora = ql_meu.is_none_or(|q| ql > q + 0.03);
+                        let desconto = (-num(x, "desconto").unwrap_or(0.0)).clamp(-0.5, 0.9);
+                        let nota = fm * (0.6 + 0.4 * ql) * (1.0 + desconto) * if melhora { 1.0 } else { 0.5 };
+                        Some((nota, x.clone(), me, meu))
+                    }).collect();
+                    l.sort_by(|a, b| b.0.total_cmp(&a.0));
+                    let n = l.len();
+                    view! {
+                        <div class="dica">{format!("{n} ofertas boas no meta da sua faixa ({}), do nível {nivel_min} para cima. Ordem: força no meta × qualidade × desconto, priorizando o que melhora sua coleção.", faixa.map_or("todas as faixas".into(), |f| format!("{} pontos", inteiro(f))))}</div>
+                        <div class="ofertas-pvp">
+                            {l.into_iter().take(30).map(|(_, x, me, meu)| {
+                                let f = x["ficha"].clone();
+                                let taxa = forca_meta(num(&me, "vitorias").unwrap_or(0.0), num(&me, "usos").unwrap_or(0.0));
+                                let w = format!("width:{:.0}%", taxa * 100.0);
+                                let desc = num(&x, "desconto").unwrap_or(0.0);
+                                let classe_desc = if desc < 0.0 { "melhora" } else { "piora" };
+                                let moeda = if txt(&x, "moeda") == "gold" { "gold" } else { "orbs" };
+                                let situacao = match &meu {
+                                    None => "Você não tem esta espécie".to_owned(),
+                                    Some(p) => format!("O seu: nv {} · IV {} · P{}", inteiro(num(p, "level").unwrap_or(0.0)), inteiro(num(p, "ivTotal").unwrap_or(0.0)), inteiro(num(p, "potencia").unwrap_or(0.0))),
+                                };
+                                view! {
+                                    <div class="oferta-pvp">
+                                        <div class="op-topo">
+                                            <img src=txt(&x, "sprite") alt="" loading="lazy" />
+                                            <div>
+                                                <b>{txt(&x, "nome")}</b>
+                                                <div class="op-preco">{format!("{} {moeda}", curto(num(&x, "preco").unwrap_or(0.0)))}<span class=classe_desc>{format!(" {} vs justo", pct(desc))}</span></div>
+                                            </div>
+                                        </div>
+                                        <div class="chips">
+                                            <span class="chip">{format!("Nv {}", inteiro(num(&f, "level").unwrap_or(0.0)))}</span>
+                                            <span class="chip">{format!("IV {}", inteiro(num(&f, "ivTotal").unwrap_or(0.0)))}</span>
+                                            <span class="chip">{format!("Q {:.2}", num(&f, "quality").unwrap_or(0.0))}</span>
+                                            <span class="chip">{format!("P{}", inteiro(num(&f, "potencia").unwrap_or(0.0)))}</span>
+                                            {f.get("shiny").and_then(Value::as_bool).unwrap_or(false).then(|| view! { <span class="chip">"✦ shiny"</span> })}
+                                        </div>
+                                        <div class="barra-taxa bom"><span style=w></span></div>
+                                        <div class="dica">{format!("{:.0}% de vitória no meta · {} usos · alcance {}", taxa * 100.0, inteiro(num(&me, "usos").unwrap_or(0.0)), inteiro(num(&me, "alcance").unwrap_or(0.0)))}</div>
+                                        <div class="dica">{situacao}</div>
+                                    </div>
+                                }
+                            }).collect_view()}
+                        </div>
+                    }
+                }))}
+            }
+        })}
+    }
+}
+
 #[component]
 pub fn Mercado(e: Estado, moeda: RwSignal<String>) -> impl IntoView {
     let versao = RwSignal::new(0u32);
@@ -161,6 +258,7 @@ pub fn Mercado(e: Estado, moeda: RwSignal<String>) -> impl IntoView {
         {move || match aba.get() {
             "Pregão" => super::pregao::aba(e, versao, moeda).into_any(),
             "Oportunidades" => aba_oportunidades(e, versao).into_any(),
+            "Para o PvP" => aba_pvp(e, versao).into_any(),
             _ => aba_inventario(e, versao).into_any(),
         }}
     }
@@ -181,5 +279,8 @@ mod testes {
         assert_eq!((av[0].moeda, av[0].valor), ("gold", 174_000.0));
         assert_eq!((av[1].moeda, av[1].unit), ("orb", 10.0));
         assert_eq!(totais(&av), (174_000.0, 40.0));
+        // Poucas partidas puxam a taxa para 50%; qualidade máxima dá 1.
+        assert!((forca_meta(10.0, 10.0) - 0.75).abs() < 1e-9);
+        assert!((qualidade(186.0, 2.0, 5.0) - 1.0).abs() < 1e-9);
     }
 }
