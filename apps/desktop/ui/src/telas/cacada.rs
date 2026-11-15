@@ -10,7 +10,7 @@ use crate::dados::{curto, inteiro, lista, num, recurso, txt};
 use crate::Estado;
 
 const ABAS: &[&str] = &["Sessão ao vivo", "Mapa de hunts", "Shiny"];
-const METRICAS: &[&str] = &["Ouro/h", "XP/h", "Abates/h"];
+const METRICAS: &[&str] = &["Lucro/h", "Ouro/h", "XP/h", "Abates/h"];
 
 /// "furious_scizor" → "Furious Scizor".
 fn nome_hunt(slug: &str) -> String {
@@ -145,41 +145,85 @@ fn sessao(c: &Value, hist: Option<Value>, nick: &str) -> AnyView {
     .into_any()
 }
 
-fn mapa(c: &Value, metrica: &'static str) -> AnyView {
-    let h = &c["hunts"];
-    let k = match metrica {
-        "XP/h" => "xp",
-        "Abates/h" => "kills",
-        _ => "ouro",
-    };
-    let atual = txt(&c["sessao"], "atual");
-    let mut l: Vec<Value> = lista(h, "lista").to_vec();
-    l.sort_by(|a, b| {
-        num(b, k)
-            .unwrap_or(0.0)
-            .total_cmp(&num(a, k).unwrap_or(0.0))
-    });
-    let melhor = l.first().cloned().unwrap_or(Value::Null);
-    let da_atual = l
+/// Valor em gold de cada item pelo Mercado (valor justo na moeda gold; só itens que giram em gold).
+fn precos_gold(tickers: &[Value]) -> std::collections::HashMap<String, f64> {
+    tickers
         .iter()
-        .find(|x| txt(x, "hunt") == atual)
-        .and_then(|x| num(x, k));
-    let ganho = da_atual.map(|a| num(&melhor, k).unwrap_or(0.0) - a);
-    let barras: Vec<(String, f64, String)> = l
+        .filter(|t| txt(t, "moeda") == "gold")
+        .filter_map(|t| Some((txt(t, "nome"), num(t, "base").or_else(|| num(t, "ultimo"))?)))
+        .collect()
+}
+
+/// Há quanto tempo (texto curto) desde `t` ms.
+fn ha(t: f64) -> String {
+    let h = (js_sys::Date::now() - t) / 3.6e6;
+    if h < 1.0 {
+        "há menos de 1 h".into()
+    } else if h < 48.0 {
+        format!("há {h:.0} h")
+    } else {
+        format!("há {:.0} dias", h / 24.0)
+    }
+}
+
+/// Uma hunt medida: a linha da API, os drops (item, por abate) e o valor dos drops por hora.
+type HuntMedida = (Value, Vec<(String, f64)>, f64);
+
+fn mapa(c: &Value, metrica: &'static str, tickers: &[Value]) -> AnyView {
+    let h = &c["hunts"];
+    let atual = txt(&c["sessao"], "atual");
+    let precos = precos_gold(tickers);
+    let sprite_de = |nome: &str| {
+        tickers
+            .iter()
+            .find(|t| txt(t, "nome").eq_ignore_ascii_case(nome) && !txt(t, "sprite").is_empty())
+            .map(|t| txt(t, "sprite"))
+    };
+    // Por hunt: drops a cada 1000 abates e o valor deles por hora.
+    let drops_de = |slug: &str| -> (Vec<(String, f64)>, f64) {
+        let nome = nome_hunt(slug);
+        let Some(d) = lista(h, "drops")
+            .iter()
+            .find(|d| txt(d, "alvo").eq_ignore_ascii_case(&nome))
+        else {
+            return (Vec::new(), 0.0);
+        };
+        let kills = num(d, "kills").unwrap_or(0.0).max(1.0);
+        let mut v: Vec<(String, f64)> = lista(d, "itens")
+            .iter()
+            .map(|i| (txt(i, "item"), num(i, "qtd").unwrap_or(0.0) / kills))
+            .collect();
+        v.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let valor_por_abate: f64 = v
+            .iter()
+            .map(|(i, taxa)| taxa * precos.get(i).copied().unwrap_or(0.0))
+            .sum();
+        (v, valor_por_abate)
+    };
+    let mut l: Vec<HuntMedida> = lista(h, "lista")
         .iter()
         .map(|x| {
-            let v = num(x, k).unwrap_or(0.0);
-            (
-                nome_hunt(&txt(x, "hunt")),
-                v,
-                format!(
-                    "{} · {} h medidas",
-                    curto(v),
-                    inteiro(num(x, "horas").unwrap_or(0.0))
-                ),
-            )
+            let (d, vpa) = drops_de(&txt(x, "hunt"));
+            let valor_h = vpa * num(x, "kills").unwrap_or(0.0);
+            (x.clone(), d, valor_h)
         })
         .collect();
+    let chave = |x: &HuntMedida| match metrica {
+        "XP/h" => num(&x.0, "xp").unwrap_or(0.0),
+        "Abates/h" => num(&x.0, "kills").unwrap_or(0.0),
+        "Lucro/h" => num(&x.0, "ouro").unwrap_or(0.0) + x.2,
+        _ => num(&x.0, "ouro").unwrap_or(0.0),
+    };
+    l.sort_by(|a, b| chave(b).total_cmp(&chave(a)));
+    let melhor = l.first().cloned();
+    let da_atual = l.iter().find(|x| txt(&x.0, "hunt") == atual).map(chave);
+    let ganho = da_atual.zip(melhor.as_ref().map(chave)).map(|(a, m)| m - a);
+    let nome_melhor = melhor
+        .as_ref()
+        .map(|m| nome_hunt(&txt(&m.0, "hunt")))
+        .unwrap_or_default();
+    let trocar =
+        ganho.filter(|g| *g > 0.0 && melhor.as_ref().is_some_and(|m| txt(&m.0, "hunt") != atual));
     let mut grade: std::collections::BTreeMap<String, Vec<Option<f64>>> = Default::default();
     for x in lista(h, "calor") {
         let linha = grade
@@ -189,28 +233,67 @@ fn mapa(c: &Value, metrica: &'static str) -> AnyView {
             linha[hr] = num(x, "ouro");
         }
     }
-    let trocar = ganho.filter(|g| *g > 0.0 && txt(&melhor, "hunt") != atual);
+    let max_ouro = l
+        .iter()
+        .filter_map(|x| num(&x.0, "p90"))
+        .fold(1.0_f64, f64::max);
     view! {
         <div class="kpis">
-            <Kpi titulo="Melhor hunt (7 dias)" valor=nome_hunt(&txt(&melhor, "hunt")) comparacao=format!("{} {metrica}", curto(num(&melhor, k).unwrap_or(0.0))) />
+            <Kpi titulo="Melhor hunt (7 dias)" valor=nome_melhor.clone() comparacao=melhor.as_ref().map_or(String::new(), |m| format!("{} {metrica}", curto(chave(m)))) />
             <Kpi titulo="Sua hunt atual" valor=nome_hunt(&atual) comparacao=da_atual.map_or("sem medida nos 7 dias".into(), |v| format!("{} {metrica}", curto(v))) />
-            <Kpi titulo="Ganho potencial" valor=ganho.map_or("—".into(), |g| format!("{g:+.0}")) unidade=metrica bom=ganho.map(|g| g <= 0.0) />
+            <Kpi titulo="Ganho potencial" valor=ganho.map_or("—".into(), |g| format!("+{}", curto(g.max(0.0)))) unidade=metrica bom=ganho.map(|g| g <= 0.0) />
         </div>
         {trocar.map(|g| view! {
-            <Veredito titulo=format!("Trocar para {}", nome_hunt(&txt(&melhor, "hunt")))
+            <Veredito titulo=format!("Trocar para {nome_melhor}")
                 motivo=format!("+{} {metrica} medidos nos últimos 7 dias (todas as contas, sessões de 30 min ou mais).", curto(g))
-                acao="O motor troca de hunt sozinho quando a regra da conta permite.".to_owned() tom="bom" />
+                acao="O motor troca de hunt sozinho quando a regra “Troca de hunt” está ligada (Automação).".to_owned() tom="bom" />
         })}
-        <div class="vg-base" style="margin-top:16px">
-            <div class="caixa">
-                <div class="caixa-t">{format!("Hunts por {metrica}")}</div>
-                <Barras linhas=barras destaque=nome_hunt(&atual) />
-            </div>
-            <div class="caixa">
-                <div class="caixa-t">"Mapa de calor · hunt × hora (ouro/h)"</div>
-                <Calor linhas=grade.into_iter().collect() />
-            </div>
+        <div class="hunts">
+            {l.into_iter().map(|(x, drops, valor_h)| {
+                let slug = txt(&x, "hunt");
+                let nome = nome_hunt(&slug);
+                let ouro = num(&x, "ouro").unwrap_or(0.0);
+                let (p10, p90) = (num(&x, "p10").unwrap_or(ouro), num(&x, "p90").unwrap_or(ouro));
+                let faixa = format!("left:{:.1}%;width:{:.1}%", p10 / max_ouro * 100.0, ((p90 - p10) / max_ouro * 100.0).max(1.5));
+                let marca = format!("left:{:.1}%", ouro / max_ouro * 100.0);
+                let e_atual = slug == atual;
+                let e_melhor = nome == nome_melhor;
+                let img = sprite_de(&nome);
+                view! {
+                    <div class="hunt-card" class:atual=e_atual class:melhor=e_melhor>
+                        <div class="hunt-topo">
+                            {img.map(|s| view! { <img src=s alt="" loading="lazy" /> })}
+                            <div>
+                                <div class="hunt-n">{nome.clone()}</div>
+                                <div class="dica">{format!("{} h medidas · {}", inteiro(num(&x, "horas").unwrap_or(0.0)), ha(num(&x, "ultima").unwrap_or(0.0)))}</div>
+                            </div>
+                            {e_atual.then(|| view! { <span class="selo ok">"atual"</span> })}
+                            {(e_melhor && !e_atual).then(|| view! { <span class="selo">"melhor"</span> })}
+                        </div>
+                        <div class="hunt-nums">
+                            <div><b>{curto(ouro)}</b><span>"ouro/h"</span></div>
+                            <div><b>{curto(valor_h)}</b><span>"drops/h (gold)"</span></div>
+                            <div><b>{curto(ouro + valor_h)}</b><span>"lucro/h"</span></div>
+                            <div><b>{curto(num(&x, "xp").unwrap_or(0.0))}</b><span>"xp/h"</span></div>
+                            <div><b>{inteiro(num(&x, "kills").unwrap_or(0.0))}</b><span>"abates/h"</span></div>
+                        </div>
+                        <div class="faixa-ouro" title=format!("ouro/h: pior 10% {} · melhor 10% {}", curto(p10), curto(p90))>
+                            <span class="faixa" style=faixa></span><span class="marca" style=marca></span>
+                        </div>
+                        <div class="hunt-drops">
+                            {drops.into_iter().take(4).map(|(i, taxa)| view! {
+                                <span class="chip" title=format!("{:.2} por 1000 abates", taxa * 1000.0)>{format!("{i} · 1/{}", inteiro(1.0 / taxa.max(1e-9)))}</span>
+                            }).collect_view()}
+                        </div>
+                    </div>
+                }
+            }).collect_view()}
         </div>
+        <div class="caixa" style="margin-top:16px">
+            <div class="caixa-t">"Mapa de calor · hunt × hora (ouro/h)"</div>
+            <Calor linhas=grade.into_iter().collect() />
+        </div>
+        <div class="dica">"Drops/h: itens que caem a cada abate (eventos de 7 dias) × abates/h × valor justo em gold no Mercado. Faixa: o pior e o melhor 10% das horas medidas."</div>
     }
     .into_any()
 }
@@ -219,7 +302,7 @@ fn mapa(c: &Value, metrica: &'static str) -> AnyView {
 pub fn Cacada(e: Estado) -> impl IntoView {
     let versao = RwSignal::new(0u32);
     let aba = RwSignal::new("Sessão ao vivo");
-    let metrica = RwSignal::new("Ouro/h");
+    let metrica = RwSignal::new("Lucro/h");
     let cacada = recurso(e, versao, move || {
         Some(format!(
             "/api/cacada?conta={}",
@@ -228,6 +311,7 @@ pub fn Cacada(e: Estado) -> impl IntoView {
     });
     let hist = recurso(e, versao, || Some("/api/historico".into()));
     let shiny = recurso(e, versao, || Some("/api/shiny/servidor?dias=7".into()));
+    let mercado = recurso(e, versao, || Some("/api/bolsa/mercado".into()));
     view! {
         {cabecalho("Caçada", "Onde caçar, e a caçada atual está rendendo o esperado?", versao)}
         <Abas opcoes=ABAS ativa=aba />
@@ -238,7 +322,10 @@ pub fn Cacada(e: Estado) -> impl IntoView {
             }),
             "Mapa de hunts" => view! {
                 <Abas opcoes=METRICAS ativa=metrica />
-                {move || carregado(cacada.get(), move |c| mapa(&c, metrica.get()))}
+                {move || carregado(cacada.get(), move |c| {
+                    let t = match mercado.get() { Some(Some(Ok(m))) => lista(&m, "tickers").to_vec(), _ => Vec::new() };
+                    mapa(&c, metrica.get(), &t)
+                })}
             }.into_any(),
             _ => carregado(shiny.get(), move |s| {
                 let chance = hist.get().and_then(|h| h.and_then(Result::ok)).and_then(|h| num(&h, "chanceShiny"));

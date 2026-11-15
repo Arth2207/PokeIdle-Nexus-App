@@ -63,7 +63,10 @@ pub async fn sessao(db: &PgPool, conta_id: &str) -> Result<Value, sqlx::Error> {
 pub async fn hunts(db: &PgPool) -> Result<Value, sqlx::Error> {
     let lista: Vec<Value> = sqlx::query_scalar(
         "SELECT jsonb_build_object('hunt', hunt_slug, 'ouro', avg(ouro_por_hora),
-                 'xp', avg(xp_tr_por_hora), 'kills', avg(kills_por_hora), 'horas', count(*))
+                 'xp', avg(xp_tr_por_hora), 'kills', avg(kills_por_hora), 'horas', count(*),
+                 'p10', percentile_cont(0.1) WITHIN GROUP (ORDER BY ouro_por_hora),
+                 'p90', percentile_cont(0.9) WITHIN GROUP (ORDER BY ouro_por_hora),
+                 'ultima', max(ts_hora))
            FROM public.fato_hunt_eficiencia
           WHERE ts_hora > (extract(epoch FROM now() - interval '7 days') * 1000)
             AND duracao_s >= 1800
@@ -86,7 +89,22 @@ pub async fn hunts(db: &PgPool) -> Result<Value, sqlx::Error> {
     )
     .fetch_all(db)
     .await?;
-    Ok(json!({"lista": lista, "calor": calor}))
+    // Drops por alvo nos 7 dias (o alvo é a espécie da hunt): abates e itens.
+    let drops: Vec<Value> = sqlx::query_scalar(
+        "WITH k AS (SELECT dados->>'nome' alvo, count(*) n FROM nexus.evento
+                     WHERE tipo = 'kill' AND em > now() - interval '7 days' GROUP BY 1),
+              d AS (SELECT dados->>'alvo_especie' alvo, dados->>'item_nome' item,
+                           sum(coalesce((dados->>'quantidade')::int, 1)) q
+                      FROM nexus.evento WHERE tipo = 'drop' AND em > now() - interval '7 days'
+                     GROUP BY 1, 2)
+         SELECT jsonb_build_object('alvo', k.alvo, 'kills', k.n,
+                  'itens', coalesce(jsonb_agg(jsonb_build_object('item', d.item, 'qtd', d.q))
+                                    FILTER (WHERE d.item IS NOT NULL), '[]'))
+           FROM k LEFT JOIN d USING (alvo) GROUP BY k.alvo, k.n",
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(json!({"lista": lista, "calor": calor, "drops": drops}))
 }
 
 /// Drops da sessão atual da conta (desde o `sessaoInicio` da janela do motor; sem ele, 3 h):

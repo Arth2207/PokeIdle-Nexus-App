@@ -314,8 +314,6 @@ struct ContaCard {
     conta: String,
     status: String,
     hunt: Option<String>,
-    kills_h: Option<i64>,
-    hp_min: Option<i64>,
     captura_ok: bool,
 }
 
@@ -330,33 +328,10 @@ fn le_card(v: &JsValue) -> Option<ContaCard> {
         conta: campo_js(v, "conta")?.as_string()?,
         status: campo_js(v, "status")?.as_string()?,
         hunt: campo_js(v, "hunt").and_then(|x| x.as_string()),
-        kills_h: campo_js(v, "kills_h")
-            .and_then(|x| x.as_f64())
-            .map(|n| n as i64),
-        hp_min: campo_js(v, "hp_min")
-            .and_then(|x| x.as_f64())
-            .map(|n| n as i64),
         captura_ok: campo_js(v, "captura_ok")
             .and_then(|x| x.as_bool())
             .unwrap_or(false),
     })
-}
-
-/// 2340 -> "2.340".
-fn milhar(n: i64) -> String {
-    let d = n.abs().to_string();
-    let mut o = String::new();
-    for (i, c) in d.chars().enumerate() {
-        if i > 0 && (d.len() - i).is_multiple_of(3) {
-            o.push('.');
-        }
-        o.push(c);
-    }
-    if n < 0 {
-        format!("-{o}")
-    } else {
-        o
-    }
 }
 
 /// "bosque-nebuloso" -> "Bosque nebuloso".
@@ -367,9 +342,6 @@ fn titulo_slug(slug: &str) -> String {
         .map(|p| p.to_uppercase().collect::<String>() + c.as_str())
         .unwrap_or_default()
 }
-
-/// HP mínimo abaixo disto fica em vermelho.
-const HP_BAIXO: i64 = 30;
 
 /// Resumo da linha do topo da tela Jogo.
 fn resumo(total: usize, cards: &[ContaCard]) -> String {
@@ -394,40 +366,17 @@ fn demo_ativo() -> bool {
 }
 
 fn demo_cards() -> Vec<ContaCard> {
-    let c = |n: &str, st: &str, h: &str, k: Option<i64>, hp: Option<i64>, ok: bool| ContaCard {
+    let c = |n: &str, st: &str, h: &str, ok: bool| ContaCard {
         conta: n.into(),
         status: st.into(),
         hunt: Some(h.into()),
-        kills_h: k,
-        hp_min: hp,
         captura_ok: ok,
     };
     vec![
-        c(
-            "Conta A",
-            "execucao",
-            "bosque-nebuloso",
-            Some(2340),
-            Some(35),
-            true,
-        ),
-        c(
-            "Conta B",
-            "execucao",
-            "riacho-cristalino",
-            Some(2180),
-            Some(40),
-            true,
-        ),
-        c("Conta C", "pausada", "pico-nevado", None, None, true),
-        c(
-            "Conta D",
-            "erro",
-            "gruta-turquesa",
-            Some(1920),
-            Some(28),
-            false,
-        ),
+        c("Conta A", "execucao", "bosque-nebuloso", true),
+        c("Conta B", "execucao", "riacho-cristalino", true),
+        c("Conta C", "pausada", "pico-nevado", true),
+        c("Conta D", "erro", "gruta-turquesa", false),
     ]
 }
 
@@ -794,10 +743,6 @@ fn Slot(i: usize, e: Estado) -> impl IntoView {
                             <div class="area" class:demo=demo node_ref=area></div>
                             <div class="info">
                                 <div class="l hunt">"Hunt: "{move || dado().and_then(|d| d.hunt).map_or("—".to_owned(), |h| titulo_slug(&h))}</div>
-                                <div class="l">"Kills/h:"<b>{move || dado().and_then(|d| d.kills_h).map_or("—".to_owned(), milhar)}</b></div>
-                                <div class="l" class:baixo=move || dado().and_then(|d| d.hp_min).is_some_and(|h| h < HP_BAIXO)>
-                                    "HP mín.:"<b>{move || dado().and_then(|d| d.hp_min).map_or("—".to_owned(), |h| format!("{h}%"))}</b>
-                                </div>
                                 <div class="redondos">
                                     <button class="redondo" title="Pausar ou retomar a coleta e os comandos desta conta"
                                         on:click=move |_| comando_conta(e, "pausar_conta", n_pausar.clone(), Some(("pausada", st() != "pausada")))>

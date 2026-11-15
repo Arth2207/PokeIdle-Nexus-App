@@ -356,6 +356,24 @@ img.forma-brave { filter:drop-shadow(0 0 10px rgba(56,132,255,.9)) saturate(1.15
 .janela { position:relative; width:min(1100px, 96vw); max-height:90vh; overflow:auto; padding:24px 28px; animation:surgir .22s ease-out; }
 .janela .fechar { position:sticky; top:0; float:right; z-index:5; }
 @keyframes surgir { from { opacity:0; transform:translateY(12px) scale(.98); } to { opacity:1; transform:none; } }
+/* Caçada › Mapa de hunts */
+.hunts { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:14px; margin-top:14px; }
+.hunt-card { padding:14px 16px; border-radius:20px; background:var(--cartao); border:1px solid var(--vidro-borda); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); display:flex; flex-direction:column; gap:10px; transition:transform .18s; }
+.hunt-card:hover { transform:translateY(-2px); }
+.hunt-card.atual { box-shadow:0 0 0 2px var(--neon), 0 10px 30px rgba(200,255,46,.25); }
+.hunt-card.melhor { box-shadow:0 0 0 2px var(--melhora); }
+.hunt-topo { display:flex; align-items:center; gap:10px; }
+.hunt-topo img { width:56px; height:56px; object-fit:contain; }
+.hunt-topo > div { flex:1; }
+.hunt-n { font:700 16px "Space Grotesk", Inter, sans-serif; }
+.hunt-nums { display:grid; grid-template-columns:repeat(5, 1fr); gap:6px; }
+.hunt-nums div { display:flex; flex-direction:column; }
+.hunt-nums b { font:700 15px "Space Grotesk", Inter, sans-serif; font-variant-numeric:tabular-nums; }
+.hunt-nums span { font-size:10px; color:var(--texto-3); text-transform:uppercase; letter-spacing:.06em; }
+.faixa-ouro { position:relative; height:8px; border-radius:999px; background:var(--trilho); }
+.faixa-ouro .faixa { position:absolute; top:0; bottom:0; border-radius:999px; background:rgba(31,157,107,.45); }
+.faixa-ouro .marca { position:absolute; top:-3px; width:3px; height:14px; border-radius:2px; background:var(--texto); transform:translateX(-1px); }
+.hunt-drops { display:flex; flex-wrap:wrap; gap:4px; }
 /* Automação › Controles */
 .regras { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:14px; }
 .regra { background:var(--cartao); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); border:1px solid var(--vidro-borda); border-radius:18px; padding:14px 16px; transition:opacity .2s; }
