@@ -31,6 +31,12 @@ fn hh(t: f64) -> String {
     format!("{h:02}h")
 }
 
+/// Hora local (UTC−3) "HH:MM" de um instante em ms.
+fn hora_min(t: f64) -> String {
+    let s = ((t / 1000.0) as i64 - 3 * 3600).rem_euclid(86_400);
+    format!("{:02}:{:02}", s / 3600, (s % 3600) / 60)
+}
+
 /// Comparação "x% vs. média" de um valor contra a média (e se melhorou).
 fn vs(v: f64, m: Option<f64>) -> (String, Option<bool>) {
     match m.filter(|m| *m > 0.0) {
@@ -68,16 +74,32 @@ fn sessao(c: &Value, hist: Option<Value>, nick: &str) -> AnyView {
             )
         })
         .collect();
-    let drops: Vec<Vec<String>> = lista(c, "drops")
+    let dr = &c["drops"];
+    let kills_sessao = num(dr, "kills").unwrap_or(0.0);
+    let desde = num(dr, "desde").unwrap_or(0.0);
+    let horas_sessao = ((js_sys::Date::now() - desde) / 3.6e6).max(0.05);
+    let drops: Vec<Vec<String>> = lista(dr, "itens")
         .iter()
         .map(|d| {
+            let q = num(d, "qtd").unwrap_or(0.0);
             vec![
                 txt(d, "item"),
-                inteiro(num(d, "qtd").unwrap_or(0.0)),
+                inteiro(q),
+                if q > 0.0 {
+                    format!("1 a cada {}", inteiro(kills_sessao / q))
+                } else {
+                    "—".into()
+                },
+                format!("{:.1}/h", q / horas_sessao),
                 txt(d, "de"),
             ]
         })
         .collect();
+    let titulo_drops = format!(
+        "Drops da sessão · desde {} · {} abates",
+        hora_min(desde),
+        inteiro(kills_sessao)
+    );
     let simples = |n: &str| {
         let mut o = String::new();
         for ch in n.to_lowercase().chars() {
@@ -111,8 +133,8 @@ fn sessao(c: &Value, hist: Option<Value>, nick: &str) -> AnyView {
         </div>
         <div class="vg-base" style="margin-top:16px">
             <div class="caixa">
-                <div class="caixa-t">"Drops da sessão (últimas 3 h)"</div>
-                <Tabela cab=vec!["Item", "Qtd", "De"] linhas=drops />
+                <div class="caixa-t">{titulo_drops}</div>
+                <Tabela cab=vec!["Item", "Qtd", "Taxa", "Por hora", "De"] linhas=drops />
             </div>
             <div class="caixa">
                 <div class="caixa-t">"Linha do tempo"</div>

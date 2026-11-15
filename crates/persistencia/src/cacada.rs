@@ -89,20 +89,63 @@ pub async fn hunts(db: &PgPool) -> Result<Value, sqlx::Error> {
     Ok(json!({"lista": lista, "calor": calor}))
 }
 
-/// Drops da conta nas últimas 3 h: item, quantidade e a espécie que derrubou.
-pub async fn drops(db: &PgPool, rotulo: &str) -> Result<Vec<Value>, sqlx::Error> {
-    sqlx::query_scalar(
+/// Drops da sessão atual da conta (desde o `sessaoInicio` da janela do motor; sem ele, 3 h):
+/// `{desde, kills, itens: [{item, qtd, de}]}`. O jogo mostra a sessão, não as últimas 3 h.
+pub async fn drops(db: &PgPool, rotulo: &str) -> Result<Value, sqlx::Error> {
+    let r = rotulo.to_lowercase();
+    let desde: f64 = sqlx::query_scalar(
+        "SELECT coalesce(max((janela->>'sessaoInicio')::float8),
+                         extract(epoch FROM now() - interval '3 hours') * 1000)
+           FROM nexus.motor_janela WHERE conta = $1",
+    )
+    .bind(&r)
+    .fetch_one(db)
+    .await?;
+    let itens: Vec<Value> = sqlx::query_scalar(
         "SELECT jsonb_build_object('item', dados->>'item_nome',
                  'qtd', sum(coalesce((dados->>'quantidade')::int, 1)),
                  'de', string_agg(DISTINCT dados->>'alvo_especie', ', '))
            FROM nexus.evento
-          WHERE tipo = 'drop' AND conta = $1 AND em > now() - interval '3 hours'
+          WHERE tipo = 'drop' AND conta = $1 AND em >= to_timestamp($2 / 1000)
           GROUP BY dados->>'item_nome'
-          ORDER BY sum(coalesce((dados->>'quantidade')::int, 1)) DESC LIMIT 20",
+          ORDER BY sum(coalesce((dados->>'quantidade')::int, 1)) DESC LIMIT 30",
     )
-    .bind(rotulo.to_lowercase())
+    .bind(&r)
+    .bind(desde)
     .fetch_all(db)
-    .await
+    .await?;
+    let kills: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM nexus.evento
+          WHERE tipo = 'kill' AND conta = $1 AND em >= to_timestamp($2 / 1000)",
+    )
+    .bind(&r)
+    .bind(desde)
+    .fetch_one(db)
+    .await?;
+    Ok(json!({"desde": desde, "kills": kills, "itens": itens}))
+}
+
+/// Abates e ouro da caçada por conta (rótulo) e dia de Brasília nos últimos `dias`, do
+/// `fato_kill` (o diário do jogo perde abates quando o app reinicia).
+pub async fn ouro_por_dia(db: &PgPool, dias: i64) -> Result<Vec<Value>, sqlx::Error> {
+    let linhas: Vec<(String, String, i64, f64)> = sqlx::query_as(
+        "SELECT conta_id, to_char(ts_at AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD'),
+                count(*), coalesce(sum(ouro), 0)::float8
+           FROM public.fato_kill
+          WHERE ts_at >= date_trunc('day', now() AT TIME ZONE 'America/Sao_Paulo')
+                         AT TIME ZONE 'America/Sao_Paulo' - make_interval(days => $1::int - 1)
+          GROUP BY 1, 2 ORDER BY 2",
+    )
+    .bind(dias)
+    .fetch_all(db)
+    .await?;
+    Ok(linhas
+        .into_iter()
+        .filter_map(|(id, dia, kills, ouro)| {
+            let conta = CONTAS_A2.iter().find(|(c, _)| *c == id)?.1;
+            Some(serde_json::json!({"conta": conta, "dia": dia, "kills": kills, "ouro": ouro}))
+        })
+        .collect())
 }
 
 #[cfg(test)]

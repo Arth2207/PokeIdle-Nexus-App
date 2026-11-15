@@ -106,6 +106,25 @@ pub async fn extrato_mercado(
     }
 }
 
+/// `GET /api/financas/cacada?dias=30`: abates e ouro da caçada por conta e dia (`fato_kill`).
+pub async fn ouro_cacada(
+    State(estado): State<Estado>,
+    Query(p): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let dias: i64 = p
+        .get("dias")
+        .and_then(|d| d.parse().ok())
+        .unwrap_or(30)
+        .clamp(1, 90);
+    match persistencia::cacada::ouro_por_dia(&estado.db, dias).await {
+        Ok(l) => Json(json!({ "dias": l })).into_response(),
+        Err(e) => {
+            tracing::warn!(erro = %e, "ouro da caçada");
+            erro(StatusCode::SERVICE_UNAVAILABLE, "banco indisponível")
+        }
+    }
+}
+
 pub async fn cacada(
     State(estado): State<Estado>,
     Query(p): Query<std::collections::HashMap<String, String>>,
