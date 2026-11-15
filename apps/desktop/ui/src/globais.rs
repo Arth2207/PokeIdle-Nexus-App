@@ -57,6 +57,15 @@ pub fn fundo(e: Estado, tema: RwSignal<String>) {
             &format!("url(\"biomas/{arquivo}.webp\")"),
         );
         let _ = corpo.class_list().toggle_with_force("noite", n);
+        // A luz do papel segue o relógio: madrugada, manhã, dia e tarde (a noite é o tema).
+        let h = js_sys::Date::new_0().get_hours();
+        for (classe, liga) in [
+            ("madrugada", h < 5),
+            ("manha", (5..11).contains(&h)),
+            ("tarde", (15..18).contains(&h)),
+        ] {
+            let _ = corpo.class_list().toggle_with_force(classe, liga && !n);
+        }
     });
 }
 

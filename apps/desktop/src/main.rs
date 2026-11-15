@@ -417,12 +417,12 @@ fn coletor_evento(window: Webview, msg: Value, estado: State<'_, Estado>) {
     let tipo = msg.get("t").and_then(Value::as_str);
     if matches!(
         tipo,
-        Some("welcome" | "estado" | "hud" | "pvp" | "treino" | "pvpTabela" | "perfil")
+        Some("welcome" | "estado" | "hud" | "pvp" | "treino" | "pvpTabela" | "perfil" | "pvpMensal")
     ) {
         estado.relay.receber_conta(&conta, &msg, agora);
     }
     // Tabela e perfis do topo do PvP só servem ao treino (não viram evento: têm nicks).
-    if matches!(tipo, Some("pvpTabela" | "perfil")) {
+    if matches!(tipo, Some("pvpTabela" | "perfil" | "pvpMensal")) {
         return;
     }
     if tipo == Some("estado") {

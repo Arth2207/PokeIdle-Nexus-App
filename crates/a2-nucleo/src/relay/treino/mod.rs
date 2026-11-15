@@ -39,6 +39,8 @@ pub struct Treino {
     meta_em: HashMap<i64, i64>,
     /// faixa → meta recebido.
     metas: HashMap<i64, Value>,
+    /// conta → quando a sugestão do servidor foi pedida.
+    sugestao_em: HashMap<String, i64>,
     /// Revezamento: a próxima conta a pedir.
     vez: usize,
     comum: Comum,
@@ -55,6 +57,7 @@ impl Treino {
             contas: BTreeMap::new(),
             meta_em: HashMap::new(),
             metas: HashMap::new(),
+            sugestao_em: HashMap::new(),
             vez: 0,
             comum: Comum::default(),
             ranking: Ranking::default(),
@@ -126,6 +129,20 @@ impl Fluxo for Treino {
         if !faixas.is_empty() {
             faixas.push(META_GERAL);
         }
+        // A sugestão de time e casas de cada conta (o servidor mede o meta nas partidas).
+        if let Some(c) = self
+            .contas
+            .keys()
+            .find(|c| {
+                self.sugestao_em
+                    .get(*c)
+                    .is_none_or(|t| agora - t >= META_MS)
+            })
+            .cloned()
+        {
+            self.sugestao_em.insert(c.clone(), agora);
+            return Some(format!("/api/pvp/sugestao?nick={c}"));
+        }
         let faixa = faixas
             .into_iter()
             .find(|f| self.meta_em.get(f).is_none_or(|t| agora - t >= META_MS))?;
@@ -138,6 +155,19 @@ impl Fluxo for Treino {
     }
 
     fn resposta(&mut self, rota: &str, v: &Value, _agora: i64) {
+        if let Some(nick) = rota.strip_prefix("/api/pvp/sugestao?nick=") {
+            let f: Formacao = v
+                .pointer("/sugestao/casas")
+                .and_then(Value::as_object)
+                .into_iter()
+                .flatten()
+                .filter_map(|(k, c)| Some((k.parse().ok()?, c.as_i64()?)))
+                .collect();
+            if let Some(c) = self.contas.get_mut(nick) {
+                c.definir_sugerida(f);
+            }
+            return;
+        }
         if !rota.starts_with("/api/pvp/meta") {
             return;
         }

@@ -34,6 +34,8 @@ pub const TIPOS: &[&str] = &[
     "mercado.extrato",
     // Pontos das posições 10, 100 e 500 do ranking do PvP (A2, `relay/cortes.rs`), de hora em hora.
     "pvp.cortes",
+    // Ranking mensal do PvP por conta: pontos, posição e cortes, sem nicks (A2, `relay/cortes.rs`).
+    "pvp.mensal",
 ];
 
 /// Campos que não entram na chave: o instante e o tipo já vão separados.

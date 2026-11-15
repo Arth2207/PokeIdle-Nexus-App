@@ -430,7 +430,8 @@ img.forma-brave { filter:drop-shadow(0 0 10px rgba(56,132,255,.9)) saturate(1.15
 .casa-pvp:hover .balao { display:block; }
 .tabuleiro-pvp .frente { position:absolute; top:6px; left:0; right:0; text-align:center; font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--texto-3); }
 .mini .frente { display:none; }
-.formacao { display:flex; flex-direction:column; align-items:center; }
+.formacao { display:flex; flex-direction:column; align-items:center; gap:6px; }
+.formacoes { display:flex; flex-wrap:wrap; justify-content:center; gap:24px; }
 .elo-faixa { display:flex; flex-wrap:wrap; gap:18px; align-items:center; padding:18px 22px; margin-bottom:16px; border-radius:22px; background:linear-gradient(120deg, color-mix(in srgb, var(--tier) 30%, transparent), var(--cartao)); border:1px solid var(--vidro-borda); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); }
 .elo-selo { width:96px; height:96px; border-radius:50%; display:flex; flex-direction:column; align-items:center; justify-content:center; background:radial-gradient(circle at 35% 30%, #fff8, var(--tier)); box-shadow:0 0 0 4px rgba(255,255,255,.5), 0 0 30px var(--tier); color:#16181C; font:800 13px "Space Grotesk", Inter, sans-serif; letter-spacing:.08em; animation:pulsar 3s ease-in-out infinite; }
 .elo-selo b { font-size:22px; }

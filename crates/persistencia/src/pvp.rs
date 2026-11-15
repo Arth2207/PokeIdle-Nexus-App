@@ -201,6 +201,68 @@ fn juntar_cortes(mut linhas: Vec<Value>) -> Value {
     serde_json::json!({"atual": sem(semanas.first()), "anterior": sem(semanas.get(1))})
 }
 
+/// Nick do jogo (minúsculo) de uma conta pelo rótulo do app (`alllphha` → `alllphhha`), pela
+/// janela do motor. Sem janela com esse rótulo, `None` (o nome já é o nick).
+pub async fn nick_do_jogo(db: &PgPool, nome: &str) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT lower(janela->>'nick') FROM nexus.motor_janela
+          WHERE lower(conta) = lower($1) AND coalesce(janela->>'nick', '') <> ''",
+    )
+    .bind(nome)
+    .fetch_optional(db)
+    .await
+}
+
+/// Linhas do mensal (eventos `pvp.mensal` do app e capturas `pvpMensal` da Descoberta) no
+/// mesmo formato: `{mes, fimEm, eu, faixas, total, cortes, em}`, das mais novas.
+const SQL_MENSAL: &str = "
+    SELECT conta, x FROM (
+      SELECT conta, em, jsonb_build_object('mes', dados->>'mes', 'fimEm', dados->'fimEm',
+               'eu', dados->'eu', 'faixas', dados->'faixas', 'total', dados->'total',
+               'cortes', coalesce(dados->'cortes', '{}'), 'em', em) x
+        FROM nexus.evento WHERE tipo = 'pvp.mensal'
+      UNION ALL
+      SELECT conta, em, jsonb_build_object('mes', d->>'mes', 'fimEm', d->'fimEm', 'eu', d->'eu',
+               'faixas', d->'faixas', 'total', d->'tabela'->'total',
+               'cortes', (SELECT coalesce(jsonb_object_agg(l->>0, l->3), '{}')
+                            FROM jsonb_array_elements(coalesce(d->'tabela'->'linhas', '[]')) l
+                           WHERE (l->>0)::int IN (10, 100, 500, 2000)), 'em', em)
+        FROM (SELECT conta, em, dados->'dados' d FROM nexus.evento
+               WHERE tipo = 'ws.bruto' AND dados->>'tipo' = 'pvpMensal') b
+    ) u";
+
+/// Ranking mensal da conta (rótulo ou nick) e os cortes do mês, juntando todas as contas:
+/// `{eu: {...} | null, cortes: {atual: {semana: mês, total, cortes}, anterior}}`.
+pub async fn mensal_pvp(db: &PgPool, conta: &str) -> Result<Value, sqlx::Error> {
+    // SAFETY: SQL_MENSAL é constante; a conta vai como parâmetro ($1).
+    let eu: Option<(String, Value)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "{SQL_MENSAL} WHERE conta IN (SELECT $1 UNION SELECT conta FROM nexus.motor_janela
+                                       WHERE lower(janela->>'nick') = lower($1))
+                        AND x->'eu' IS NOT NULL AND x->'eu' <> 'null'
+          ORDER BY x->>'em' DESC LIMIT 1"
+    )))
+    .bind(conta)
+    .fetch_optional(db)
+    .await?;
+    let linhas: Vec<(String, Value)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "{SQL_MENSAL} ORDER BY x->>'em' DESC LIMIT 80"
+    )))
+    .fetch_all(db)
+    .await?;
+    // O mês faz o papel da semana na junção dos cortes.
+    let como_semana: Vec<Value> = linhas
+        .into_iter()
+        .map(|(_, mut x)| {
+            if let Value::Object(o) = &mut x {
+                let mes = o.get("mes").cloned().unwrap_or(Value::Null);
+                o.insert("semana".into(), mes);
+            }
+            x
+        })
+        .collect();
+    Ok(serde_json::json!({"eu": eu.map(|x| x.1), "cortes": juntar_cortes(como_semana)}))
+}
+
 #[cfg(test)]
 mod testes_cortes {
     use super::*;

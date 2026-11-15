@@ -43,6 +43,14 @@ fn dias(p: &HashMap<String, String>, padrao: i64) -> i64 {
 }
 
 /// O nick pedido, respeitando o token preso a uma conta.
+/// O nick do jogo quando veio o rótulo da conta no app (as equipes guardam pelo nick).
+async fn do_jogo(estado: &Estado, nick: String) -> String {
+    match persistencia::pvp::nick_do_jogo(&estado.db, &nick).await {
+        Ok(Some(n)) => n,
+        _ => nick,
+    }
+}
+
 fn nick(
     cliente: Option<&Extension<Cliente>>,
     p: &HashMap<String, String>,
@@ -91,6 +99,7 @@ pub async fn sugestao_pvp(
         Ok(n) => n,
         Err((st, msg)) => return erro(st, msg),
     };
+    let nick = do_jogo(&estado, nick).await;
     let atual = match persistencia::pvp::estado_pvp(&estado.db, &nick).await {
         Ok(v) => v.map(|x| x.1),
         Err(e) => return banco(&e),
@@ -151,6 +160,7 @@ pub async fn treinos(
         Ok(n) => n,
         Err((st, msg)) => return erro(st, msg),
     };
+    let nick = do_jogo(&estado, nick).await;
     match persistencia::pvp::treinos(&estado.db, &nick, 50).await {
         Ok(v) => Json(json!({
             "nick": nick,
@@ -213,6 +223,7 @@ pub async fn colecao(
         Ok(n) => n,
         Err((st, msg)) => return erro(st, msg),
     };
+    let nick = do_jogo(&estado, nick).await;
     let motor = estado.equipes.motor().await.ok();
     match estado.equipes.estado_fresco().await {
         Ok(e) => {
@@ -263,6 +274,7 @@ pub async fn painel(
             "atual": atual,
             "semana": persistencia::pvp::semana_pvp(&estado.db, nick).await?,
             "cortes": persistencia::pvp::cortes_pvp(&estado.db).await?,
+            "mensal": persistencia::pvp::mensal_pvp(&estado.db, nick).await?,
         }))
     }
     .await;

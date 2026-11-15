@@ -60,6 +60,8 @@ pub struct TreinoConta {
     notas: BTreeMap<String, (Formacao, BTreeMap<String, Nota>)>,
     rodada: u64,
     aplicar: Option<Formacao>,
+    /// Formação sugerida pelo servidor (`/api/pvp/sugestao`): a primeira candidata a testar.
+    sugerida: Option<Formacao>,
     mudou: bool,
 }
 
@@ -193,6 +195,11 @@ impl TreinoConta {
         self.acima = metas;
     }
 
+    /// Formação sugerida pelo servidor (time e casas); pode trocar pokémon do time.
+    pub fn definir_sugerida(&mut self, f: Formacao) {
+        self.sugerida = (f.len() == self.time.len() && !f.is_empty()).then_some(f);
+    }
+
     /// Algo mudou desde o último [`TreinoConta::notas_json`]?
     pub fn mudou(&mut self) -> bool {
         std::mem::take(&mut self.mudou)
@@ -324,13 +331,22 @@ impl TreinoConta {
         if let Some(m) = melhor.as_ref().filter(|m| !lutou(m)) {
             return m.clone();
         }
+        // A sugestão do servidor (meta medido nas partidas) é testada contra cada adversário.
+        if let Some(sg) = self
+            .sugerida
+            .as_ref()
+            .filter(|sg| **sg != self.atual && !lutou(sg))
+        {
+            return sg.clone();
+        }
         let base = melhor.unwrap_or_else(|| self.atual.clone());
-        if self.time.is_empty() {
+        let ids: Vec<i64> = base.keys().copied().collect();
+        if ids.is_empty() {
             return base;
         }
         // Muda um pokémon (revezando) para uma casa livre do alcance dele.
-        let i = (self.rodada as usize) % self.time.len();
-        let id = self.time[i];
+        let i = (self.rodada as usize) % ids.len();
+        let id = ids[i];
         let ocupadas: Vec<i64> = base
             .iter()
             .filter(|(k, _)| **k != id)
@@ -344,7 +360,7 @@ impl TreinoConta {
         let opcoes = comum.ordenar(self.especie_de.get(&id).copied(), opcoes);
         let mut nova = base.clone();
         if !opcoes.is_empty() {
-            let pos = (self.rodada / self.time.len() as u64) as usize % opcoes.len().min(4);
+            let pos = (self.rodada / ids.len() as u64) as usize % opcoes.len().min(4);
             nova.insert(id, opcoes[pos]);
         }
         nova
@@ -433,7 +449,9 @@ impl TreinoConta {
             return None;
         }
         if let Some(f) = self.aplicar.take() {
+            // A formação vencedora pode trazer outro time (sugestão do servidor): salva os dois.
             self.atual = f.clone();
+            self.time = f.keys().copied().collect();
             return Some(json!({"t": "pvp.time.salvar", "casas": f, "pokemonIds": self.time}));
         }
         if self
@@ -513,5 +531,31 @@ mod testes {
         assert_eq!(nota_da_luta(&r), Some(1.25));
         let perdeu = json!({"venceuA": true, "placar": [{"lado": 1, "dano": 300}, {"lado": 2, "dano": 100}]});
         assert_eq!(nota_da_luta(&perdeu), Some(-0.25));
+    }
+
+    #[test]
+    fn sugestao_do_servidor_e_a_primeira_candidata() {
+        let mut c = TreinoConta::nova();
+        c.time = vec![1, 2];
+        c.atual = Formacao::from([(1, 2), (2, 17)]);
+        let sg = Formacao::from([(1, 3), (9, 18)]);
+        c.definir_sugerida(sg.clone());
+        let comum = Comum::default();
+        // Contra um adversário novo, a atual luta primeiro (é a régua).
+        assert_eq!(c.candidata(&comum, "6-9"), c.atual);
+        c.registrar(c.atual.clone(), "6-9".into(), 0.4);
+        assert_eq!(
+            c.candidata(&comum, "6-9"),
+            sg,
+            "depois, a sugestão (com outro pokémon)"
+        );
+        // Vence a atual em dois adversários com folga: aplica, trocando o time.
+        c.registrar(sg.clone(), "6-9".into(), 1.2);
+        c.registrar(c.atual.clone(), "3-3".into(), 0.2);
+        c.registrar(sg.clone(), "3-3".into(), 1.0);
+        c.registrar(sg.clone(), "3-3".into(), 1.1);
+        let p = c.pedir(0, &comum).unwrap_or_default();
+        assert_eq!(p["t"], "pvp.time.salvar");
+        assert_eq!(p["pokemonIds"], json!([1, 9]));
     }
 }

@@ -119,6 +119,101 @@ fn cor_tier(t: &str) -> &'static str {
     }
 }
 
+/// Corte do mensal: quanto falta, se chega antes do fim do mês e o prêmio da faixa.
+fn cartao_corte_mes(
+    rotulo: &'static str,
+    pontos: f64,
+    corte: Option<f64>,
+    premio: Option<f64>,
+    pp: Option<f64>,
+    ph: f64,
+    horas_fim: f64,
+) -> impl IntoView {
+    let pct = corte.map_or(0.0, |a| (pontos / a.max(1.0) * 100.0).clamp(0.0, 100.0));
+    let prev = corte.and_then(|a| previsao(pontos, a, pp.unwrap_or(0.0), ph));
+    let falta = corte.map(|a| (a - pontos).max(0.0));
+    let largura = format!("width:{pct:.1}%");
+    view! {
+        <div class="corte">
+            <div class="corte-t">{rotulo}</div>
+            <div class="corte-v">{corte.map_or("—".into(), |a| format!("{} pts", inteiro(a)))}</div>
+            <div class="trilho-corte"><span style=largura></span></div>
+            <div class="dica">{match falta { Some(f) if f <= 0.0 => "Você já está acima deste corte.".to_owned(), Some(f) => format!("Faltam {} pontos", inteiro(f)), None => "Corte ainda não lido.".into() }}</div>
+            <div class="corte-prev">{match (falta, prev) {
+                (Some(f), _) if f <= 0.0 => "✓".to_owned(),
+                (Some(_), Some((p, h))) if h <= horas_fim => format!("≈ {} partidas · chega {}", inteiro(p), chegada(h)),
+                (Some(_), Some((p, _))) => format!("Não chega até o fim do mês no ritmo atual (≈ {} partidas).", inteiro(p)),
+                (Some(_), None) => "No ritmo atual não sobe: precisa ganhar mais do que perde.".into(),
+                _ => String::new(),
+            }}</div>
+            {premio.map(|g| view! { <div class="dica">{format!("Prêmio da faixa: {} gemas por posição", inteiro(g))}</div> })}
+        </div>
+    }
+}
+
+const MODOS: &[&str] = &["Semanal", "Mensal"];
+
+/// O ranking mensal: os números da conta, os cortes do mês e as faixas de prêmio.
+fn mensal(p: &Value) -> AnyView {
+    let m = &p["mensal"];
+    let linha = &m["eu"];
+    let eu = &linha["eu"];
+    if eu.is_null() {
+        return view! { <div class="vazio">"Ainda sem o ranking mensal desta conta: o app novo lê de hora em hora (ou abra o Top mensal no jogo)."</div> }.into_any();
+    }
+    let pontos = num(eu, "pontos").unwrap_or(0.0);
+    let (v, d) = (
+        num(eu, "vitorias").unwrap_or(0.0),
+        num(eu, "derrotas").unwrap_or(0.0),
+    );
+    let wr = if v + d > 0.0 { v / (v + d) } else { 0.0 };
+    let s = &p["semana"];
+    let pp = por_partida(
+        num(s, "vitorias").unwrap_or(0.0),
+        num(s, "derrotas").unwrap_or(0.0),
+        num(s, "ganho").unwrap_or(0.0),
+        num(s, "perda").unwrap_or(0.0),
+    );
+    let ph = num(s, "ultimas6h").unwrap_or(0.0) / 6.0;
+    let horas_fim =
+        num(linha, "fimEm").map_or(0.0, |f| ((f - js_sys::Date::now()) / 3.6e6).max(0.0));
+    let corte = |pos: &str| {
+        m.pointer(&format!("/cortes/atual/cortes/{pos}"))
+            .and_then(Value::as_f64)
+    };
+    let premio = |ate: f64| {
+        lista(linha, "faixas")
+            .iter()
+            .find(|f| num(f, "ate") == Some(ate))
+            .and_then(|f| num(f, "porPosicao"))
+    };
+    let validas = num(eu, "validas").unwrap_or(0.0);
+    let total = m
+        .pointer("/cortes/atual/total")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    view! {
+        <div class="elo-faixa" style="--tier:#FFC21A">
+            <div class="elo-selo"><span>"MÊS"</span><b>{txt(linha, "mes").get(5..).unwrap_or("").to_owned()}</b></div>
+            <div class="elo-num"><b>{inteiro(pontos)}</b><span>"pontos no mês"</span></div>
+            <div class="elo-num"><b>{num(eu, "pos").map_or("—".into(), |x| format!("#{}", inteiro(x)))}</b><span>{format!("posição de {}", inteiro(total))}</span></div>
+            <div class="elo-num bom"><b>{inteiro(v)}</b><span>"vitórias no mês"</span></div>
+            <div class="elo-num ruim"><b>{inteiro(d)}</b><span>"derrotas no mês"</span></div>
+            <div class="elo-num"><b>{format!("{:.0}%", wr * 100.0)}</b><span>"taxa de vitória"</span></div>
+            <div class="elo-num"><b>{format!("{:.0} d", horas_fim / 24.0)}</b><span>"até o fim do mês"</span></div>
+        </div>
+        {(validas < 10.0).then(|| view! { <div class="dica">{format!("Precisa de 10 partidas válidas para concorrer ({} até agora).", inteiro(validas))}</div> })}
+        <div class="secao">"Rumo ao topo do mês"</div>
+        <div class="cortes">
+            {cartao_corte_mes("Top 2000", pontos, corte("2000"), premio(2000.0), pp, ph, horas_fim)}
+            {cartao_corte_mes("Top 500", pontos, corte("500"), premio(500.0), pp, ph, horas_fim)}
+            {cartao_corte_mes("Top 100", pontos, corte("100"), premio(100.0), pp, ph, horas_fim)}
+            {cartao_corte_mes("Top 10", pontos, corte("10"), premio(100.0), pp, ph, horas_fim)}
+        </div>
+        <div class="dica">"Cortes de agora (sobem até o fim do mês). Previsão pelo saldo por partida e pelo ritmo da semana."</div>
+    }.into_any()
+}
+
 /// Um corte do ranking (top N): quanto falta e quando chega no ritmo atual.
 fn cartao_corte(
     rotulo: &'static str,
@@ -158,8 +253,14 @@ pub fn aba_pvp(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
     let sug = recurso(e, versao, move || {
         nick_ativo(e).map(|n| format!("/api/pvp/sugestao?nick={n}"))
     });
+    let col = recurso(e, versao, move || {
+        nick_ativo(e).map(|n| format!("/api/pvp/colecao?nick={n}"))
+    });
+    let modo = RwSignal::new("Semanal");
     view! {
-        {move || carregado(painel.get(), move |p| {
+        <crate::comp::Abas opcoes=MODOS ativa=modo />
+        {move || (modo.get() == "Mensal").then(|| carregado(painel.get(), |p| mensal(&p)))}
+        {move || (modo.get() == "Semanal").then(|| carregado(painel.get(), move |p| {
             let a = p.get("atual").cloned().unwrap_or(Value::Null);
             let s = p.get("semana").cloned().unwrap_or(Value::Null);
             let tier = txt(&a, "tier");
@@ -194,7 +295,7 @@ pub fn aba_pvp(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
                 </div>
                 <div class="dica">"Meta de cada corte: os pontos dessa posição no fim da semana passada (o ranking zera todo domingo). Previsão pelo saldo por partida e pelo ritmo de agora."</div>
             }
-        })}
+        }))}
         {move || carregado(sug.get(), move |p| {
             let s = p.get("sugestao").cloned().unwrap_or(Value::Null);
             let faixa = num(&s, "faixa");
@@ -208,12 +309,25 @@ pub fn aba_pvp(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
                 nome: txt(x, "nome"),
                 balao: format!("Nv {} · alcance {} · {}", inteiro(num(x, "nivel").unwrap_or(0.0)), inteiro(num(x, "alcance").unwrap_or(0.0)), txt(x, "motivo")),
             }).collect();
+            // A formação no jogo agora (time e casas do último estado do PvP).
+            let colecao: Vec<Value> = match col.get() { Some(Some(Ok(c))) => lista(&c, "pokemons").to_vec(), _ => Vec::new() };
+            let agora: Vec<Peca> = p.pointer("/atual/casas").and_then(Value::as_object).into_iter().flatten().filter_map(|(id, casa)| {
+                let ficha = colecao.iter().find(|x| x.get("id").is_some_and(|v| v.to_string().trim_matches('"') == id));
+                Some(Peca {
+                    casa: casa.as_i64()?,
+                    especie: ficha.and_then(|f| num(f, "dex").or_else(|| num(f, "speciesId"))).map_or(0, |x| super::escaneamento::especie_da_imagem(x as i64)),
+                    nome: ficha.map(|f| txt(f, "nome")).unwrap_or_default(),
+                    balao: ficha.map(|f| format!("Nv {}", inteiro(num(f, "level").unwrap_or(0.0)))).unwrap_or_default(),
+                })
+            }).collect();
+            let iguais = { let mut a: Vec<i64> = agora.iter().map(|x| x.casa).collect(); let mut b: Vec<i64> = pecas.iter().map(|x| x.casa).collect(); a.sort_unstable(); b.sort_unstable(); a == b };
             view! {
-                <div class="secao">"Formação sugerida"</div>
-                <div class="formacao">
-                    {tabuleiro(pecas, false)}
-                    <div class="dica" style="text-align:center">{format!("Passe o mouse em cada pokémon para ver o porquê · medido em {} partidas do meta", inteiro(num(&s, "partidas_no_meta").unwrap_or(0.0)))}</div>
+                <div class="secao">"Formação"</div>
+                <div class="formacoes">
+                    <div class="formacao"><div class="caixa-t">"No jogo agora"</div>{tabuleiro(agora, false)}</div>
+                    <div class="formacao"><div class="caixa-t">"Sugerida"</div>{tabuleiro(pecas, false)}</div>
                 </div>
+                <div class="dica" style="text-align:center">{if iguais { "A conta já está na formação sugerida.".to_owned() } else { format!("O treino testa a sugerida contra os mesmos adversários da atual e aplica no jogo se vencer com folga · meta de {} partidas · passe o mouse em cada pokémon para ver o porquê", inteiro(num(&s, "partidas_no_meta").unwrap_or(0.0))) }}</div>
                 <div class="secao">"Meta da faixa"</div>
                 {move || carregado(meta.get(), |m| {
                     let especies: Vec<Value> = lista(&m, "especies").iter().filter(|x| num(x, "usos").unwrap_or(0.0) >= 20.0).take(12).cloned().collect();
