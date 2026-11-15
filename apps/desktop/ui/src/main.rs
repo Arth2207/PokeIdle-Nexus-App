@@ -1,6 +1,7 @@
 //! Tela do app A2 em Leptos (CSR). Fala com o Tauri pela ponte global `window.__TAURI__`.
 mod comp;
 mod dados;
+mod diario;
 mod globais;
 mod telas;
 mod tema;
@@ -889,6 +890,19 @@ fn App() -> impl IntoView {
     let pedido = web_sys::window()
         .and_then(|j| j.location().search().ok())
         .unwrap_or_default();
+    // Prévia do "Diário de expedição": só em /previa/ (ou com ?diario=1).
+    let previa = web_sys::window()
+        .and_then(|j| j.location().pathname().ok())
+        .is_some_and(|p| p.starts_with("/previa"))
+        || pedido.contains("diario=1");
+    if previa {
+        if let Some(b) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.body())
+        {
+            let _ = b.class_list().add_1("tema-diario");
+        }
+    }
     let tema = RwSignal::new(if pedido.contains("tema=claro") {
         "Claro".to_owned()
     } else if pedido.contains("tema=escuro") {
@@ -1010,7 +1024,8 @@ fn App() -> impl IntoView {
     });
 
     view! {
-        <style>{CSS}{comp::CSS}{tema::CSS}</style>
+        <style>{CSS}{comp::CSS}{tema::CSS}{diario::CSS}</style>
+        <div style="position:absolute;width:0;height:0;overflow:hidden" inner_html=diario::FILTRO></div>
         <div class="nevoa"></div>
         // Atmosfera solarpunk: raios de sol e pólen de dia, vaga-lumes à noite (só CSS).
         <div class="atmosfera" aria-hidden="true">

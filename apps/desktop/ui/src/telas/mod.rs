@@ -60,6 +60,7 @@ pub fn cabecalho(
     view! {
         <div class="resumo">
             <h2>{titulo}</h2>
+            <span class="carimbo" aria-hidden="true">{titulo}</span>
             <button class="btn" on:click=move |_| versao.update(|v| *v += 1)>"Atualizar"</button>
         </div>
         <div class="pergunta">{pergunta}</div>

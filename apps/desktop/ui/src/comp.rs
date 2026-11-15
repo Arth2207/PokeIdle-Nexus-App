@@ -305,6 +305,7 @@ pub fn carregado<V: IntoView + 'static>(
 }
 
 pub const CSS: &str = r#"
+.carimbo { display:none; }
 .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin-bottom:18px; }
 .kpi { position:relative; overflow:hidden; background:linear-gradient(140deg, rgba(255,255,255,.66), rgba(255,255,255,.34)); backdrop-filter:blur(16px) saturate(1.3); -webkit-backdrop-filter:blur(16px) saturate(1.3); box-shadow:0 10px 30px rgba(22,24,28,.10), inset 0 1px 0 rgba(255,255,255,.85); border:1px solid var(--vidro-borda); border-radius:20px; padding:16px 18px 14px; transition:transform .18s, box-shadow .18s; }
 .kpi:hover { transform:translateY(-2px); box-shadow:0 16px 40px rgba(22,24,28,.14), inset 0 1px 0 rgba(255,255,255,.85); }
