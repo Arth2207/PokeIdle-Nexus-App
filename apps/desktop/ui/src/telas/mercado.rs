@@ -177,9 +177,16 @@ fn aba_pvp(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
     view! {
         {move || carregado(sug.get(), move |sg| {
             let faixa = num(&sg["sugestao"], "faixa");
-            let meta = recurso(e, versao, move || Some(match faixa { Some(f) => format!("/api/pvp/meta?faixa={f}"), None => "/api/pvp/meta".into() }));
+            let meta_faixa = recurso(e, versao, move || Some(match faixa { Some(f) => format!("/api/pvp/meta?faixa={f}"), None => "/api/pvp/meta".into() }));
+            let meta_geral = recurso(e, versao, || Some("/api/pvp/meta".into()));
+            // Faixa com poucas partidas (ex.: ranking zerado no domingo): vale o meta geral.
+            let meta = move || match meta_faixa.get() {
+                Some(Some(Ok(m))) if num(&m, "partidas").unwrap_or(0.0) >= 300.0 => Some(Some(Ok(m))),
+                Some(Some(Ok(_))) => meta_geral.get(),
+                outro => outro,
+            };
             view! {
-                {move || carregado(meta.get(), move |m| carregado(of.get(), move |o| {
+                {move || carregado(meta(), move |m| carregado(of.get(), move |o| {
                     let minha: Vec<Value> = match col.get() { Some(Some(Ok(c))) => lista(&c, "pokemons").to_vec(), _ => Vec::new() };
                     let nivel_min = 150.0;
                     let mut l: Vec<(f64, Value, Value, Option<Value>)> = lista(&o, "ofertas").iter().filter_map(|x| {
@@ -188,7 +195,7 @@ fn aba_pvp(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
                         let usos = num(&me, "usos").unwrap_or(0.0);
                         let fm = forca_meta(num(&me, "vitorias").unwrap_or(0.0), usos);
                         let f = &x["ficha"];
-                        if usos < 15.0 || fm < 0.47 || num(f, "level").unwrap_or(0.0) < nivel_min {
+                        if usos < 8.0 || fm < 0.47 || num(f, "level").unwrap_or(0.0) < nivel_min {
                             return None;
                         }
                         let ql = qualidade(num(f, "ivTotal").unwrap_or(0.0), num(f, "quality").unwrap_or(0.0), num(f, "potencia").unwrap_or(0.0));
@@ -203,9 +210,13 @@ fn aba_pvp(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
                         Some((nota, x.clone(), me, meu))
                     }).collect();
                     l.sort_by(|a, b| b.0.total_cmp(&a.0));
+                    // No máximo 2 ofertas por espécie: variedade para montar o time.
+                    let mut vistas: std::collections::HashMap<String, usize> = Default::default();
+                    l.retain(|x| { let c = vistas.entry(txt(&x.1, "nome")).or_default(); *c += 1; *c <= 2 });
                     let n = l.len();
+                    let base = format!("{} partidas", inteiro(num(&m, "partidas").unwrap_or(0.0)));
                     view! {
-                        <div class="dica">{format!("{n} ofertas boas no meta da sua faixa ({}), do nível {nivel_min} para cima. Ordem: força no meta × qualidade × desconto, priorizando o que melhora sua coleção.", faixa.map_or("todas as faixas".into(), |f| format!("{} pontos", inteiro(f))))}</div>
+                        <div class="dica">{format!("{n} ofertas boas no meta ({base}), do nível {nivel_min} para cima, até 2 por espécie. Ordem: força no meta × qualidade × desconto, priorizando o que melhora sua coleção.")}</div>
                         <div class="ofertas-pvp">
                             {l.into_iter().take(30).map(|(_, x, me, meu)| {
                                 let f = x["ficha"].clone();
