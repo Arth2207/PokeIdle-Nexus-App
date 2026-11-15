@@ -32,6 +32,8 @@ pub const TIPOS: &[&str] = &[
     "diario",
     // Vendas e compras do Mercado de cada conta (A2, `relay/extrato.rs`), a cada 30 min.
     "mercado.extrato",
+    // Pontos das posições 10, 100 e 500 do ranking do PvP (A2, `relay/cortes.rs`), de hora em hora.
+    "pvp.cortes",
 ];
 
 /// Campos que não entram na chave: o instante e o tipo já vão separados.

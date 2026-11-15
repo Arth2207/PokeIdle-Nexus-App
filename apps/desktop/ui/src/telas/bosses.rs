@@ -314,8 +314,15 @@ pub fn aba(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
                 </div>
             }
         })}
-        {move || (!escolhido.get().is_empty()).then(|| carregado(plano.get(), detalhe))}
-        {move || (!escolhido.get().is_empty()).then(|| laboratorio(e, versao, escolhido))}
+        {move || (!escolhido.get().is_empty()).then(|| view! {
+            <div class="sobre janela-fundo" on:click=move |_| escolhido.set(String::new())>
+                <div class="janela vidro" on:click=|ev| ev.stop_propagation()>
+                    <button class="btn fechar" title="Fechar" on:click=move |_| escolhido.set(String::new())>"✕"</button>
+                    {move || carregado(plano.get(), detalhe)}
+                    {laboratorio(e, versao, escolhido)}
+                </div>
+            </div>
+        })}
     }
 }
 

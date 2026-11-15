@@ -59,7 +59,8 @@ h1, h2 { font-family:"Space Grotesk", Inter, system-ui, sans-serif; margin:0; }
 .pilula select { border:0; background:transparent; font:inherit; font-weight:600; color:var(--texto); outline:none; }
 .conteudo { flex:1; padding:24px 28px; overflow:auto; }
 /* Painel do conteúdo quase transparente: a paisagem aparece entre os cartões (mockup 01). */
-.conteudo.vidro { background:rgba(255,255,255,.14); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); box-shadow:none; }
+/* Sem backdrop-filter aqui: ele prende os elementos fixed (janelas) dentro do painel rolado. */
+.conteudo.vidro { background:rgba(255,255,255,.14); backdrop-filter:none; -webkit-backdrop-filter:none; box-shadow:none; }
 h2 { font-size:15px; letter-spacing:.12em; text-transform:uppercase; margin-bottom:16px; }
 .pergunta { color:var(--texto-2); margin:-8px 0 16px; }
 .campo { margin:14px 0 4px; font-size:11px; letter-spacing:.12em; text-transform:uppercase; font-weight:700; color:var(--texto-3); display:block; }

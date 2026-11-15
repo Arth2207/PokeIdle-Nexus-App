@@ -67,6 +67,7 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/pvp/meta", get(pvp::meta_pvp))
         .route("/api/pvp/sugestao", get(pvp::sugestao_pvp))
         .route("/api/pvp/treinos", get(pvp::treinos))
+        .route("/api/pvp/painel", get(pvp::painel))
         .route("/api/shiny/servidor", get(pvp::shiny_servidor))
         .route("/api/boss/fichas", get(pvp::fichas_raid))
         .route("/api/comandos/fila", get(pvp::fila_comandos))

@@ -3,6 +3,7 @@
 //! ritmo do jogo. Plano em `docs/a2-relay.md`.
 
 pub mod contas;
+pub mod cortes;
 pub mod extrato;
 pub mod mercado;
 pub mod raid;
@@ -93,6 +94,7 @@ impl Relay {
             Box::new(raid::Raid::novo()),
             Box::new(treino::Treino::novo(dono, oficial && aprender)),
             Box::new(extrato::Extrato::novo(oficial)),
+            Box::new(cortes::Cortes::novo(oficial)),
         ])
     }
 

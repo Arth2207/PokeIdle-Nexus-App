@@ -247,3 +247,34 @@ pub async fn colecao(
         }
     }
 }
+
+/// `GET /api/pvp/painel?nick=`: elo atual, a semana (vitórias, derrotas, ganho e perda médios,
+/// ritmo) e os cortes do ranking (posições 10, 100 e 500) desta semana e da anterior.
+pub async fn painel(
+    State(estado): State<Estado>,
+    Query(p): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let nick = p.get("nick").map(String::as_str).unwrap_or_default();
+    let r = async {
+        let atual = persistencia::pvp::estado_pvp(&estado.db, nick)
+            .await?
+            .map(|x| x.1);
+        Ok::<_, sqlx::Error>(serde_json::json!({
+            "atual": atual,
+            "semana": persistencia::pvp::semana_pvp(&estado.db, nick).await?,
+            "cortes": persistencia::pvp::cortes_pvp(&estado.db).await?,
+        }))
+    }
+    .await;
+    match r {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => {
+            tracing::warn!(erro = %e, "painel do pvp");
+            (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(contrato::Erro::novo("banco indisponível")),
+            )
+                .into_response()
+        }
+    }
+}

@@ -102,3 +102,121 @@ pub async fn extrato_mercado(
     .await?;
     Ok(linhas)
 }
+
+/// Partidas de PvP da conta (rótulo ou nick) na semana do ranking (desde domingo 00:00 de
+/// Brasília): vitórias, derrotas, ganho médio na vitória, perda média na derrota e quantas
+/// partidas nas últimas 6 h (o ritmo).
+pub async fn semana_pvp(db: &PgPool, conta: &str) -> Result<Value, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT jsonb_build_object(
+                  'vitorias', count(*) FILTER (WHERE (dados->>'venci')::boolean),
+                  'derrotas', count(*) FILTER (WHERE NOT (dados->>'venci')::boolean),
+                  'ganho', avg((dados->>'delta')::float8) FILTER (WHERE (dados->>'venci')::boolean),
+                  'perda', avg((dados->>'delta')::float8) FILTER (WHERE NOT (dados->>'venci')::boolean),
+                  'ultimas6h', count(*) FILTER (WHERE em > now() - interval '6 hours'),
+                  'desde', (extract(epoch FROM min(em)) * 1000)::bigint)
+           FROM nexus.evento
+          WHERE tipo = 'pvp.partida'
+            AND conta IN (SELECT $1 UNION SELECT conta FROM nexus.motor_janela
+                           WHERE lower(janela->>'nick') = lower($1))
+            AND em >= (date_trunc('day', now() AT TIME ZONE 'America/Sao_Paulo')
+                       - make_interval(days => extract(dow FROM now() AT TIME ZONE 'America/Sao_Paulo')::int))
+                      AT TIME ZONE 'America/Sao_Paulo'",
+    )
+    .bind(conta)
+    .fetch_one(db)
+    .await
+}
+
+/// Pontos das posições 10, 100 e 500 do ranking: os da semana atual (eventos `pvp.cortes` e
+/// tabelas vistas pela Descoberta) e os do fim da semana anterior (meta de fim de semana).
+/// `{atual: {semana, total, cortes}, anterior: {semana, cortes}}`.
+pub async fn cortes_pvp(db: &PgPool) -> Result<Value, sqlx::Error> {
+    let linhas: Vec<Value> = sqlx::query_scalar(
+        "(SELECT jsonb_build_object('semana', dados->>'semana', 'total', dados->'total',
+                                    'cortes', dados->'cortes', 'em', em)
+            FROM nexus.evento WHERE tipo = 'pvp.cortes' ORDER BY em DESC LIMIT 20)
+         UNION ALL
+         (SELECT jsonb_build_object('semana', dados->'dados'->>'semana', 'total', dados->'dados'->'total',
+                   'cortes', (SELECT coalesce(jsonb_object_agg(l->>0, l->4), '{}')
+                                FROM jsonb_array_elements(dados->'dados'->'linhas') l
+                               WHERE (l->>0)::int IN (10, 100, 500)), 'em', em)
+            FROM nexus.evento
+           WHERE tipo = 'ws.bruto' AND dados->>'tipo' = 'pvpTabela'
+             AND (dados->'dados'->>'total')::int > 0
+           ORDER BY em DESC LIMIT 40)",
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(juntar_cortes(linhas))
+}
+
+/// Junta as leituras (mais novas primeiro em cada fonte) por semana: em cada semana vale a
+/// leitura mais nova de cada posição.
+fn juntar_cortes(mut linhas: Vec<Value>) -> Value {
+    let em = |v: &Value| {
+        v.get("em")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    linhas.sort_by_key(|v| std::cmp::Reverse(em(v)));
+    let mut semanas: Vec<(String, i64, serde_json::Map<String, Value>)> = Vec::new();
+    for l in linhas {
+        let s = l
+            .get("semana")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        if s.is_empty() {
+            continue;
+        }
+        let i = match semanas.iter().position(|x| x.0 == s) {
+            Some(i) => i,
+            None => {
+                semanas.push((
+                    s,
+                    l.get("total").and_then(Value::as_i64).unwrap_or(0),
+                    Default::default(),
+                ));
+                semanas.len() - 1
+            }
+        };
+        for (p, v) in l
+            .get("cortes")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            semanas[i].2.entry(p.clone()).or_insert_with(|| v.clone());
+        }
+    }
+    semanas.sort_by(|a, b| b.0.cmp(&a.0));
+    let sem = |x: Option<&(String, i64, serde_json::Map<String, Value>)>| {
+        x.map_or(
+            Value::Null,
+            |(s, t, c)| serde_json::json!({"semana": s, "total": t, "cortes": c}),
+        )
+    };
+    serde_json::json!({"atual": sem(semanas.first()), "anterior": sem(semanas.get(1))})
+}
+
+#[cfg(test)]
+mod testes_cortes {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn cada_semana_fica_com_a_leitura_mais_nova_de_cada_posicao() {
+        let v = juntar_cortes(vec![
+            json!({"semana": "2026-11-08", "total": 1000, "cortes": {"10": 8817, "100": 8059}, "em": "2026-11-15T02:47"}),
+            json!({"semana": "2026-11-08", "total": 1000, "cortes": {"10": 8000, "500": 7000}, "em": "2026-11-14T10:00"}),
+            json!({"semana": "2026-11-15", "total": 50, "cortes": {"10": 120}, "em": "2026-11-15T04:00"}),
+        ]);
+        assert_eq!(v["atual"]["semana"], "2026-11-15");
+        assert_eq!(
+            v["anterior"]["cortes"],
+            json!({"10": 8817, "100": 8059, "500": 7000})
+        );
+    }
+}
