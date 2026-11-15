@@ -41,19 +41,23 @@ body.tarde .conteudo.vidro { background:linear-gradient(180deg, #FBD9A8, var(--p
 .vidro { background:var(--vidro); border:3px solid var(--tinta); box-shadow:var(--sombra); }
 .conteudo.vidro { background:var(--papel); border-radius:26px; position:relative; }
 .conteudo.vidro::before { display:none; }
+body.noite .conteudo.vidro { background:var(--papel); }
+/* À noite a faixa vira linogravura em negativo: traço claro sobre o papel escuro. */
+body.noite .faixa-mutirao { --tinta:#D9CBA8; }
+body.noite .faixa-mutirao .camada.tinta [class*="c-"] { fill:#2A2117; }
 
 /* Menu: preto de tinta, item ativo em sol. */
-.barra.vidro { background:var(--tinta); color:var(--kraft); border-radius:var(--corte); overflow:hidden; position:relative; }
+.barra.vidro { background:var(--tinta); color:#E9DDC0; border-radius:var(--corte); overflow:hidden; position:relative; }
 .barra .logo { font-family:"Rubik Dirt", "Alfa Slab One", serif; font-size:30px; color:var(--sol); letter-spacing:.02em; }
 .barra .logo svg { color:var(--bananeira); }
 .barra .grupo { color:rgba(233,221,192,.55); font-family:"Alfa Slab One", serif; font-weight:400; letter-spacing:.14em; }
-.barra .item { color:var(--kraft); border-radius:12px 18px 10px 16px; font-family:"Bitter", serif; font-weight:600; }
+.barra .item { color:#E9DDC0; border-radius:12px 18px 10px 16px; font-family:"Bitter", serif; font-weight:600; }
 .barra .item:hover { background:rgba(233,221,192,.1); }
 .barra .item.ativo { background:var(--sol); color:var(--tinta); box-shadow:3px 3px 0 var(--urucum); animation:none; }
 .barra::after { content:""; position:absolute; left:0; right:0; bottom:0; height:120px; pointer-events:none; opacity:.9;
   background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='224' height='120'%3E%3Cg stroke='%2317130F' stroke-width='2'%3E%3Cpath d='M0 120 V70 Q30 40 60 70 Q90 30 120 64 Q150 36 180 66 Q205 46 224 62 V120Z' fill='%232E8B4E'/%3E%3Ccircle cx='40' cy='60' r='9' fill='%23FFC21A'/%3E%3Ccircle cx='150' cy='52' r='7' fill='%23E0457B'/%3E%3Cpath d='M100 120 V84 h24 v36' fill='%23D8402A'/%3E%3C/g%3E%3C/svg%3E") bottom/224px 120px no-repeat; }
 @media (max-height: 820px) { .barra::after { display:none; } }
-.barra .rodape-conta { background:var(--papel); color:var(--tinta); border:2px solid var(--kraft); border-radius:var(--corte-2); position:relative; z-index:1; }
+.barra .rodape-conta { background:var(--papel); color:var(--texto); border:2px solid var(--kraft); border-radius:var(--corte-2); position:relative; z-index:1; }
 
 /* Topo: pílulas de papel carimbadas. */
 .pilula.vidro { background:var(--cartao); border:2.5px solid var(--tinta); box-shadow:3px 3px 0 var(--tinta); border-radius:999px; }
@@ -64,10 +68,10 @@ body.tarde .conteudo.vidro { background:linear-gradient(180deg, #FBD9A8, var(--p
 body.noite .resumo h2 { color:var(--sol); }
 .pergunta { font-family:"Bitter", serif; font-style:italic; color:var(--texto-2); font-size:16px; }
 .secao { font-family:"Alfa Slab One", serif; font-weight:400; text-transform:uppercase; letter-spacing:.08em; font-size:16px; color:var(--tinta); margin:28px 0 12px; display:flex; align-items:center; gap:12px; }
-body.noite .secao { color:var(--kraft); }
+body.noite .secao { color:var(--texto); }
 .secao::after { content:""; flex:1; height:10px; background:radial-gradient(circle at 5px 0, transparent 4px, var(--tinta) 4.5px, var(--tinta) 5.5px, transparent 6px) 0 0/10px 10px repeat-x; opacity:.7; }
 .caixa-t { font-family:"Alfa Slab One", serif; font-weight:400; text-transform:uppercase; letter-spacing:.06em; font-size:14px; color:var(--tinta); display:flex; align-items:center; gap:8px; }
-body.noite .caixa-t { color:var(--kraft); }
+body.noite .caixa-t { color:var(--texto); }
 .caixa-t::before { content:""; width:16px; height:16px; border-radius:50%; background:var(--sol); border:2px solid var(--tinta); box-shadow:none; transform:none;
   -webkit-mask:none; }
 .kpi-t { font-family:"Alfa Slab One", serif; font-weight:400; color:var(--texto-2); }
@@ -96,13 +100,14 @@ body.noite .kpi, body.noite .caixa { background:var(--cartao); box-shadow:4px 4p
 
 /* Abas como bandeirinhas de São João. */
 .seg { background:transparent; border:0; padding:0 0 10px; gap:4px; flex-wrap:wrap; }
-.seg button { border:2.5px solid var(--tinta); background:var(--cartao); color:var(--tinta); border-radius:0; clip-path:polygon(0 0, 100% 0, 100% 78%, 50% 100%, 0 78%); padding:8px 16px 16px; font-family:"Alfa Slab One", serif; font-weight:400; letter-spacing:.04em; }
+.seg button { border:2.5px solid var(--tinta); background:var(--cartao); color:var(--texto); border-radius:0; clip-path:polygon(0 0, 100% 0, 100% 78%, 50% 100%, 0 78%); padding:8px 16px 16px; font-family:"Alfa Slab One", serif; font-weight:400; letter-spacing:.04em; }
 .seg button:nth-child(5n+1).ativo { background:var(--urucum); color:#fff; }
 .seg button:nth-child(5n+2).ativo { background:var(--sol); color:var(--tinta); }
 .seg button:nth-child(5n+3).ativo { background:var(--bananeira); color:#fff; }
 .seg button:nth-child(5n+4).ativo { background:var(--azulejo); color:#fff; }
 .seg button:nth-child(5n).ativo { background:var(--hibisco); color:#fff; }
 .seg button:not(.ativo):hover { background:var(--kraft); }
+body.noite .seg button.ativo:nth-child(5n+2) { color:var(--tinta); }
 
 /* Botões carimbados e campos. */
 button.btn { background:var(--cartao); border:2.5px solid var(--tinta); color:var(--tinta); box-shadow:3px 3px 0 var(--tinta); font-family:"Bitter", serif; font-weight:700; border-radius:14px 20px 12px 18px; }
@@ -114,7 +119,7 @@ input, select.caixa, body.noite input, body.noite select.caixa { background:var(
 
 /* Tabelas como tabela de feira. */
 .tabela-caixa { border:2.5px solid var(--tinta); border-radius:var(--corte-2); background:var(--cartao); box-shadow:3px 3px 0 var(--tinta); }
-.tabela th, body.noite .tabela th { background:var(--tinta); color:var(--kraft); font-family:"Alfa Slab One", serif; font-weight:400; letter-spacing:.06em; }
+.tabela th, body.noite .tabela th { background:var(--tinta); color:#E9DDC0; font-family:"Alfa Slab One", serif; font-weight:400; letter-spacing:.06em; }
 .tabela td { border-bottom:1.5px dashed rgba(23,19,15,.25); }
 .tabela tbody tr:nth-child(even) td { background:rgba(255,194,26,.06); }
 .tabela tbody tr:hover td { background:rgba(255,194,26,.22); }
@@ -129,7 +134,7 @@ input, select.caixa, body.noite input, body.noite select.caixa { background:var(
 .barra-taxa span { background:var(--urucum); }
 .barra-taxa.bom span { background:var(--bananeira); }
 .pilula-neon { background:var(--sol); color:var(--tinta); border:2px solid var(--tinta); }
-.chip { background:var(--kraft); border:1.5px solid var(--tinta); color:var(--tinta); }
+.chip { background:var(--kraft); border:1.5px solid var(--tinta); color:var(--texto); }
 .selo { border:1.5px solid var(--tinta); }
 .selo.ok { background:var(--bananeira); color:#fff; }
 .selo.nao { background:var(--urucum); color:#fff; }
@@ -138,7 +143,7 @@ input, select.caixa, body.noite input, body.noite select.caixa { background:var(
 .tabuleiro-pvp { background:var(--cartao); border:2.5px solid var(--tinta); box-shadow:3px 3px 0 var(--tinta); }
 .casa-pvp { background:var(--kraft); border:1.5px dashed var(--tinta); }
 .casa-pvp.ocupada { background:var(--sol); border:2px solid var(--tinta); box-shadow:2px 2px 0 var(--tinta); }
-.casa-pvp .balao { background:var(--tinta); color:var(--kraft); border:2px solid var(--sol); }
+.casa-pvp .balao { background:var(--tinta); color:#E9DDC0; border:2px solid var(--sol); }
 .casa-pvp .balao b { color:var(--sol); }
 .tabuleiro-pvp.mini { width:100%; max-width:260px; grid-template-columns:repeat(8, minmax(0, 1fr)); grid-template-rows:none; grid-auto-rows:auto; }
 .tabuleiro-pvp.mini .casa-pvp { aspect-ratio:1; }
