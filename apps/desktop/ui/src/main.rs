@@ -2,7 +2,6 @@
 mod comp;
 mod dados;
 mod globais;
-mod mutirao;
 mod telas;
 mod tema;
 
@@ -1011,7 +1010,7 @@ fn App() -> impl IntoView {
     });
 
     view! {
-        <style>{CSS}{comp::CSS}{mutirao::CSS}{tema::CSS}</style>
+        <style>{CSS}{comp::CSS}{tema::CSS}</style>
         <div class="nevoa"></div>
         // Atmosfera solarpunk: raios de sol e pólen de dia, vaga-lumes à noite (só CSS).
         <div class="atmosfera" aria-hidden="true">
