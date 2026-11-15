@@ -3,6 +3,7 @@ mod comp;
 mod dados;
 mod globais;
 mod telas;
+mod tema;
 
 use js_sys::{Array, Date, Object, Reflect};
 use leptos::prelude::*;
@@ -884,7 +885,17 @@ fn App() -> impl IntoView {
         biomas: RwSignal::new(Vec::new()),
     };
     let pagina = e.pagina;
-    let tema = RwSignal::new(guardado(globais::CHAVE_TEMA));
+    // `?tema=claro` ou `?tema=escuro` no endereço vence o guardado (link direto do site).
+    let pedido = web_sys::window()
+        .and_then(|j| j.location().search().ok())
+        .unwrap_or_default();
+    let tema = RwSignal::new(if pedido.contains("tema=claro") {
+        "Claro".to_owned()
+    } else if pedido.contains("tema=escuro") {
+        "Escuro".to_owned()
+    } else {
+        guardado(globais::CHAVE_TEMA)
+    });
     globais::fundo(e, tema);
     let periodo = RwSignal::new(String::from("Últimos 7 dias"));
     let moeda = RwSignal::new(String::from("Orbs"));
@@ -999,7 +1010,7 @@ fn App() -> impl IntoView {
     });
 
     view! {
-        <style>{CSS}{comp::CSS}</style>
+        <style>{CSS}{comp::CSS}{tema::CSS}</style>
         <div class="nevoa"></div>
         // Atmosfera solarpunk: raios de sol e pólen de dia, vaga-lumes à noite (só CSS).
         <div class="atmosfera" aria-hidden="true">

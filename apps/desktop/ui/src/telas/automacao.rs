@@ -227,7 +227,7 @@ fn controles(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
 #[component]
 pub fn Automacao(e: Estado) -> impl IntoView {
     let versao = RwSignal::new(0u32);
-    let aba = RwSignal::new("Regras");
+    let aba = RwSignal::new("Controles");
     let fila = recurso(e, versao, || Some("/api/comandos/fila".into()));
     let motor = recurso(e, versao, || Some("/api/motor/decisoes".into()));
     view! {

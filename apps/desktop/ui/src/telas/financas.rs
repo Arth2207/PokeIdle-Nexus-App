@@ -135,6 +135,7 @@ fn quando(t: f64) -> String {
 pub fn Financas(e: Estado, periodo: RwSignal<String>) -> impl IntoView {
     let versao = RwSignal::new(0u32);
     let cac = recurso(e, versao, || Some("/api/financas/cacada?dias=60".into()));
+    let janelas = recurso(e, versao, || Some("/api/contas".into()));
     let fin = recurso(e, versao, || Some("/api/financeiro".into()));
     let merc = recurso(e, versao, move || {
         let d = match periodo.get().as_str() {
@@ -154,7 +155,18 @@ pub fn Financas(e: Estado, periodo: RwSignal<String>) -> impl IntoView {
             };
             let tudo = todas(e);
             let rotulo = rotulo_ativo(e).unwrap_or_default();
-            let todas_contas = montar(&f, &k, &e.nicks.get());
+            let mut todas_contas = montar(&f, &k, &e.nicks.get());
+            // Ouro em caixa: o da janela do jogo agora (o diário às vezes vem sem ele).
+            if let Some(Some(Ok(j))) = janelas.get() {
+                for c in &mut todas_contas {
+                    if let Some(x) = lista(&j, "contas").iter().find(|x| txt(x, "conta").eq_ignore_ascii_case(&c.rotulo)) {
+                        let ouro: f64 = txt(x, "gold").chars().filter(char::is_ascii_digit).collect::<String>().parse().unwrap_or(0.0);
+                        if ouro > 0.0 {
+                            c.caixa = ouro;
+                        }
+                    }
+                }
+            }
             let contas: Vec<Conta> = todas_contas.into_iter().filter(|c| tudo || c.rotulo.eq_ignore_ascii_case(&rotulo)).collect();
             let (per, ant) = periodos(&contas, n);
             let mlinhas: Vec<Value> = match merc.get() {
@@ -174,10 +186,10 @@ pub fn Financas(e: Estado, periodo: RwSignal<String>) -> impl IntoView {
             let caixa: f64 = contas.iter().map(|c| c.caixa).sum();
             let comp = |a: f64, b: f64| if b.abs() > 0.0 { Some(format!("{:+.0}% vs período anterior", (a / b - 1.0) * 100.0)) } else { None };
             let cascata = vec![
-                ("Caçada (loot)".to_owned(), loot),
-                ("Vendas no Mercado".to_owned(), vg),
-                ("Compras no Mercado".to_owned(), -cg),
-                ("Loja do jogo".to_owned(), -loja),
+                ("Caçada".to_owned(), loot),
+                ("Vendas".to_owned(), vg),
+                ("Compras".to_owned(), -cg),
+                ("Loja".to_owned(), -loja),
                 ("Consumo".to_owned(), -consumo),
             ];
             // Por conta: cada moeda na sua coluna.
@@ -229,7 +241,7 @@ pub fn Financas(e: Estado, periodo: RwSignal<String>) -> impl IntoView {
                 </div>
                 {sem_mercado.then(|| view! { <div class="dica">"Ainda sem extrato do Mercado no período: o app novo lê vendas e compras de cada conta a cada 30 min."</div> })}
                 <div class="duas" style="margin-top:16px">
-                    <div class="caixa"><div class="caixa-t">"De onde veio e para onde foi o gold"</div><Cascata passos=cascata /></div>
+                    <div class="caixa"><div class="caixa-t">"De onde veio e para onde foi o gold"</div><div class="dica">"Vendas e compras: no Mercado, em gold. Loja: o que a conta comprou no jogo."</div><Cascata passos=cascata /></div>
                     <div class="caixa"><div class="caixa-t">"Lucro em gold por conta"</div><Barras linhas=barras /></div>
                 </div>
                 <div class="secao">"Por conta"</div>

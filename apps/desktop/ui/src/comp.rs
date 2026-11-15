@@ -221,19 +221,40 @@ pub fn Cascata(passos: Vec<(String, f64)>) -> impl IntoView {
 #[component]
 pub fn Tabela(cab: Vec<&'static str>, linhas: Vec<Vec<String>>) -> impl IntoView {
     let vazia = linhas.is_empty();
+    // Coluna numérica (todas as células parecem número) alinha à direita; texto, à esquerda.
+    let numerica: Vec<bool> = (0..cab.len())
+        .map(|i| {
+            !linhas.is_empty()
+                && linhas
+                    .iter()
+                    .all(|l| l.get(i).is_none_or(|c| parece_numero(c)))
+        })
+        .collect();
+    let n2 = numerica.clone();
     view! {
         <div class="tabela-caixa">
             <table class="tabela">
-                <thead><tr>{cab.into_iter().map(|c| view! { <th>{c}</th> }).collect_view()}</tr></thead>
+                <thead><tr>{cab.into_iter().enumerate().map(|(i, c)| { let num = n2.get(i).copied().unwrap_or(false); view! { <th class:num=num>{c}</th> } }).collect_view()}</tr></thead>
                 <tbody>
-                    {linhas.into_iter().map(|l| view! {
-                        <tr>{l.into_iter().map(|c| view! { <td>{c}</td> }).collect_view()}</tr>
-                    }).collect_view()}
+                    {linhas.into_iter().map(|l| { let numerica = numerica.clone(); view! {
+                        <tr>{l.into_iter().enumerate().map(|(i, c)| { let num = numerica.get(i).copied().unwrap_or(false); view! { <td class:num=num>{c}</td> } }).collect_view()}</tr>
+                    }}).collect_view()}
                 </tbody>
             </table>
             {vazia.then(|| view! { <div class="vazio">"Sem dados no período."</div> })}
         </div>
     }
+}
+
+/// Célula que parece número ("1.234", "−5,2%", "+16", "12 mi", "—"): alinha à direita.
+pub fn parece_numero(c: &str) -> bool {
+    let t = c.trim();
+    t.is_empty()
+        || t == "—"
+        || t.chars()
+            .next()
+            .is_some_and(|x| x.is_ascii_digit() || "+-−~≈#×".contains(x))
+            && t.chars().filter(|x| x.is_alphabetic()).count() <= 5
 }
 
 /// Recomendação com motivo, confiança e (opcional) o que fazer.
@@ -311,9 +332,9 @@ pub const CSS: &str = r#"
 .b-rot { font-variant-numeric:tabular-nums; color:var(--texto-2); min-width:70px; text-align:right; }
 .tabela-caixa { overflow:auto; max-height:480px; border-radius:12px; }
 .tabela { width:100%; border-collapse:collapse; font-size:13px; font-variant-numeric:tabular-nums; }
-.tabela th { position:sticky; top:0; background:rgba(255,255,255,.92); text-align:right; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--texto-3); padding:8px 10px; }
-.tabela td { text-align:right; padding:7px 10px; border-bottom:1px solid var(--trilho); }
-.tabela th:first-child, .tabela td:first-child { text-align:left; }
+.tabela th { position:sticky; top:0; background:rgba(255,255,255,.92); text-align:left; white-space:nowrap; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--texto-3); padding:8px 10px; }
+.tabela td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--trilho); }
+.tabela th.num, .tabela td.num { text-align:right; }
 .veredito { background:var(--cartao); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); box-shadow:0 8px 24px rgba(22,24,28,.08); border:1px solid var(--vidro-borda); border-left:4px solid var(--neon); border-radius:14px; padding:12px 14px; }
 .veredito.alerta { border-left-color:var(--piora); } .veredito.bom { border-left-color:var(--melhora); }
 .v-t { font-weight:700; } .v-m { color:var(--texto-2); font-size:13px; margin-top:2px; }
@@ -504,3 +525,18 @@ img.forma-brave { filter:drop-shadow(0 0 10px rgba(56,132,255,.9)) saturate(1.15
 .horas div { height:26px; border-radius:4px; background:var(--melhora); }
 .horas-rot { display:grid; grid-template-columns:repeat(24,1fr); font-size:10px; color:var(--texto-3); text-align:center; }
 "#;
+
+#[cfg(test)]
+mod testes_tabela {
+    use super::parece_numero;
+
+    #[test]
+    fn colunas_numericas_e_de_texto() {
+        assert!(parece_numero("1.234"));
+        assert!(parece_numero("−5,2%"));
+        assert!(parece_numero("12,4 mi"));
+        assert!(parece_numero("—"));
+        assert!(!parece_numero("Metal Stone"));
+        assert!(!parece_numero("Charizard chegou na meta"));
+    }
+}
