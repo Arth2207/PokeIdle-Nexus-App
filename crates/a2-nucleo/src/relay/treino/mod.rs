@@ -25,6 +25,10 @@ pub use conta::{nota_da_luta, Formacao};
 const META_MS: i64 = 30 * 60_000;
 /// Faixas acima da conta usadas como adversário (de 100 em 100 pontos).
 const FAIXAS_ACIMA: i64 = 2;
+/// Chave do meta geral (todas as faixas) em `metas`.
+const META_GERAL: i64 = -1;
+/// Partidas mínimas no meta da faixa para usá-lo no lugar do geral.
+const MIN_PARTIDAS_FAIXA: u64 = 200;
 
 pub struct Treino {
     /// Conta dona: recebe as notas do arquivo antigo (de quando só ela aprendia).
@@ -117,22 +121,38 @@ impl Fluxo for Treino {
             .collect();
         faixas.sort_unstable();
         faixas.dedup();
+        // E o meta geral (chave -1): vale quando a faixa tem pouca amostra (o ranking zera
+        // todo domingo e as faixas baixas ficam com poucas partidas).
+        if !faixas.is_empty() {
+            faixas.push(META_GERAL);
+        }
         let faixa = faixas
             .into_iter()
             .find(|f| self.meta_em.get(f).is_none_or(|t| agora - t >= META_MS))?;
         self.meta_em.insert(faixa, agora);
-        Some(format!("/api/pvp/meta?faixa={faixa}&dias=14"))
+        Some(if faixa == META_GERAL {
+            "/api/pvp/meta?dias=14".to_owned()
+        } else {
+            format!("/api/pvp/meta?faixa={faixa}&dias=14")
+        })
     }
 
     fn resposta(&mut self, rota: &str, v: &Value, _agora: i64) {
-        let Some(faixa) = faixa_da_rota(rota) else {
+        if !rota.starts_with("/api/pvp/meta") {
             return;
-        };
+        }
+        let faixa = faixa_da_rota(rota).unwrap_or(META_GERAL);
         self.metas.insert(faixa, v.clone());
+        let geral = self.metas.get(&META_GERAL).cloned();
         for c in self.contas.values_mut() {
             let Some(f) = c.faixa() else { continue };
-            if let Some(m) = self.metas.get(&f) {
-                c.definir_meta(m);
+            let da_faixa = self.metas.get(&f);
+            let amostra = |m: &Value| m.get("partidas").and_then(Value::as_u64).unwrap_or(0);
+            match (da_faixa, geral.as_ref()) {
+                (Some(m), _) if amostra(m) >= MIN_PARTIDAS_FAIXA => c.definir_meta(m),
+                (_, Some(g)) => c.definir_meta(g),
+                (Some(m), None) => c.definir_meta(m),
+                (None, None) => {}
             }
             c.definir_acima(
                 (1..=FAIXAS_ACIMA)
@@ -269,6 +289,11 @@ mod testes {
             .filter_map(|r| r.split("faixa=").nth(1)?.split('&').next())
             .collect();
         assert_eq!(faixas, ["400", "500", "600", "1200", "1300", "1400"]);
+        assert_eq!(
+            rotas.last().map(String::as_str),
+            Some("/api/pvp/meta?dias=14"),
+            "e o meta geral"
+        );
         assert_eq!(
             t.pedir(0).map(|p| p["t"].clone()),
             Some(json!("pvp.tabela")),

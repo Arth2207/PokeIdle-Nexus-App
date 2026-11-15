@@ -16,9 +16,11 @@ pub type Formacao = BTreeMap<i64, i64>;
 const ESPERA_MS: i64 = 60_000;
 /// Espera padrão entre lutas (o jogo manda o `cooldownMs`).
 const COOLDOWN_MS: i64 = 5 * 60_000;
-/// Lutas mínimas de uma formação antes de comparar.
+/// Adversários em comum (lutados pela candidata e pela atual) antes de comparar.
+const MIN_COMUNS: usize = 2;
+/// Lutas mínimas da candidata nesses adversários.
 const MIN_LUTAS: u32 = 3;
-/// Folga de nota para trocar a formação do PvP.
+/// Folga média de nota, nos adversários em comum, para trocar a formação do PvP.
 const FOLGA: f64 = 0.15;
 /// Partidas mínimas no meta para montar um adversário.
 const MIN_PARTIDAS_META: u64 = 5;
@@ -53,8 +55,9 @@ pub struct TreinoConta {
     /// Nível de cada pokémon da conta (o adversário real luta no nível médio do time).
     nivel_de: HashMap<i64, i64>,
     livre_em: i64,
-    esperando: Option<(i64, Formacao)>,
-    notas: BTreeMap<String, (Formacao, Nota)>,
+    esperando: Option<(i64, Formacao, String)>,
+    /// Formação → nota contra cada adversário (chave: espécies do time adversário).
+    notas: BTreeMap<String, (Formacao, BTreeMap<String, Nota>)>,
     rodada: u64,
     aplicar: Option<Formacao>,
     mudou: bool,
@@ -67,6 +70,16 @@ fn chave(f: &Formacao) -> String {
         .join(",")
 }
 
+/// Chave de um adversário de treino: as espécies do time, em ordem.
+fn chave_adv(a: &[Value]) -> String {
+    let mut v: Vec<i64> = a
+        .iter()
+        .filter_map(|x| x.pointer("/teste/speciesId")?.as_i64())
+        .collect();
+    v.sort_unstable();
+    v.iter().map(i64::to_string).collect::<Vec<_>>().join("-")
+}
+
 /// Nota de uma luta para o lado B (o dono): 1 por vitória, mais ou menos 0,5 pela diferença
 /// de dano.
 pub fn nota_da_luta(r: &Value) -> Option<f64> {
@@ -76,7 +89,13 @@ pub fn nota_da_luta(r: &Value) -> Option<f64> {
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .find(|l| l.get("id").and_then(Value::as_i64) == Some(lado))
+            // O jogo manda `lado` (1 = adversário, 2 = a conta); versões antigas, `id`.
+            .find(|l| {
+                l.get("lado")
+                    .or_else(|| l.get("id"))
+                    .and_then(Value::as_i64)
+                    == Some(lado)
+            })
             .and_then(|l| l.get("dano")?.as_f64())
             .unwrap_or(0.0)
     };
@@ -97,11 +116,13 @@ fn casas_para(meta: &Value, alcance: i64) -> Vec<i64> {
         .into_iter()
         .flatten()
         .filter_map(|c| c.get(0)?.as_i64());
+    // Tabuleiro do jogo: fileira 0 (casas 0–5, a da frente), 1 (6–13), 2 (14–21), 3 (22–25),
+    // 4 (26–29). Corpo a corpo na frente; quanto maior o alcance, mais atrás.
     let padrao: &[i64] = match alcance {
-        i64::MIN..=1 => &[2, 3, 1, 4, 5],
-        2 => &[8, 7, 9, 6, 10],
-        3 => &[17, 18, 16, 19, 20],
-        _ => &[23, 22, 24, 21, 25],
+        i64::MIN..=1 => &[2, 3, 1, 4, 0, 5, 9, 10, 8, 11],
+        2 => &[9, 10, 8, 11, 7, 12, 17, 18, 16, 19],
+        3 => &[17, 18, 16, 19, 15, 20, 23, 24, 22, 25],
+        _ => &[23, 24, 22, 25, 27, 28, 26, 29, 17, 18],
     };
     let mut v: Vec<i64> = Vec::new();
     for c in do_meta.chain(padrao.iter().copied()) {
@@ -138,7 +159,7 @@ fn adversario_do_meta(meta: &Value, i: u64) -> Option<Vec<Value>> {
             .into_iter();
         let casa = preferida
             .chain(casas_para(meta, alcance))
-            .chain(1..=25)
+            .chain(0..30)
             .find(|c| !usadas.contains(c))?;
         usadas.push(casa);
         a.push(json!({"casa": casa, "teste": {
@@ -247,7 +268,7 @@ impl TreinoConta {
                 .unwrap_or_else(|| casas_para(&Value::Null, alcance));
             let casa = preferida
                 .chain(casas)
-                .chain(1..=25)
+                .chain(0..30)
                 .find(|c| !usadas.contains(c))?;
             usadas.push(casa);
             let mut teste = f.clone();
@@ -260,64 +281,88 @@ impl TreinoConta {
         (!a.is_empty()).then_some(a)
     }
 
-    /// Próxima formação a testar: a atual até ter amostra; depois, a melhor com um pokémon
-    /// mudado de casa (ou de novo a melhor, para confirmar, se ainda tem poucas lutas).
-    fn candidata(&self, comum: &Comum) -> Formacao {
-        let atual_k = chave(&self.atual);
-        let atual_lutas = self.notas.get(&atual_k).map_or(0, |x| x.1.lutas);
-        if atual_lutas < MIN_LUTAS {
+    /// Notas de uma formação por adversário (vazio se nunca lutou).
+    fn notas_de(&self, f: &Formacao) -> Option<&BTreeMap<String, Nota>> {
+        self.notas.get(&chave(f)).map(|x| &x.1)
+    }
+
+    /// A formação que mais supera a atual, comparando só nos adversários que as duas
+    /// enfrentaram: (formação, ganho médio de nota, adversários em comum).
+    fn melhor_pareada(&self) -> Option<(Formacao, f64, usize)> {
+        let atual = self.notas_de(&self.atual)?;
+        self.notas
+            .values()
+            .filter(|(f, _)| *f != self.atual)
+            .filter_map(|(f, por)| {
+                let comuns: Vec<(f64, u32)> = por
+                    .iter()
+                    .filter_map(|(adv, n)| Some((n.media() - atual.get(adv)?.media(), n.lutas)))
+                    .collect();
+                let lutas: u32 = comuns.iter().map(|x| x.1).sum();
+                let difs: Vec<f64> = comuns.iter().map(|x| x.0).collect();
+                (difs.len() >= MIN_COMUNS && lutas >= MIN_LUTAS).then(|| {
+                    (
+                        f.clone(),
+                        difs.iter().sum::<f64>() / difs.len() as f64,
+                        difs.len(),
+                    )
+                })
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    /// Próxima formação a testar contra o adversário `adv`: a atual, se ainda não lutou contra
+    /// ele (é a régua); depois a melhor candidata, se ainda não lutou contra ele; senão uma
+    /// variação da melhor (um pokémon mudado de casa, as casas que as contas já aprovaram
+    /// para a espécie primeiro).
+    fn candidata(&self, comum: &Comum, adv: &str) -> Formacao {
+        let lutou = |f: &Formacao| self.notas_de(f).is_some_and(|m| m.contains_key(adv));
+        if !lutou(&self.atual) {
             return self.atual.clone();
         }
-        let melhor = self
-            .notas
-            .values()
-            .max_by(|a, b| a.1.media().total_cmp(&b.1.media()))
-            .map_or_else(|| self.atual.clone(), |x| x.0.clone());
-        let melhor_lutas = self.notas.get(&chave(&melhor)).map_or(0, |x| x.1.lutas);
-        if melhor_lutas < MIN_LUTAS || self.time.is_empty() {
-            return melhor;
+        let melhor = self.melhor_pareada().filter(|x| x.1 > 0.0).map(|x| x.0);
+        if let Some(m) = melhor.as_ref().filter(|m| !lutou(m)) {
+            return m.clone();
         }
-        // Muda um pokémon (revezando) para a próxima casa livre do alcance dele.
+        let base = melhor.unwrap_or_else(|| self.atual.clone());
+        if self.time.is_empty() {
+            return base;
+        }
+        // Muda um pokémon (revezando) para uma casa livre do alcance dele.
         let i = (self.rodada as usize) % self.time.len();
         let id = self.time[i];
-        let ocupadas: Vec<i64> = melhor
+        let ocupadas: Vec<i64> = base
             .iter()
             .filter(|(k, _)| **k != id)
             .map(|(_, c)| *c)
             .collect();
-        let opcoes: Vec<i64> = self
-            .meta
-            .as_ref()
-            .map(|m| casas_para(m, self.alcance(id)))
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|c| !ocupadas.contains(c))
-            .collect();
-        // O que as outras contas já aprenderam sobre a espécie vem primeiro.
+        let opcoes: Vec<i64> =
+            casas_para(self.meta.as_ref().unwrap_or(&Value::Null), self.alcance(id))
+                .into_iter()
+                .filter(|c| !ocupadas.contains(c) && base.get(&id) != Some(c))
+                .collect();
         let opcoes = comum.ordenar(self.especie_de.get(&id).copied(), opcoes);
-        let mut nova = melhor.clone();
+        let mut nova = base.clone();
         if !opcoes.is_empty() {
-            let pos = (self.rodada / self.time.len() as u64) as usize % opcoes.len();
+            let pos = (self.rodada / self.time.len() as u64) as usize % opcoes.len().min(4);
             nova.insert(id, opcoes[pos]);
         }
         nova
     }
 
-    fn registrar(&mut self, f: Formacao, nota: f64) {
-        let e = self.notas.entry(chave(&f)).or_insert((f, Nota::default()));
-        e.1.soma += nota;
-        e.1.lutas += 1;
-        self.mudou = true;
-        // A melhor (com amostra) vence a atual com folga? Aplica.
-        let atual = self.notas.get(&chave(&self.atual)).map(|x| x.1);
-        let melhor = self
+    fn registrar(&mut self, f: Formacao, adv: String, nota: f64) {
+        let e = self
             .notas
-            .values()
-            .filter(|x| x.1.lutas >= MIN_LUTAS)
-            .max_by(|a, b| a.1.media().total_cmp(&b.1.media()));
-        if let (Some(a), Some((f, n))) = (atual, melhor) {
-            if a.lutas >= MIN_LUTAS && *f != self.atual && n.media() >= a.media() + FOLGA {
-                self.aplicar = Some(f.clone());
+            .entry(chave(&f))
+            .or_insert_with(|| (f, BTreeMap::new()));
+        let n = e.1.entry(adv).or_default();
+        n.soma += nota;
+        n.lutas += 1;
+        self.mudou = true;
+        // Uma candidata vence a atual com folga nos mesmos adversários? Aplica no PvP.
+        if let Some((f, ganho, _)) = self.melhor_pareada() {
+            if ganho >= FOLGA {
+                self.aplicar = Some(f);
             }
         }
     }
@@ -368,12 +413,12 @@ impl TreinoConta {
                     if let Some(cd) = r.get("cooldownMs").and_then(Value::as_i64) {
                         self.livre_em = agora + cd;
                     }
-                    if let (Some((_, f)), Some(n)) = (self.esperando.take(), nota_da_luta(r)) {
+                    if let (Some((_, f, adv)), Some(n)) = (self.esperando.take(), nota_da_luta(r)) {
                         let pares = f
                             .iter()
                             .filter_map(|(id, c)| Some((*self.especie_de.get(id)?, *c)))
                             .collect();
-                        self.registrar(f, n);
+                        self.registrar(f, adv, n);
                         return Some((pares, n));
                     }
                 }
@@ -394,15 +439,16 @@ impl TreinoConta {
         if self
             .esperando
             .as_ref()
-            .is_some_and(|(t, _)| agora - t < ESPERA_MS)
+            .is_some_and(|(t, _, _)| agora - t < ESPERA_MS)
             || agora < self.livre_em
         {
             return None;
         }
         let a = self.adversario()?;
-        let f = self.candidata(comum);
+        let adv = chave_adv(&a);
+        let f = self.candidata(comum, &adv);
         self.rodada += 1;
-        self.esperando = Some((agora, f.clone()));
+        self.esperando = Some((agora, f.clone(), adv));
         self.livre_em = agora + COOLDOWN_MS;
         let b: Vec<Value> = f
             .iter()
@@ -414,10 +460,18 @@ impl TreinoConta {
     pub fn notas_json(&self) -> Vec<Value> {
         self.notas
             .values()
-            .map(|(f, n)| json!({"f": f, "soma": n.soma, "lutas": n.lutas}))
+            .map(|(f, por)| {
+                let adv: serde_json::Map<String, Value> = por
+                    .iter()
+                    .map(|(k, n)| (k.clone(), json!([n.soma, n.lutas])))
+                    .collect();
+                json!({"f": f, "adv": adv})
+            })
             .collect()
     }
 
+    /// Notas salvas. As do formato antigo (sem adversário) ficam de fora: misturavam
+    /// adversários fáceis e difíceis e não servem para comparar.
     pub fn restaurar(&mut self, notas: &[Value]) {
         for x in notas {
             let f: Formacao = x
@@ -427,12 +481,23 @@ impl TreinoConta {
                 .flatten()
                 .filter_map(|(k, c)| Some((k.parse().ok()?, c.as_i64()?)))
                 .collect();
-            let nota = Nota {
-                soma: x.get("soma").and_then(Value::as_f64).unwrap_or(0.0),
-                lutas: x.get("lutas").and_then(Value::as_u64).unwrap_or(0) as u32,
-            };
-            if !f.is_empty() {
-                self.notas.insert(chave(&f), (f, nota));
+            let por: BTreeMap<String, Nota> = x
+                .get("adv")
+                .and_then(Value::as_object)
+                .into_iter()
+                .flatten()
+                .filter_map(|(k, v)| {
+                    Some((
+                        k.clone(),
+                        Nota {
+                            soma: v.get(0)?.as_f64()?,
+                            lutas: v.get(1)?.as_u64()? as u32,
+                        },
+                    ))
+                })
+                .collect();
+            if !f.is_empty() && !por.is_empty() {
+                self.notas.insert(chave(&f), (f, por));
             }
         }
     }
@@ -444,8 +509,9 @@ mod testes {
 
     #[test]
     fn nota_da_luta_soma_vitoria_e_margem() {
-        let r =
-            json!({"venceuA": false, "placar": [{"id": 1, "dano": 100}, {"id": 2, "dano": 300}]});
+        let r = json!({"venceuA": false, "placar": [{"lado": 1, "dano": 100}, {"lado": 2, "dano": 300}]});
         assert_eq!(nota_da_luta(&r), Some(1.25));
+        let perdeu = json!({"venceuA": true, "placar": [{"lado": 1, "dano": 300}, {"lado": 2, "dano": 100}]});
+        assert_eq!(nota_da_luta(&perdeu), Some(-0.25));
     }
 }
