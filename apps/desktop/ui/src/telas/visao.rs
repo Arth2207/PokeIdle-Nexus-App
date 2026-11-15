@@ -64,6 +64,7 @@ pub fn VisaoGeral(e: Estado) -> impl IntoView {
     let versao = RwSignal::new(0u32);
     let fin = recurso(e, versao, || Some("/api/financeiro".into()));
     let itens = recurso(e, versao, || Some("/api/bolsa/meus-itens".into()));
+    let mercado = recurso(e, versao, || Some("/api/bolsa/mercado".into()));
     let dicas = recurso(e, versao, || Some("/api/bolsa/dicas".into()));
     let contas = recurso(e, versao, || Some("/api/contas".into()));
     let hist = recurso(e, versao, || Some("/api/historico".into()));
@@ -74,17 +75,18 @@ pub fn VisaoGeral(e: Estado) -> impl IntoView {
     view! {
         {cabecalho("Visão geral", "Está tudo bem, e o que precisa de mim agora?", versao)}
         <div class="kpis">
-            {move || carregado(itens.get(), |v| {
+            {move || carregado(itens.get(), move |v| carregado(mercado.get(), move |mk| {
                 let ouro: f64 = match contas.get() {
                     Some(Some(Ok(c))) => lista(&c, "contas").iter().map(|x| ouro_texto(&txt(x, "gold"))).sum(),
                     _ => 0.0,
                 };
+                let (g, o) = super::mercado::totais(&super::mercado::avaliar(lista(&v, "itens"), lista(&mk, "tickers")));
                 view! {
-                    <Kpi titulo="Patrimônio" valor=curto(num(&v, "total").unwrap_or(0.0)) unidade="orbs"
-                        ajuda="Inventário das contas pelo valor da Bolsa; o ouro em caixa vai na linha de baixo."
-                        comparacao=format!("+ {} gold em caixa · {} itens", curto(ouro), lista(&v, "itens").len()) />
+                    <Kpi titulo="Patrimônio" valor=curto(ouro + g) unidade="gold"
+                        ajuda="Ouro em caixa das contas + itens que giram em gold (valor justo). Os itens que giram em orbs vão à parte: gold e orbs não se somam."
+                        comparacao=format!("{} em caixa + {} em itens · {} orbs em itens", curto(ouro), curto(g), curto(o)) />
                 }
-            })}
+            }))}
             {move || carregado(fin.get(), |f| {
                 let hoje = soma_dia(&f, "hoje").unwrap_or(0.0);
                 let ontem = soma_dia(&f, "ontem");
