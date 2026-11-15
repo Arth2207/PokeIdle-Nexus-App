@@ -76,6 +76,7 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/financas/mercado", get(janela::extrato_mercado))
         .route("/api/financas/cacada", get(janela::ouro_cacada))
         .route("/api/motor/decisoes", get(janela::decisoes))
+        .route("/api/motor/regras", get(janela::regras))
         .merge(motor::rotas())
         .route_layer(middleware::from_fn(|req, next| {
             auth::exigir_escopo(LEITURA, req, next)
@@ -90,6 +91,7 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/bolsa/meus-itens", post(bolsa::gravar_meus_itens))
         .route("/api/bolsa/vendas", post(vendas::gravar))
         .route("/api/motor/janela", post(janela::gravar))
+        .route("/api/motor/config", post(janela::alterar_config))
         .route("/api/equipes/ingest", post(equipes::ingest))
         .route("/api/boss/tentativa", post(equipes::tentativa))
         .route("/ingest", post(ingestao::ingest))

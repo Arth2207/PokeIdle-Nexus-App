@@ -32,6 +32,40 @@ pub async fn api(url: &str, rota: &str) -> Result<Value, String> {
     serde_json::from_str(&texto).map_err(|e| e.to_string())
 }
 
+/// `POST` com corpo JSON numa rota de ajuste do Nexus (ex.: `/api/motor/config`). No app, pelo
+/// comando `api_post`; como site, `fetch` relativo (o Nginx só libera essa rota).
+pub async fn api_post(url: &str, rota: &str, corpo: &Value) -> Result<Value, String> {
+    if no_app() {
+        let corpo_js = js_sys::JSON::parse(&corpo.to_string()).map_err(|e| erro_texto(&e))?;
+        let a = args(&[
+            ("url", JsValue::from_str(url)),
+            ("rota", JsValue::from_str(rota)),
+            ("corpo", corpo_js),
+        ]);
+        invoke("api_post", a).await.map_err(|e| erro_texto(&e))?;
+        return Ok(Value::Null);
+    }
+    let rel = format!("api{}", rota.strip_prefix("/api").unwrap_or(rota));
+    let w = web_sys::window().ok_or("sem janela")?;
+    let init = web_sys::RequestInit::new();
+    init.set_method("POST");
+    init.set_body(&JsValue::from_str(&corpo.to_string()));
+    let h = web_sys::Headers::new().map_err(|e| erro_texto(&e))?;
+    h.set("content-type", "application/json")
+        .map_err(|e| erro_texto(&e))?;
+    init.set_headers(&h);
+    let resp = wasm_bindgen_futures::JsFuture::from(w.fetch_with_str_and_init(&rel, &init))
+        .await
+        .map_err(|e| erro_texto(&e))?;
+    let resp: web_sys::Response =
+        wasm_bindgen::JsCast::dyn_into(resp).map_err(|_| "resposta inválida")?;
+    if resp.ok() {
+        Ok(Value::Null)
+    } else {
+        Err(format!("HTTP {}", resp.status()))
+    }
+}
+
 async fn api_site(rota: &str) -> Result<Value, String> {
     let rel = format!("api{}", rota.strip_prefix("/api").unwrap_or(rota));
     let w = web_sys::window().ok_or("sem janela")?;

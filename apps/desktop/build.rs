@@ -5,6 +5,7 @@ fn main() {
         "iniciar_nucleo",
         "definir_descoberta",
         "api_get",
+        "api_post",
         "salvar_token",
         "tem_token",
         "posicionar_conta",

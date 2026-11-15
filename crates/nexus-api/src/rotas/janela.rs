@@ -125,6 +125,50 @@ pub async fn ouro_cacada(
     }
 }
 
+/// `GET /api/motor/regras`: as regras do motor de cada conta (para ligar/desligar na tela).
+pub async fn regras(State(estado): State<Estado>) -> Response {
+    match persistencia::motor::config_contas(&estado.db).await {
+        Ok(l) => Json(json!({ "regras": l })).into_response(),
+        Err(e) => {
+            tracing::warn!(erro = %e, "regras do motor");
+            erro(StatusCode::SERVICE_UNAVAILABLE, "banco indisponível")
+        }
+    }
+}
+
+/// `POST /api/motor/config` `{nick, secao, campo, valor}`: liga/desliga ou ajusta uma regra
+/// do motor de uma conta. Só troca campo que já existe, por valor do mesmo tipo.
+pub async fn alterar_config(State(estado): State<Estado>, Json(c): Json<Value>) -> Response {
+    let t = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or_default();
+    let (nick, secao, campo) = (t("nick"), t("secao"), t("campo"));
+    let Some(valor) = c
+        .get("valor")
+        .filter(|v| v.is_boolean() || v.is_number() || v.is_string())
+    else {
+        return erro(
+            StatusCode::BAD_REQUEST,
+            "valor precisa ser booleano, número ou texto",
+        );
+    };
+    if nick.is_empty() || secao.is_empty() || campo.is_empty() {
+        return erro(StatusCode::BAD_REQUEST, "informe nick, secao e campo");
+    }
+    match persistencia::motor::alterar_config(&estado.db, nick, secao, campo, valor).await {
+        Ok(true) => {
+            tracing::info!(nick, secao, campo, %valor, "regra do motor alterada");
+            Json(json!({"ok": true})).into_response()
+        }
+        Ok(false) => erro(
+            StatusCode::NOT_FOUND,
+            "regra ou campo não existe, ou o tipo não confere",
+        ),
+        Err(e) => {
+            tracing::warn!(erro = %e, "alterar regra do motor");
+            erro(StatusCode::SERVICE_UNAVAILABLE, "banco indisponível")
+        }
+    }
+}
+
 pub async fn cacada(
     State(estado): State<Estado>,
     Query(p): Query<std::collections::HashMap<String, String>>,

@@ -708,6 +708,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             api::api_get,
+            api::api_post,
             iniciar_nucleo,
             definir_descoberta,
             salvar_token,

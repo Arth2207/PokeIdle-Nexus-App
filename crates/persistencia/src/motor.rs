@@ -133,6 +133,42 @@ pub async fn importar_dados(db: &PgPool, d: &Value, sha256: &str) -> Result<Cont
     })
 }
 
+/// Troca um campo que já existe na regra `secao` da conta `nick`, só por um valor do mesmo
+/// tipo JSON (liga/desliga, número por número). O motor relê a `motor_config` a cada ciclo.
+/// Devolve `false` se a regra ou o campo não existem ou se o tipo não confere.
+pub async fn alterar_config(
+    db: &PgPool,
+    nick: &str,
+    secao: &str,
+    campo: &str,
+    valor: &Value,
+) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query(
+        "UPDATE nexus.motor_config
+            SET dados = jsonb_set(dados, ARRAY[$3], $4::jsonb),
+                texto = jsonb_set(dados, ARRAY[$3], $4::jsonb)::json
+          WHERE nick = $1 AND secao = $2 AND dados ? $3
+            AND jsonb_typeof(dados->$3) = jsonb_typeof($4::jsonb)",
+    )
+    .bind(nick)
+    .bind(secao)
+    .bind(campo)
+    .bind(valor.to_string())
+    .execute(db)
+    .await?;
+    Ok(r.rows_affected() == 1)
+}
+
+/// Regras do motor de cada conta: `[{nick, secao, dados}]`, na ordem do arquivo.
+pub async fn config_contas(db: &PgPool) -> Result<Vec<Value>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT jsonb_build_object('nick', nick, 'secao', secao, 'dados', dados)
+           FROM nexus.motor_config ORDER BY nick, ordem NULLS LAST, secao",
+    )
+    .fetch_all(db)
+    .await
+}
+
 /// Monta de volta o objeto do `holodex-dados.json` (sem as [`CHAVES_FORA`]), com as chaves
 /// na ordem do arquivo. Linhas sem `texto` (importadas antes da ordem) saem na do jsonb.
 pub async fn carregar_dados(db: &PgPool) -> Result<Value, ErroMotor> {

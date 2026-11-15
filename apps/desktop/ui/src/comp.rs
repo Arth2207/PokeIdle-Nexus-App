@@ -351,6 +351,18 @@ pub const CSS: &str = r#"
 img.forma-furious { filter:drop-shadow(0 0 10px rgba(229,83,61,.9)) saturate(1.25) hue-rotate(-12deg); }
 img.forma-ancient { filter:drop-shadow(0 0 10px rgba(214,158,46,.9)) sepia(.35); }
 img.forma-brave { filter:drop-shadow(0 0 10px rgba(56,132,255,.9)) saturate(1.15); }
+/* Automação › Controles */
+.regras { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:14px; }
+.regra { background:var(--cartao); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); border:1px solid var(--vidro-borda); border-radius:18px; padding:14px 16px; transition:opacity .2s; }
+.regra.desligada { opacity:.6; }
+.regra-topo { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
+.regra-n { font:700 15px "Space Grotesk", Inter, sans-serif; }
+.regra-op { display:flex; flex-wrap:wrap; gap:8px 14px; margin-top:10px; }
+.regra-op .op { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--texto-2); }
+.regra-op .num { width:84px; padding:4px 10px; font-size:12px; }
+.chave-btn { border:0; background:transparent; padding:0; cursor:pointer; }
+.aviso-ok { background:rgba(31,157,107,.14); border-radius:12px; padding:8px 12px; margin-bottom:12px; font-size:13px; }
+.grade-regras td { text-align:center; }
 .scan { grid-template-columns:110px 1fr; }
 .vg-base { display:grid; grid-template-columns:1.3fr 1fr; gap:16px; }
 @media (max-width: 1100px) { .vg, .vg-base { grid-template-columns:1fr; } }

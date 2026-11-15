@@ -51,6 +51,38 @@ pub async fn api_get(url: String, rota: String) -> Result<Value, String> {
     }
 }
 
+/// Rotas que as telas podem chamar com `POST` (só as de ajuste feitas pelo dono).
+const ROTAS_POST: &[&str] = &["/api/motor/config"];
+
+/// `POST` numa rota da [`ROTAS_POST`] com o token do app (ex.: ligar/desligar uma regra).
+#[tauri::command]
+pub async fn api_post(url: String, rota: String, corpo: Value) -> Result<Value, String> {
+    if !ROTAS_POST.contains(&rota.as_str()) {
+        return Err("rota não permitida".into());
+    }
+    let base = base_http(url.trim()).ok_or("endereço do Nexus inválido (wss://…/ws)")?;
+    let token = ArquivoToken::padrao("nexus")
+        .and_then(|a| a.ler())
+        .map_err(|e| e.to_string())?
+        .ok_or("nenhum token salvo neste PC")?;
+    let c = cliente().ok_or("cliente HTTP indisponível")?;
+    let r = c
+        .post(format!("{base}{rota}"))
+        .bearer_auth(token)
+        .json(&corpo)
+        .send()
+        .await
+        .map_err(|e| format!("Nexus fora do ar: {e}"))?;
+    let status = r.status();
+    let v: Value = r.json().await.unwrap_or(Value::Null);
+    if status.is_success() {
+        Ok(v)
+    } else {
+        let msg = v.get("erro").and_then(Value::as_str).unwrap_or("erro");
+        Err(format!("HTTP {}: {msg}", status.as_u16()))
+    }
+}
+
 #[cfg(test)]
 mod testes {
     use super::*;
