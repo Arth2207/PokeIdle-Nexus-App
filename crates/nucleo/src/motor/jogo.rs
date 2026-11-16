@@ -106,10 +106,32 @@ pub fn janela(conta: &ContaViva, ms: f64, ate: f64, agora: f64) -> Janela {
 
 /// `huntAtual(conta)`: nome e nível da hunt pelo texto `ultimo.hunt` ("Nome · nível 500").
 pub fn hunt_atual(conta: &ContaViva) -> Option<(String, Option<f64>)> {
+    if let Some(slug) = conta
+        .ultimo
+        .get("huntSlug")
+        .or_else(|| conta.ultimo.pointer("/io/player/huntSlug"))
+        .and_then(Value::as_str)
+    {
+        if let Some(h) = conta
+            .welcome
+            .get("hunts")
+            .and_then(Value::as_array)
+            .and_then(|hs| hs.iter().find(|h| h["slug"].as_str() == Some(slug)))
+        {
+            if let Some(nome) = h["nome"].as_str() {
+                return Some((nome.into(), num(h.get("nivel"))));
+            }
+        }
+    }
     let texto = conta.ultimo.get("hunt").map(|v| js::texto(Some(v)))?;
     let c = HUNT.as_ref()?.captures(&texto)?;
     Some((
-        c.get(1)?.as_str().trim().to_owned(),
+        c.get(1)?
+            .as_str()
+            .split(" · Outland")
+            .next()?
+            .trim()
+            .to_owned(),
         num_texto(c.get(2)?.as_str()),
     ))
 }

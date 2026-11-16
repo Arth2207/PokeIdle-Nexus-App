@@ -7,6 +7,7 @@
 pub mod compra;
 pub mod equipe;
 pub mod hunt;
+pub mod safari;
 pub mod simples;
 pub mod vender;
 
@@ -24,6 +25,8 @@ use crate::js;
 pub struct ContaViva {
     pub id: String,
     pub nick: String,
+    /// Estimativa semanal carregada pelo Nexus, nunca aceita da janela do cliente.
+    pub top_catch: Option<Value>,
     /// `conta.ultimo`: a última leitura da janela (`hdx.eu`, `hdx.pokemons`, ouro, `hunt`...).
     pub ultimo: Value,
     /// `conta.welcome`: hunts, bolas, itens e bosses que o jogo mandou ao conectar.
@@ -75,6 +78,7 @@ impl ContaViva {
             })
             .unwrap_or_default();
         Some(Self {
+            top_catch: None,
             id: texto("id").unwrap_or_default(),
             nick: texto("nick")?,
             ultimo: foto("ultimo").cloned().unwrap_or(Value::Null),

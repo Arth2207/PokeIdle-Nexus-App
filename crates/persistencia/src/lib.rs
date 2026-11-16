@@ -13,6 +13,7 @@ pub mod importacao;
 pub mod ingestao;
 pub mod mercado;
 pub mod motor;
+pub mod outlands;
 pub mod paridade;
 pub mod pvp;
 pub mod raros;

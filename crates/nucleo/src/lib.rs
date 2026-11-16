@@ -13,6 +13,8 @@ pub mod equipes;
 pub mod js;
 pub mod motor;
 pub mod otimizador;
+pub mod outlands;
 pub mod precificador;
 pub mod pvp;
 pub mod raros;
+pub mod top_catch;

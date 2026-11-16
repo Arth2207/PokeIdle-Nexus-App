@@ -213,3 +213,198 @@ pub async fn decisoes(State(estado): State<Estado>) -> Response {
         }
     }
 }
+
+/// Capturas da conta e Top Catch local, com reset domingo 00h (Brasília).
+pub async fn capturas(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Query(p): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let restrito = cliente.as_ref().and_then(|Extension(c)| c.conta.as_deref());
+    let conta = p
+        .get("conta")
+        .map(String::as_str)
+        .filter(|c| !c.trim().is_empty())
+        .or(restrito);
+    let Some(conta) = conta else {
+        return erro(StatusCode::BAD_REQUEST, "informe conta");
+    };
+    if restrito.is_some_and(|r| !r.eq_ignore_ascii_case(conta)) {
+        return erro(
+            StatusCode::FORBIDDEN,
+            "este token só acessa a própria conta",
+        );
+    }
+    match persistencia::cacada::capturas(&estado.db, conta, crate::bolsa::agora_ms()).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => {
+            tracing::warn!(erro = %e, "capturas da semana");
+            erro(StatusCode::SERVICE_UNAVAILABLE, "banco indisponível")
+        }
+    }
+}
+
+/// Relatório de Outlands: dados atuais, comparação por contexto e valor de inventário.
+pub async fn outlands(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Query(p): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let restrito = cliente.as_ref().and_then(|Extension(c)| c.conta.as_deref());
+    let Some(conta) = p
+        .get("conta")
+        .map(String::as_str)
+        .filter(|c| !c.trim().is_empty())
+        .or(restrito)
+    else {
+        return erro(StatusCode::BAD_REQUEST, "informe conta");
+    };
+    if restrito.is_some_and(|r| !r.eq_ignore_ascii_case(conta)) {
+        return erro(
+            StatusCode::FORBIDDEN,
+            "este token só acessa a própria conta",
+        );
+    }
+    let taxa = match p.get("taxa") {
+        None => None,
+        Some(t) => match t.parse::<f64>() {
+            Ok(n) if n.is_finite() && (0.0..=1.0).contains(&n) => Some(n),
+            _ => return erro(StatusCode::BAD_REQUEST, "taxa deve estar entre 0 e 1"),
+        },
+    };
+    let ctx = match persistencia::outlands::contexto(&estado.db, conta).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(%e,"contexto de Outlands");
+            return erro(StatusCode::SERVICE_UNAVAILABLE, "banco indisponível");
+        }
+    };
+    let w = &ctx["regras"];
+    let u = &ctx["janela"]["ultimo"];
+    let tiers = nucleo::outlands::tiers(w);
+    let atual = nucleo::outlands::atual(w, u);
+    let nivel = nucleo::motor::jogo::num(u.get("trLv")).unwrap_or(0.0);
+    let proxima = tiers
+        .iter()
+        .filter(|t| t.nivel > nivel)
+        .min_by(|a, b| a.nivel.total_cmp(&b.nivel));
+    let regra = w["outlandRegrasId"].as_str();
+    let medidas = match persistencia::outlands::medidas(&estado.db, conta, regra).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(%e,"medições de Outlands");
+            return erro(StatusCode::SERVICE_UNAVAILABLE, "medições indisponíveis");
+        }
+    };
+    let agora = crate::bolsa::agora_ms();
+    let mut cotacoes = Vec::new();
+    if let Ok(s) = estado.bolsa.snapshot().await {
+        for t in s.mercado.tickers.iter().filter(|t| {
+            !t.pokemon
+                && t.moeda.como_str() == "orb"
+                && t.a.n >= 3
+                && t.a.ultima_venda >= agora - 7 * 86_400_000
+        }) {
+            if let Some(preco) = t.a.base.filter(|p| p.is_finite() && *p > 0.0) {
+                cotacoes.push(json!({"id":t.item_id,"nome":t.nome,"preco":preco,"liquidez":t.a.liquidez.como_str(),"ultima_venda":t.a.ultima_venda}));
+            }
+        }
+    }
+    let ls = medidas["linhas"].as_array().cloned().unwrap_or_default();
+    let ps = medidas["periodos"].as_array().cloned().unwrap_or_default();
+    let out_slugs: std::collections::HashSet<&str> = ctx["hunts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|h| h["area"] == "outland")
+        .filter_map(|h| h["slug"].as_str())
+        .collect();
+    let mesmo = |a: &Value, b: &Value| {
+        ["slug", "tier", "regra", "ativo", "ativo_nivel", "loot"]
+            .iter()
+            .all(|k| a[*k] == b[*k])
+    };
+    let mut linhas = Vec::new();
+    let mut sem_preco = 0.0;
+    for k in ls.iter().filter(|l| {
+        l["tipo"] == "kill"
+            && l["tier"].is_string()
+            && l["slug"].as_str().is_some_and(|s| out_slugs.contains(s))
+    }) {
+        let horas: f64 = ps
+            .iter()
+            .filter(|p| mesmo(p, k))
+            .filter_map(|p| p["horas"].as_f64())
+            .sum();
+        let kills = k["qtd"].as_f64().unwrap_or(0.0);
+        let kph = (horas >= 0.25).then_some(kills / horas.max(1e-9));
+        let mut valor = 0.0;
+        let mut itens = Vec::new();
+        let mut cotados = 0;
+        for d in ls
+            .iter()
+            .filter(|d| d["tipo"] == "drop" && mesmo(d, k) && d["especie"] == k["especie"])
+        {
+            let q = d["qtd"].as_f64().unwrap_or(0.0);
+            let cotacao = cotacoes.iter().find(|c| {
+                (!d["item_id"].is_null() && c["id"] == d["item_id"])
+                    || c["nome"]
+                        .as_str()
+                        .zip(d["item"].as_str())
+                        .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
+            });
+            if let Some(c) = cotacao {
+                valor += q * c["preco"].as_f64().unwrap_or(0.0);
+                cotados += 1;
+            } else {
+                sem_preco += q;
+            }
+            itens.push(json!({"nome":d["item"],"qtd":q,"cotacao":cotacao}));
+        }
+        let tier = k["tier"]
+            .as_str()
+            .and_then(|s| s.parse::<i64>().ok())
+            .and_then(|id| tiers.iter().find(|t| t.tier == id));
+        let atualizada = k["regra"].as_str() == regra && regra.is_some();
+        let tokens_h = kph
+            .zip(tier)
+            .zip(nucleo::outlands::chance_token(w))
+            .filter(|_| atualizada)
+            .map(|((kh, t), c)| kh * t.mult * c);
+        linhas.push(json!({"especie":k["especie"],"tier":tier,"regra":k["regra"],"regra_atual":atualizada,
+            "ativo":k["ativo"],"ativo_nivel":k["ativo_nivel"],"loot":k["loot"],"horas":horas,"kills":kills,"kph":kph,
+            "tokens_h_sem_bonus":tokens_h,"valor_bruto":if cotados>0{Some(valor)}else{None},
+            "valor_pos_comissao":taxa.filter(|_|cotados>0).map(|t|valor*(1.0-t)),
+            "gemas_h_parcial":kph.filter(|_|cotados>0).map(|_|valor/horas),"itens":itens}));
+    }
+    // Vendas realizadas da conta: não presume que vieram dos drops desta sessão.
+    let nick = ctx["janela"]["nick"].as_str().unwrap_or(conta);
+    let recebido = match persistencia::pvp::extrato_mercado(&estado.db, agora - 86_400_000).await {
+        Ok(v) => {
+            let mut n = 0;
+            let mut soma = 0.0;
+            for (c, lado, l) in v {
+                if (c.eq_ignore_ascii_case(conta) || c.eq_ignore_ascii_case(nick))
+                    && lado == "venda"
+                    && l["moeda"] == "orb"
+                {
+                    if let Some(valor) = l["valor"].as_f64() {
+                        n += 1;
+                        soma += valor;
+                    }
+                }
+            }
+            if n > 0 {
+                Some(soma)
+            } else {
+                None
+            }
+        }
+        Err(_) => None,
+    };
+    Json(json!({"conta":conta,"agora":agora,"regras_em":ctx["em"],"regra_id":regra,"tiers":tiers,"atual":atual,
+        "nivel_treinador":nivel,"proxima":proxima,"chance_token":nucleo::outlands::chance_token(w),
+        "linhas":linhas,"taxa":taxa,"abates_sem_contexto":medidas["abates_sem_contexto"],"itens_sem_cotacao":sem_preco,
+        "vendas_recebidas_24h":recebido,"cotacoes":cotacoes,"custos_coins":Value::Null,
+        "nota":"Valor de drops é inventário estimado, não venda realizada. Previsão de tokens sem bônus adicionais; custos em Coins não convertidos em gemas."})).into_response()
+}

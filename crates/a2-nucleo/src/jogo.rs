@@ -144,6 +144,7 @@ fn evento_batalha(ev: &Value, ts: i64, saida: &mut Vec<Value>) {
             saida.push(json!({
                 "k": "capturado", "ts": ts,
                 "id": copia(&p, &["id"]),
+                "speciesId": copia(&p, &["speciesId"]),
                 "especie": copia(&p, &["nome", "especie"]),
                 "nivel": copia(&p, &["level", "nivel"]),
                 "ivs": copia(&p, &["ivs"]),
@@ -243,6 +244,9 @@ fn corte(t: &str) -> String {
 pub fn eventos_do_coletor(msg: &Value, ts: i64) -> Vec<Value> {
     let mut s = Vec::new();
     match msg.get("t").and_then(Value::as_str) {
+        Some("hunt.contexto") => {
+            s.push(json!({"k":"hunt.contexto","ts":ts,"contexto":msg.get("contexto")}))
+        }
         Some("welcome") if msg.get("estado").is_some() => {
             s.push(json!({"k": "welcome", "ts": ts, "payload": msg}));
         }
@@ -325,6 +329,11 @@ pub fn eventos_do_coletor(msg: &Value, ts: i64) -> Vec<Value> {
         }
         _ => {}
     }
+    if let Some(ctx) = msg.get("contexto").filter(|c| c.is_object()) {
+        for ev in &mut s {
+            ev["contexto"] = ctx.clone();
+        }
+    }
     s
 }
 
@@ -387,6 +396,14 @@ fn com_t(t: &str, params: &Value) -> Value {
 pub fn passos(cmd: &ComandoNovo) -> Result<Vec<Value>, String> {
     let p = &cmd.params;
     match cmd.tipo.as_str() {
+        "motor.hunt.trocar" => {
+            let slug = p
+                .get("slug")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .ok_or("params.slug ausente")?;
+            Ok(vec![json!({"t":"hunt.select","slug":slug})])
+        }
         t if t.starts_with("motor.") && t.len() > 6 => Ok(vec![com_t(&t[6..], p)]),
         "hunt" => {
             let slug = p
@@ -538,6 +555,21 @@ mod testes_bruto {
     use super::*;
 
     #[test]
+    fn contexto_de_caca_e_transportado_sem_inferir_tier() {
+        let msg = json!({"t":"batalha","contexto":{"outland_tier":104,"regras_id":"v2","ativo_id":7},"ev":[{"k":"morte","quem":"selvagem","nome":"Furious Scizor","drops":[{"id":1,"nome":"Token","qt":2}]}]});
+        let e = eventos_do_coletor(&msg, 123);
+        assert_eq!(e.len(), 2);
+        assert_eq!(e[0]["contexto"]["outland_tier"], 104);
+        assert_eq!(e[1]["contexto"]["regras_id"], "v2");
+        assert_eq!(
+            eventos_do_coletor(
+                &json!({"t":"hunt.contexto","contexto":{"outland_tier":104}}),
+                123
+            )[0]["k"],
+            "hunt.contexto"
+        );
+    }
+    #[test]
     fn bruto_remove_segredos_e_guarda_tipo() {
         let m = json!({"t": "bruto", "dir": "in",
             "dados": r#"{"t":"pvp.fim","sessionToken":"x","jogador":{"authKey":"y","nick":"a"}}"#});
@@ -612,13 +644,15 @@ mod testes {
         let m = json!({"t":"batalha","ev":[
             {"k":"morte","quem":"selvagem","nome":"A","drops":[{"id":3,"nome":"pena","qt":2}]},
             {"k":"morte","quem":"aliado","nome":"B"},
-            {"k":"capturado","pokemon":{"id":9,"nome":"C","ivs":{"a":1,"b":2}},"bola":"great"},
+            {"k":"capturado","pokemon":{"id":9,"speciesId":63,"nome":"C","ivs":{"a":1,"b":2}},"bola":"great"},
             {"k":"bola","ballId":4,"sucesso":1}]});
         let e = eventos_do_coletor(&m, 1);
         let ks: Vec<&str> = e.iter().filter_map(|v| v["k"].as_str()).collect();
         assert_eq!(ks, ["kill", "drop", "capturado", "bola"]);
         assert_eq!(e[1]["quantidade"], 2);
         assert_eq!(e[2]["iv_total"], 3);
+        assert_eq!(e[2]["speciesId"], 63);
+        assert_eq!(e[2]["bola"], "great");
     }
 
     #[test]

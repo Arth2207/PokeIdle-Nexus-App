@@ -47,6 +47,10 @@ fn regra_pt(secao: &str) -> (&'static str, &'static str) {
             "Troca de hunt",
             "Muda para a hunt que rende mais no objetivo escolhido.",
         ),
+        "safari" => (
+            "Safari · trocar após 1 captura",
+            "Prioriza espécies que faltam no Top Catch semanal, sorteando hunts até o nível do Pokémon ativo. Tem prioridade sobre a troca por rendimento.",
+        ),
         "rodizio" => (
             "Rodízio de pokémon",
             "Troca o ativo para upar a equipe até a meta do boss.",
@@ -148,15 +152,30 @@ fn cartao_regra(
     let (n2, s2) = (nick.clone(), secao.clone());
     let opcoes: Vec<(String, Value)> = d
         .iter()
-        .filter(|(k, v)| k.as_str() != "ativo" && (v.is_boolean() || v.is_number()))
+        .filter(|(k, v)| {
+            k.as_str() != "ativo"
+                && k.as_str() != "objetivoManual"
+                && (v.is_boolean() || v.is_number())
+        })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    let (ng, sg) = (nick.clone(), secao.clone());
+    let objetivo = txt(&r["dados"], "objetivo");
     view! {
         <div class="regra" class:desligada=ativo == Some(false)>
             <div class="regra-topo">
                 <div><div class="regra-n">{if nome.is_empty() { secao.clone() } else { nome.to_owned() }}</div><div class="dica">{expl}</div></div>
                 {ativo.map(|a| chave(a, move || alterar(e, versao, msg, n2.clone(), s2.clone(), "ativo".into(), Value::Bool(!a))))}
             </div>
+            {(secao == "hunt").then(|| view! {
+                <label class="op"><span>"Objetivo da conta"</span>
+                    <select prop:value=objetivo on:change=move |ev| alterar(e,versao,msg,ng.clone(),sg.clone(),"objetivo".into(),Value::String(event_target_value(&ev)))>
+                        <option value="xp">"XP"</option><option value="equilibrio">"XP sem prejuízo"</option>
+                        <option value="lucro">"Lucro em Coins"</option><option value="gemas">"Gemas (estimativa parcial de tokens nas Outlands)"</option><option value="shiny">"Shiny"</option>
+                    </select>
+                </label>
+                <div class="dica">"Sua escolha de objetivo tem prioridade sobre o papel da conta; não liga vendas ao NPC."</div>
+            })}
             <div class="regra-op">
                 {opcoes.into_iter().map(|(k, v)| {
                     let (n3, s3, k3) = (nick.clone(), secao.clone(), k.clone());

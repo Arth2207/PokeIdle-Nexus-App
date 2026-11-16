@@ -62,6 +62,7 @@ pub struct Sombra {
     registros: crate::motor_registro::Registros,
     /// O laço guardado no banco já foi lido (uma vez, ao iniciar).
     laco_restaurado: bool,
+    token_preco: Option<(i64, Option<f64>)>,
 }
 
 impl Sombra {
@@ -84,6 +85,7 @@ impl Sombra {
             envio: crate::motor_envio::Envio::default(),
             registros: crate::motor_registro::Registros::default(),
             laco_restaurado: false,
+            token_preco: None,
         })
     }
 
@@ -184,6 +186,49 @@ impl Sombra {
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(ContaViva::de_json).collect())
             .unwrap_or_default();
+        if self.token_preco.is_none_or(|(em, _)| agora - em > 300_000) {
+            if let Ok(p) = persistencia::outlands::preco_token(db, agora).await {
+                self.token_preco = Some((agora, p));
+            }
+        }
+        for c in &mut contas {
+            if c.welcome.get("outlandTiers").is_none_or(|v| !v.is_array()) {
+                let rotulo = if c.id.is_empty() { &c.nick } else { &c.id };
+                if let Ok(ctx) = persistencia::outlands::contexto(db, rotulo).await {
+                    if let (Some(dest), Some(origem)) =
+                        (c.welcome.as_object_mut(), ctx["regras"].as_object())
+                    {
+                        for (k, v) in origem {
+                            dest.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+            }
+        }
+        for c in &mut contas {
+            if let Some(w) = c.welcome.as_object_mut() {
+                // Nunca confia num preço indicado pelo cliente; sobrescreve a cada ciclo.
+                w.insert(
+                    "nexusTokenPreco".into(),
+                    self.token_preco
+                        .and_then(|(_, p)| p)
+                        .map_or(Value::Null, |p| json!(p)),
+                );
+            }
+        }
+        // O histórico vem do banco, não de campos enviados pelo app. Se a leitura
+        // falhar, o Safari aguarda; as outras regras da conta continuam normalmente.
+        for c in &mut contas {
+            if config::efetiva(&d, &c.nick).pointer("/safari/ativo") == Some(&Value::Bool(true)) {
+                let rotulo = if c.id.is_empty() { &c.nick } else { &c.id };
+                match persistencia::cacada::capturas(db, rotulo, agora).await {
+                    Ok(v) => c.top_catch = v.get("top_catch").cloned(),
+                    Err(erro) => {
+                        tracing::warn!(nick = %c.nick, %erro, "Safari aguarda histórico semanal")
+                    }
+                }
+            }
+        }
         // Conta que saiu da janela não guarda mais linhas.
         self.linhas
             .retain(|nick, _| contas.iter().any(|c| &c.nick == nick));

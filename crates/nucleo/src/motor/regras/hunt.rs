@@ -33,22 +33,6 @@ const OBJETIVOS: [(&str, &str, &str); 5] = [
     ("gemas", "gemas", "gemas/h"),
     ("shiny", "chance de shiny", "shiny/dia"),
 ];
-const RAROS_OUT: [(&str, f64); 4] = [
-    ("bronzeToken", 0.0005),
-    ("fragChave", 0.000005),
-    ("fragShinyStone", 0.000005),
-    ("fragBicicleta", 0.000005),
-];
-const OUTLANDS: [(f64, f64); 8] = [
-    (150.0, 1.0),
-    (1000.0, 1.25),
-    (2000.0, 1.5),
-    (4000.0, 2.0),
-    (8000.0, 3.0),
-    (16000.0, 4.0),
-    (24000.0, 6.0),
-    (36000.0, 8.0),
-];
 const CURVA_OURO: [(f64, f64); 6] = [
     (1.0, 41.0),
     (100.0, 658.0),
@@ -494,6 +478,8 @@ fn previsao(
 struct Gemas {
     precos: Value,
     ch_shiny: f64,
+    out_mult: Option<f64>,
+    token_chance: Option<f64>,
 }
 
 impl Gemas {
@@ -510,7 +496,6 @@ impl Gemas {
 /// Espécie para o `valorGemasH` (`{...sp, trLv}`; `{}` quando não há espécie).
 struct EspValor {
     d: Option<i64>,
-    tr_lv: f64,
 }
 
 fn eh_outland(d: Option<i64>) -> bool {
@@ -523,13 +508,15 @@ fn valor_gemas_h(kph: Option<f64>, sp: &EspValor, g: &Gemas) -> f64 {
         return 0.0;
     };
     if eh_outland(sp.d) {
-        let nivel = ou(Some(sp.tr_lv), 0.0);
-        let mult = OUTLANDS
-            .iter()
-            .rfind(|(l, _)| nivel >= *l)
-            .map_or(1.0, |(_, m)| *m)
-            * ou(Some(js::mais(g.precos.get("outlandBonus"))), 1.0);
-        let soma = RAROS_OUT.iter().fold(0.0, |s, (k, p)| s + p * g.g(k));
+        let Some(mult) = g.out_mult else {
+            return f64::NAN;
+        };
+        let Some(token) = g.token_chance else {
+            return f64::NAN;
+        };
+        let mult = mult * ou(Some(js::mais(g.precos.get("outlandBonus"))), 1.0);
+        // As chances atuais dos fragmentos não vieram no login: não inventa receita.
+        let soma = token * g.g("bronzeToken");
         return kph * soma * mult;
     }
     let p_cap = min_js(1.0, 0.05 * 1.5);
@@ -930,9 +917,15 @@ fn plano_completo(d: &Value, r: &Relogio, conta: &ContaViva, ctx: &ContextoHunt)
             1.0 / 24000.0
         }
     };
+    let mut precos_gemas = cfg.get("gemaPrecos").cloned().unwrap_or(Value::Null);
+    if let Some(p) = conta.welcome.get("nexusTokenPreco").and_then(Value::as_f64) {
+        precos_gemas["bronzeToken"] = json!(p);
+    }
     let gemas = Gemas {
-        precos: cfg.get("gemaPrecos").cloned().unwrap_or(Value::Null),
+        precos: precos_gemas,
         ch_shiny,
+        out_mult: crate::outlands::atual(&conta.welcome, &conta.ultimo).map(|t| t.mult),
+        token_chance: crate::outlands::chance_token(&conta.welcome),
     };
     let ult = acao_hunt(d, nick);
     let huntdesde = ctx.hunt_desde;
@@ -957,17 +950,10 @@ fn plano_completo(d: &Value, r: &Relogio, conta: &ContaViva, ctx: &ContextoHunt)
     let medida_ok = w.kills >= 20 || (w.kills >= 5 && dados_min >= 15.0);
     let lucro_atual = lucro_janela(&w, &pr);
     let sp_atual = h.as_ref().and_then(|(n, _)| ctx.dex.por_nome(n));
-    let tr_lv = ou(num(conta.ultimo.get("trLv")), 0.0);
     let atual = if obj_chave == "gemas" {
         let sp = match sp_atual {
-            Some(s) => EspValor {
-                d: Some(s.id),
-                tr_lv,
-            },
-            None => EspValor {
-                d: None,
-                tr_lv: 0.0,
-            },
+            Some(s) => EspValor { d: Some(s.id) },
+            None => EspValor { d: None },
         };
         Some(valor_gemas_h(w.kph, &sp, &gemas))
     } else {
@@ -976,6 +962,7 @@ fn plano_completo(d: &Value, r: &Relogio, conta: &ContaViva, ctx: &ContextoHunt)
     let intervalo = js::mais(c.get("intervaloMin"));
     let espera0 = ult_t.map_or(0.0, |t| max_js(0.0, intervalo * 60e3 - (ag - t)));
     let mut o = Map::new();
+    o.insert("gemasParcial".into(), json!(true));
     o.insert("ativo".into(), json!(ver(c, "ativo")));
     o.insert("objetivo".into(), json!(obj_chave));
     o.insert("objNome".into(), json!(obj_nome));
@@ -1094,6 +1081,23 @@ fn plano_completo(d: &Value, r: &Relogio, conta: &ContaViva, ctx: &ContextoHunt)
             teste: None,
         }
     };
+    if obj_chave == "gemas"
+        && h.as_ref()
+            .and_then(|(n, _)| ctx.dex.por_nome(n))
+            .is_some_and(|sp| eh_outland(Some(sp.id)))
+        && (gemas.out_mult.is_none()
+            || gemas.token_chance.is_none()
+            || conta
+                .welcome
+                .get("nexusTokenPreco")
+                .is_some_and(Value::is_null))
+    {
+        return vazio(
+            o,
+            "Aguardando catálogo e tier efetivo das Outlands recebidos do jogo.",
+            None,
+        );
+    }
     let base = melhores_hunts(d, conta, ctx, c);
     let Some(base) = base.filter(|b| b.cur.is_some()) else {
         let motivo = if h.is_none() {
@@ -1135,7 +1139,8 @@ fn plano_completo(d: &Value, r: &Relogio, conta: &ContaViva, ctx: &ContextoHunt)
     let luta_lv = limite.unwrap_or(base.at.lvl);
     let tr_lv_h = ou(num(conta.ultimo.get("trLv")), luta_lv);
     let piso_lv = (min_js(luta_lv, tr_lv_h) * 0.5).floor();
-    let segura_para = |h: f64| h >= piso_lv && limite.is_none_or(|l| h <= l + 15.0);
+    let segura_para =
+        |h: f64, out: bool| (out || h >= piso_lv) && limite.is_none_or(|l| h <= l + 15.0);
     let max_pior = js::mais(c.get("maxPiorPct"));
     let bloqueada = |nome: &str| {
         d.get("bloqueio")
@@ -1162,10 +1167,7 @@ fn plano_completo(d: &Value, r: &Relogio, conta: &ContaViva, ctx: &ContextoHunt)
         } else {
             None
         };
-        let sp = EspValor {
-            d: Some(x.sp.id),
-            tr_lv: ou(num(conta.ultimo.get("trLv")), 0.0),
-        };
+        let sp = EspValor { d: Some(x.sp.id) };
         let val = match med {
             Some(m) => Some(m),
             None => encolher(valor_hunt(obj_chave, &p, &sp, &gemas), enc),
@@ -1186,7 +1188,7 @@ fn plano_completo(d: &Value, r: &Relogio, conta: &ContaViva, ctx: &ContextoHunt)
                 && x.r.bate >= 2.5
                 && x.sp.nome != base.h_nome
                 && !bloqueada(&x.sp.nome)
-                && segura_para(x.h)
+                && segura_para(x.h, eh_outland(Some(x.sp.id)))
         })
         .collect();
     let kph_w = w.kph.filter(|k| verd(*k));
@@ -1244,7 +1246,7 @@ fn plano_completo(d: &Value, r: &Relogio, conta: &ContaViva, ctx: &ContextoHunt)
             x.r.pior < max_pior
                 && x.sp.nome != base.h_nome
                 && !bloqueada(&x.sp.nome)
-                && segura_para(x.h)
+                && segura_para(x.h, eh_outland(Some(x.sp.id)))
         })
         .collect();
     let chave_atual = format!("{}|{}", base.h_nome, nv(base.h_lvl));
@@ -1555,6 +1557,12 @@ pub fn motor_hunt_completo(
     conta: &ContaViva,
     ctx: &ContextoHunt,
 ) -> SaidaHunt {
+    if config::efetiva(d, &conta.nick).pointer("/safari/ativo") == Some(&Value::Bool(true)) {
+        return SaidaHunt {
+            decisoes: super::safari::motor(d, laco, r, conta, ctx.dex),
+            gravacoes: Vec::new(),
+        };
+    }
     let nick = conta.nick.as_str();
     let ag = r.agora_ms as f64;
     let mut ac = Acumulo {
@@ -2119,6 +2127,78 @@ fn p_precos(ctx: &ContextoHunt) -> Precos {
 #[cfg(test)]
 mod testes {
     use super::*;
+
+    #[test]
+    fn outland_usa_chance_e_tier_reais_sem_receita_inventada_de_fragmentos() {
+        let g = Gemas {
+            precos: json!({"bronzeToken":100,"fragChave":100000,"outlandBonus":1}),
+            ch_shiny: 0.0,
+            out_mult: Some(1.25),
+            token_chance: Some(0.0001),
+        };
+        assert_eq!(
+            valor_gemas_h(Some(1000.0), &EspValor { d: Some(2001) }, &g),
+            12.5
+        );
+        let sem_tier = Gemas {
+            out_mult: None,
+            ..g
+        };
+        assert!(valor_gemas_h(Some(1000.0), &EspValor { d: Some(2001) }, &sem_tier).is_nan());
+    }
+
+    #[test]
+    fn outland_150_continua_candidata_para_lutador_1000() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let dex = Pokedex::de_valor(json!([
+            {"d":6,"n":"Charizard","t":["FIRE","FLYING"],"s":[78,84,78,109,85,100],"h":80,"c":"pokebola","m":[["Ember",100,1,"E","FIRE"]]},
+            {"d":2001,"n":"Furious Scizor","t":["BUG","STEEL"],"s":[70,130,100,55,80,65],"h":150,"c":"pokebola","m":[["Tackle",40,5,"F","NORMAL"]]},
+            {"d":2002,"n":"Tribal Scizor","t":["BUG","STEEL"],"s":[70,130,100,55,80,65],"h":150,"c":"pokebola","m":[["Tackle",40,5,"F","NORMAL"]]}
+        ]))?;
+        let r = Relogio {
+            agora_ms: 1_800_000_000_000,
+            fuso_ms: 0,
+        };
+        let c = ContaViva {
+            nick: "Ana".into(),
+            hunt_desde: r.agora_ms - 1_200_000,
+            ultimo: json!({"hunt":"Furious Scizor · Outland 104 · nível 150","trLv":"1000","outlandTier":104,
+                "ativo":{"nome":"Charizard","lv":"Nv 1000","q":"1,5","pot":"P1"}}),
+            welcome: json!({"outlandTiers":[{"tier":104,"numero":4,"nivel":1000,"mult":1.25,"rotulo":"Outland 4"}],"chanceBossToken":0.0001,"nexusTokenPreco":100}),
+            linhas: (0..25)
+                .map(|i| {
+                    (
+                        i,
+                        r.agora_ms - 60_000 + i * 1000,
+                        "Furious Scizor derrotado! +10 xp treinador, +10 xp pokemon, +10 ouro"
+                            .into(),
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let k = Constantes::wiki();
+        let ctx = ContextoHunt {
+            dex: &dex,
+            k: &k,
+            precos: Precos::default(),
+            limite_rodizio: None,
+            equipe_no_comando: false,
+            rodizio_volta: false,
+            hunt_desde: c.hunt_desde as f64,
+        };
+        let d = json!({"config":{"Ana":{"hunt":{"objetivo":"gemas","soOutland":true,"maxPiorPct":10000}}}});
+        let plano = plano_completo(&d, &r, &c, &ctx);
+        assert!(
+            plano.base.is_some(),
+            "a hunt deve ser reconhecida sem o sufixo de apresentação"
+        );
+        assert!(
+            plano.best.is_some(),
+            "Outland 150 não deve ser excluída pelo piso de XP de 500"
+        );
+        Ok(())
+    }
 
     #[test]
     fn formata_como_pt_br() {

@@ -143,10 +143,20 @@ pub async fn alterar_config(
     campo: &str,
     valor: &Value,
 ) -> Result<bool, sqlx::Error> {
+    if secao == "hunt"
+        && campo == "objetivo"
+        && !valor
+            .as_str()
+            .is_some_and(|v| ["xp", "lucro", "equilibrio", "gemas", "shiny"].contains(&v))
+    {
+        return Ok(false);
+    }
     let r = sqlx::query(
         "UPDATE nexus.motor_config
-            SET dados = jsonb_set(dados, ARRAY[$3], $4::jsonb),
-                texto = jsonb_set(dados, ARRAY[$3], $4::jsonb)::json
+            SET dados = jsonb_set(dados, ARRAY[$3], $4::jsonb) ||
+                  CASE WHEN $2='hunt' AND $3='objetivo' THEN '{\"objetivoManual\":true}'::jsonb ELSE '{}'::jsonb END,
+                texto = (jsonb_set(dados, ARRAY[$3], $4::jsonb) ||
+                  CASE WHEN $2='hunt' AND $3='objetivo' THEN '{\"objetivoManual\":true}'::jsonb ELSE '{}'::jsonb END)::json
           WHERE nick = $1 AND secao = $2 AND dados ? $3
             AND jsonb_typeof(dados->$3) = jsonb_typeof($4::jsonb)",
     )
@@ -499,6 +509,31 @@ fn resumo(v: &Value) -> String {
 pub async fn gravar_janela(db: &PgPool, conta: &str, janela: &Value) -> Result<(), sqlx::Error> {
     let mut j = janela.clone();
     let login = j.as_object_mut().and_then(|m| m.remove("welcome"));
+    if let Some(l) = login
+        .as_ref()
+        .filter(|l| l.get("outlandTiers").is_some_and(Value::is_array))
+    {
+        let regras = serde_json::json!({"outlandTiers":l.get("outlandTiers"),"chanceBossToken":l.get("chanceBossToken"),"outlandDex":l.get("outlandDex")});
+        let id = l
+            .get("outlandRegrasId")
+            .and_then(Value::as_str)
+            .filter(|s| s.len() <= 80)
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                use sha2::Digest;
+                sha2::Sha256::digest(regras.to_string().as_bytes())
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            });
+        sqlx::query(
+            "INSERT INTO nexus.outland_regra(id,dados) VALUES($1,$2) ON CONFLICT(id) DO NOTHING",
+        )
+        .bind(id)
+        .bind(regras)
+        .execute(db)
+        .await?;
+    }
     sqlx::query(
         "INSERT INTO nexus.motor_janela (conta, em, janela, login, login_em)
          VALUES ($1, now(), $2, $3, CASE WHEN $3::jsonb IS NULL THEN NULL ELSE now() END)

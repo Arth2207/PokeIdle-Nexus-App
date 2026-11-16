@@ -12,7 +12,34 @@
     } catch (e) {}
     return null;
   }
-  function enviar(msg) { invocar('coletor_evento', { msg: msg }); }
+  var contexto = { outland_tier: null, hunt_slug: null, regras_id: null, ativo_id: null, ativo_nivel: null, loot: null };
+  var niveis = {}, huntsOutland = {}, pendentesHunt = [];
+  function regrasId(m) {
+    var texto = JSON.stringify([m.outlandTiers, m.chanceBossToken]), h = 2166136261;
+    for (var j = 0; j < texto.length; j++) h = Math.imul(h ^ texto.charCodeAt(j), 16777619);
+    return 'outland:' + (h >>> 0).toString(16);
+  }
+  function atualizarContexto(m) {
+    if (m.t === 'welcome' && Array.isArray(m.outlandTiers)) {
+      contexto.regras_id = regrasId(m); m.nexusRegrasId = contexto.regras_id;
+      huntsOutland = {}; (m.hunts || []).forEach(function(h) { if (h.area === 'outland') huntsOutland[h.slug] = true; });
+    }
+    var e = m.estado;
+    if (!e) return;
+    if (m.t === 'welcome') { niveis = {}; contexto.loot = null; }
+    if ('huntSlug' in e) contexto.hunt_slug = e.huntSlug;
+    if ('outlandTier' in e) contexto.outland_tier = e.outlandTier;
+    if ('activeId' in e) contexto.ativo_id = e.activeId;
+    (e.pokemons || e.pkMud || []).forEach(function(p) { niveis[p.id] = p.level; });
+    contexto.ativo_nivel = niveis[contexto.ativo_id] || null;
+    // Guarda o que foi informado, sem inventar multiplicador para bônus ausentes.
+    if ('lootBoost' in e || 'guildBonusPct' in e) contexto.loot = { lootBoost: e.lootBoost == null ? null : e.lootBoost, guildBonusPct: e.guildBonusPct == null ? null : e.guildBonusPct };
+    pendentesHunt.slice().forEach(function(p) { if (contexto.hunt_slug === p.slug && (p.tier == null || contexto.outland_tier === p.tier)) p.concluir('ok'); });
+  }
+  function enviar(msg) {
+    if (msg.t === 'batalha' || msg.t === 'hud' || msg.t === 'hunt.contexto') msg.contexto = Object.assign({}, contexto);
+    invocar('coletor_evento', { msg: msg });
+  }
 
   // --- WebSocket do jogo (mesmo gancho do legado): subclasse preserva WebSocket.OPEN etc.;
   // o send() também captura conexão criada antes do gancho. Só a conexão do próprio jogo.
@@ -30,6 +57,7 @@
       if (bruto) enviar({ t: 'bruto', dir: 'in', dados: ev.data.slice(0, 3145728) });
       try {
         var m = JSON.parse(ev.data);
+        if (m) atualizarContexto(m);
         if (m && repassa[m.t]) enviar(m);
         // Respostas do mercado: a varredura do app (relay) depende delas.
         else if (m && m.t === 'market' && abasMercado[m.aba]) enviar({ t: 'mkt', m: m });
@@ -114,9 +142,16 @@
   window.__nexus = {
     bruto: function (v) { bruto = !!v; },
     executar: function (id, o) {
-      var r;
+      var r, esperadoTier = o.t === 'hunt.select' && huntsOutland[o.slug] ? contexto.outland_tier : null;
       try { r = String(cmd(o)); } catch (e) { r = 'erro:' + String(e).slice(0, 80); }
-      invocar('coletor_resultado', { id: id, resultado: r.slice(0, 200) });
+      if (r === 'ok' && o.t === 'hunt.select' && contexto.hunt_slug !== o.slug) {
+        var timer, p = { slug: o.slug, tier: esperadoTier, concluir: function(res) {
+          clearTimeout(timer); var i = pendentesHunt.indexOf(p); if (i < 0) return;
+          pendentesHunt.splice(i, 1); invocar('coletor_resultado', { id: id, resultado: res });
+        }};
+        pendentesHunt.push(p);
+        timer = setTimeout(function() { p.concluir('erro: hunt não confirmada pelo estado do jogo'); }, 12000);
+      } else invocar('coletor_resultado', { id: id, resultado: r.slice(0, 200) });
     }
   };
 
@@ -153,6 +188,7 @@
   function texto(id) { var e = document.getElementById(id); return e ? (e.textContent || '').trim() : ''; }
   setInterval(function () {
     var s = window.__hdxWs;
+    if (s && s.readyState === 1 && vistoWs && Date.now() - vistoWs < 30000) enviar({ t: 'hunt.contexto' });
     enviar({ t: 'vivo', ws: !!(s && s.readyState === 1), msg_ms: vistoWs,
       hunt: (texto('hud-hunt') || texto('eco-onde')).slice(0, 80) });
   }, 15000);

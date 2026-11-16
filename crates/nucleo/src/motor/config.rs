@@ -6,7 +6,8 @@ use serde_json::{json, Map, Value};
 pub fn padrao() -> Value {
     json!({
         "compra": { "ativo": false, "auto": true, "bolaId": null, "bolaMin": 300, "bolaLote": 500, "pocaoId": null, "pocaoMin": 200, "pocaoLote": 300, "reservaOuro": 1_000_000, "maxGastoHora": 500_000 },
-        "hunt": { "ativo": false, "soOutland": false, "explorar": true, "margem": 0.15, "intervaloMin": 10, "maxPiorPct": 0.4, "objetivo": "xp" },
+        "hunt": { "objetivoManual": false, "ativo": false, "soOutland": false, "explorar": true, "margem": 0.15, "intervaloMin": 10, "maxPiorPct": 0.4, "objetivo": "xp" },
+        "safari": { "ativo": false },
         "pocao": { "ativo": true },
         "gemaPrecos": { "shiny": 50, "bronzeToken": 300, "fragChave": 5, "fragShinyStone": 5, "fragBicicleta": 5, "outlandBonus": 1.0 },
         "retomar": { "ativo": false, "minutos": 5 },
@@ -91,6 +92,10 @@ pub fn efetiva(d: &Value, nick: &str) -> Value {
             if crate::js::verdadeiro(off.get(&k)) {
                 e.shift_remove("ativo");
             }
+            if k == "hunt" && o.pointer("/hunt/objetivoManual") == Some(&Value::Bool(true)) {
+                e.shift_remove("objetivo");
+                e.shift_remove("soOutland");
+            }
             let novo = espalhar(o.get(&k), Some(&Value::Object(e)));
             if let Value::Object(m) = &mut o {
                 m.insert(k, novo);
@@ -150,6 +155,14 @@ pub fn carregar(arquivo: &Value) -> Value {
 mod testes {
     use super::*;
 
+    #[test]
+    fn objetivo_manual_nao_liga_venda_npc_nem_e_sobrescrito_pelo_papel() {
+        let d = json!({"config":{"Ana":{"papel":{"tipo":"farm"},"hunt":{"objetivo":"gemas","objetivoManual":true,"soOutland":true}}}});
+        let c = efetiva(&d, "Ana");
+        assert_eq!(c["hunt"]["objetivo"], "gemas");
+        assert_eq!(c["hunt"]["soOutland"], true);
+        assert_eq!(c["venderNpc"]["ativo"], false);
+    }
     #[test]
     fn base_mescla_por_secao_na_ordem_do_padrao() {
         let d = json!({"config": {"Ana": {"hunt": {"ativo": true, "extra": 1}, "radar": 0}}});

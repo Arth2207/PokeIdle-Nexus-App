@@ -9,8 +9,8 @@ use crate::comp::{carregado, Abas, Barras, Calor, Kpi, Linha, Tabela, Veredito};
 use crate::dados::{curto, inteiro, lista, num, recurso, txt};
 use crate::Estado;
 
-const ABAS: &[&str] = &["Sessão ao vivo", "Mapa de hunts", "Shiny"];
-const METRICAS: &[&str] = &["Lucro/h", "Ouro/h", "XP/h", "Abates/h"];
+const ABAS: &[&str] = &["Sessão ao vivo", "Mapa de hunts", "Outlands", "Safari", "Shiny"];
+const METRICAS: &[&str] = &["Receita/h", "Ouro/h", "XP/h", "Abates/h"];
 
 /// "furious_scizor" → "Furious Scizor".
 fn nome_hunt(slug: &str) -> String {
@@ -211,7 +211,7 @@ fn mapa(c: &Value, metrica: &'static str, tickers: &[Value]) -> AnyView {
     let chave = |x: &HuntMedida| match metrica {
         "XP/h" => num(&x.0, "xp").unwrap_or(0.0),
         "Abates/h" => num(&x.0, "kills").unwrap_or(0.0),
-        "Lucro/h" => num(&x.0, "ouro").unwrap_or(0.0) + x.2,
+        "Receita/h" => num(&x.0, "ouro").unwrap_or(0.0) + x.2,
         _ => num(&x.0, "ouro").unwrap_or(0.0),
     };
     l.sort_by(|a, b| chave(b).total_cmp(&chave(a)));
@@ -302,7 +302,7 @@ fn mapa(c: &Value, metrica: &'static str, tickers: &[Value]) -> AnyView {
 pub fn Cacada(e: Estado) -> impl IntoView {
     let versao = RwSignal::new(0u32);
     let aba = RwSignal::new("Sessão ao vivo");
-    let metrica = RwSignal::new("Lucro/h");
+    let metrica = RwSignal::new("Receita/h");
     let cacada = recurso(e, versao, move || {
         Some(format!(
             "/api/cacada?conta={}",
@@ -327,6 +327,8 @@ pub fn Cacada(e: Estado) -> impl IntoView {
                     mapa(&c, metrica.get(), &t)
                 })}
             }.into_any(),
+            "Outlands" => super::outlands::Outlands(e, versao).into_any(),
+            "Safari" => super::safari::Safari(e, versao).into_any(),
             _ => carregado(shiny.get(), move |s| {
                 let chance = hist.get().and_then(|h| h.and_then(Result::ok)).and_then(|h| num(&h, "chanceShiny"));
                 let linhas: Vec<(String, f64, String)> = lista(&s, "especies").iter().take(15).map(|x| {

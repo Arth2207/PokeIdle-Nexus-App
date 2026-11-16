@@ -74,6 +74,8 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/equipes/colecao", get(pvp::colecao))
         .route("/api/contas", get(janela::contas))
         .route("/api/cacada", get(janela::cacada))
+        .route("/api/outlands", get(janela::outlands))
+        .route("/api/cacada/capturas", get(janela::capturas))
         .route("/api/financas/mercado", get(janela::extrato_mercado))
         .route("/api/financas/cacada", get(janela::ouro_cacada))
         .route("/api/motor/decisoes", get(janela::decisoes))

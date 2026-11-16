@@ -11,6 +11,7 @@ use sqlx::{PgPool, Row};
 /// Tipos de evento que o legado conhece (`ev.k`).
 pub const TIPOS: &[&str] = &[
     "kill",
+    "hunt.contexto",
     "capturado",
     "drop",
     "bola",

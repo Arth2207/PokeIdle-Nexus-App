@@ -1,11 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Nexus",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "app.nexus.desktop",
   "build": {
     "frontendDist": "./ui/dist",
-    "beforeBuildCommand": { "script": "trunk build --release", "cwd": "ui", "wait": true }
+    "beforeBuildCommand": { "script": "trunk build --release --public-url ./", "cwd": "ui", "wait": true }
   },
   "app": {
     "withGlobalTauri": true,

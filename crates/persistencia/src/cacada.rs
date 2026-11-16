@@ -166,6 +166,16 @@ pub async fn ouro_por_dia(db: &PgPool, dias: i64) -> Result<Vec<Value>, sqlx::Er
         .collect())
 }
 
+/// Semana do Top Catch (domingo em Brasília), capturas e espécies únicas elegíveis.
+pub async fn capturas(db: &PgPool, rotulo: &str, agora_ms: i64) -> Result<Value, sqlx::Error> {
+    let dados: Value = sqlx::query_scalar(include_str!("sql/capturas_semana.sql"))
+        .bind(rotulo.trim().to_lowercase())
+        .bind(agora_ms)
+        .fetch_one(db)
+        .await?;
+    Ok(nucleo::top_catch::com_marcos(dados))
+}
+
 #[cfg(test)]
 mod testes {
     use super::*;

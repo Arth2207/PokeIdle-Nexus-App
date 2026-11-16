@@ -118,6 +118,8 @@ pub fn welcome_motor(w: &Value) -> Value {
         "pedrasEvolucao": w.get("pedrasEvolucao"), "refino": w.get("refino"),
         "itensTipos": w.get("itensTipos"),
         "chanceShiny": w.get("chanceShiny").and_then(Value::as_f64),
+        "outlandTiers": w.get("outlandTiers"), "outlandDex": w.get("outlandDex"),
+        "chanceBossToken": w.get("chanceBossToken"), "outlandRegrasId": w.get("nexusRegrasId"),
     })
 }
 
@@ -230,7 +232,15 @@ pub fn montar(c: &Conta, x: &Contexto) -> Value {
             if let (Some("outland"), Some(t)) =
                 (h.get("area").and_then(Value::as_str), c.tier_outland)
             {
-                nome = format!("{nome} · Outland {t}");
+                let rotulo = x
+                    .welcome
+                    .get("outlandTiers")
+                    .and_then(Value::as_array)
+                    .and_then(|ts| ts.iter().find(|x| x["tier"].as_i64() == Some(t)))
+                    .and_then(|x| x["rotulo"].as_str())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("Outland (ID {t})"));
+                nome = format!("{nome} · {rotulo}");
             }
             let nivel = n(h, "nivel");
             (format!("{nome} · nível {nivel}"), format!("{nome}|{nivel}"))
@@ -247,6 +257,7 @@ pub fn montar(c: &Conta, x: &Contexto) -> Value {
     player.insert("level".into(), json!(c.level));
     player.insert("activeId".into(), json!(c.ativo));
     player.insert("huntSlug".into(), json!(c.hunt));
+    player.insert("outlandTier".into(), json!(c.tier_outland));
     player.insert("guildBonusPct".into(), json!(c.bonus_guild));
     let vit: Map<String, Value> = c.vitorias.iter().map(|k| (k.clone(), json!(1))).collect();
     player.insert("bossVit".into(), Value::Object(vit));
@@ -262,7 +273,7 @@ pub fn montar(c: &Conta, x: &Contexto) -> Value {
             "hp": format!("{} / {}", n(p, "hp"), n(p, "maxHp")),
             "xp": xp_txt(n(p, "xp"), n(p, "xpNivel"), n(p, "xpProximo")),
         })),
-        "hunt": hunt_txt, "dia": c.dia_tipo,
+        "hunt": hunt_txt, "huntSlug": c.hunt, "outlandTier": c.tier_outland, "dia": c.dia_tipo,
         "limiar": a.get("hpLimiar").and_then(Value::as_f64).map(|l| ((l * 100.0).round() as i64).to_string()),
         "bolas": bolas, "pocoes": pocoes, "equipe": equipe, "eco": "", "ecoTempo": null,
         "io": {"player": player, "active": ativo.map(mon)},
@@ -291,10 +302,19 @@ mod testes {
     use super::*;
 
     #[test]
+    fn preserva_catalogo_novo_e_chance_do_login() {
+        let w = json!({"outlandTiers":[{"tier":104,"numero":4,"nivel":1000,"mult":1.25,"rotulo":"Outland 4"}],"chanceBossToken":0.0001,"outlandDex":{"min":2001,"max":2058},"nexusRegrasId":"v2"});
+        let motor = welcome_motor(&w);
+        assert_eq!(motor["outlandTiers"][0]["numero"], 4);
+        assert_eq!(motor["chanceBossToken"], 0.0001);
+        assert_eq!(motor["outlandRegrasId"], "v2");
+    }
+    #[test]
     fn textos_da_tela_e_formato_do_motor() {
         assert_eq!(milhar(324_629_612.0), "324.629.612");
         assert_eq!(decimal3(1.6), "1,600");
         let w = json!({"hunts": [{"slug": "furious_scizor", "nome": "Furious Scizor", "nivel": 150, "area": "outland"}],
+            "outlandTiers":[{"tier":2,"numero":2,"rotulo":"Outland 2","nivel":1000,"mult":1.25}],
             "catalogoBolas": [{"id": 1, "name": "Poke Ball", "priceGold": 5, "compravel": true}],
             "itensNossos": [{"id": 70070, "name": "Golden Potion", "category": "heal", "npcPrice": 10}],
             "multHpSelvagem": 5});
