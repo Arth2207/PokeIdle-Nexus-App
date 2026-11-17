@@ -39,16 +39,23 @@ fn metas(p: &Value, mensal: bool) -> AnyView {
         num(s, "ganho").unwrap_or(0.0),
         num(s, "perda").unwrap_or(0.0),
     );
-    let ritmo = num(s, "ultimas6h").unwrap_or(0.0) / 6.0;
+    let partidas_dia = if mensal {
+        None
+    } else {
+        dias_restantes.map(|dias| (v + d) / (7.0 - dias).max(1.0))
+    };
     let saldo_dia = num(&p["mensal"], "saldoDia");
     let proximo = DEGRAUS.iter().copied().find(|n| {
         let pos = n.parse::<f64>().unwrap_or_default();
-        posicao.is_none_or(|p| p > pos)
+        posicao.map_or_else(
+            || corte(cortes, "atual", n).is_none_or(|c| pontos <= c),
+            |p| p > pos,
+        )
     });
     view! {
         <div class="caixa">
             <div class="secao">{proximo.map_or("Manter o Top 10".to_owned(), |n| format!("Próximo degrau: Top {n}"))}</div>
-            <p>{format!("{} pontos{}",inteiro(pontos),posicao.map_or(String::new(),|p| format!(" · posição #{}",inteiro(p))))}</p>
+            <p>{format!("{} pontos{}",inteiro(pontos),posicao.map_or(" · posição não informada pelo jogo".into(),|p| format!(" · posição #{}",inteiro(p))))}</p>
             <div class="cortes">
                 {DEGRAUS.into_iter().map(|pos| {
                     let atual = corte(cortes,"atual",pos);
@@ -70,9 +77,12 @@ fn metas(p: &Value, mensal: bool) -> AnyView {
                         match pp {
                             Some(saldo) if saldo > 0.0 && v + d >= 10.0 => {
                                 let partidas = (falta / saldo).ceil();
-                                let cabe = dias_restantes.filter(|_| ritmo > 0.0).map(|dias| partidas <= dias * 24.0 * ritmo);
-                                format!("{base} · ≈ {} partidas{}",inteiro(partidas),
-                                    match cabe { Some(true) => " · no ritmo", Some(false) => " · acima do ritmo", None => "" })
+                                dias_restantes.zip(partidas_dia).filter(|(dias,_)| *dias > 0.0).map_or_else(
+                                    || format!("{base} · ≈ {} partidas",inteiro(partidas)),
+                                    |(dias, ritmo)| format!("{base} · ≈ {} partidas · {:.0}/dia necessárias · {:.0}/dia observadas{}",
+                                        inteiro(partidas),(partidas/dias).ceil(),ritmo,
+                                        if partidas/dias <= ritmo { " · no ritmo" } else { " · acima do ritmo" })
+                                )
                             }
                             Some(saldo) if v + d >= 10.0 => format!("{base} · saldo atual de {saldo:+.1} pts/partida"),
                             _ => format!("{base} · precisa de 10 partidas observadas para projetar"),
@@ -92,7 +102,7 @@ fn metas(p: &Value, mensal: bool) -> AnyView {
             <div class="dica">{if mensal {
                 "O corte pode subir até o fim do mês. O ritmo usa a variação dos seus pontos mensais nos últimos 7 dias."
             } else {
-                "A referência usa o maior corte disponível entre o atual e o fechamento anterior. O ritmo semanal usa suas partidas desta semana."
+                "A referência usa o maior corte disponível entre o atual e o fechamento anterior. O ritmo semanal usa a média diária desde domingo."
             }}</div>
         </div>
     }.into_any()
