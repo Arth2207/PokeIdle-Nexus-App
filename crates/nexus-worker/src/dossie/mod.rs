@@ -279,6 +279,44 @@ async fn despachar(d: &Dossie, p: &Pedido, corpo: Body) -> Result<Response, Erro
         "GET /api/dossie/especie" => leitura::especie(d, p).await,
         "GET /api/dossie/dataset" => leitura::dataset(d).await,
         "GET /api/dossie/cacada-medidas" => leitura::cacada_medidas(d, p).await,
+        "GET /api/dossie/cacada-contas" => {
+            if !acesso::privado(d, p) {
+                return Ok(enviar(&json!({"contas":[]}), 200));
+            }
+            let contas:Vec<String>=sqlx::query_scalar("SELECT janela->>'nick' FROM nexus.motor_janela WHERE em>now()-interval '90 seconds' ORDER BY conta").fetch_all(&d.db).await?;
+            Ok(enviar(&json!({"contas":contas}), 200))
+        }
+        "POST /api/dossie/cacada-previsao" => {
+            if !acesso::privado(d, p) {
+                return Ok(enviar(
+                    &json!({"erro":"Abra o dossiê pelo acesso privado para calibrar com sua conta."}),
+                    403,
+                ));
+            }
+            if !d.limites.ok(&p.ip, 30) {
+                return Ok(enviar(&json!({"erro":"muitas requisições"}), 429));
+            }
+            let b = ler_json(corpo).await?;
+            let nick = b["conta"]
+                .as_str()
+                .filter(|s| !s.is_empty() && s.len() <= 128)
+                .ok_or_else(|| Erro::novo(400, "Escolha a conta para usar bônus e ritmo reais."))?;
+            let entrada = persistencia::cacada_contexto::entradas(
+                &d.db,
+                nick,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?
+            .ok_or_else(|| Erro::novo(404, "Aguardando dados recentes da conta."))?;
+            let ficha = b.get("ficha").filter(|f| f.is_object()).cloned();
+            let resultado = tokio::task::spawn_blocking(move || entrada.calcular(ficha))
+                .await
+                .map_err(|e| Erro::novo(500, e.to_string()))?;
+            match resultado {
+                Ok(v) => Ok(enviar(&v, 200)),
+                Err(e) => Ok(enviar(&json!({"erro":e}), 400)),
+            }
+        }
         "GET /api/ia/memoria"
         | "GET /api/ia/playbook"
         | "GET /api/ia/performance"

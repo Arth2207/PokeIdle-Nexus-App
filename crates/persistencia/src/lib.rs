@@ -6,6 +6,7 @@
 
 pub mod bolsa_equipe;
 pub mod cacada;
+pub mod cacada_contexto;
 pub mod comandos;
 pub mod equipes;
 pub mod eventos;

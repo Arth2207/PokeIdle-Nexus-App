@@ -1,6 +1,7 @@
 //! Montagem do roteador HTTP.
 
 mod bolsa;
+mod cacada_previsao;
 mod comandos;
 mod equipes;
 mod eventos;
@@ -76,6 +77,7 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/relay/controle", get(relay::estado))
         .route("/api/contas", get(janela::contas))
         .route("/api/cacada", get(janela::cacada))
+        .route("/api/cacada/previsao", get(cacada_previsao::prever))
         .route("/api/progressao", get(janela::progressao))
         .route("/api/outlands", get(janela::outlands))
         .route("/api/cacada/capturas", get(janela::capturas))

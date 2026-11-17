@@ -104,7 +104,10 @@ impl Sombra {
     /// app manda (`nexus.motor_janela`, só as recebidas no último minuto e meio).
     async fn ler_do_nexus(&self, db: &PgPool) -> anyhow::Result<(Value, Value)> {
         let dados = repo::carregar_dados(db).await?;
-        let contas = repo::janelas_frescas(db, 90).await?;
+        let mut contas = repo::janelas_frescas(db, 90).await?;
+        for c in &mut contas {
+            persistencia::cacada_contexto::enriquecer(db, c, crate::bolsa::agora_ms()).await?;
+        }
         let agora = crate::bolsa::agora_ms();
         Ok((
             dados,

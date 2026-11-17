@@ -44,21 +44,30 @@ pub fn prever(c: &ContaViva, agora: i64) -> Value {
         .collect();
     eventos.sort_by_key(|e| e.0);
     eventos.dedup();
-    let mut xp_medido = 0.0;
-    let mut tempo_ms = 0;
-    let mut intervalos = 0;
-    // Intervalos longos são lacunas: não fingir que houve combate contínuo.
-    for par in eventos.windows(2) {
-        let dt = par[1].0 - par[0].0;
-        if dt > 0 && dt <= 30_000 {
-            tempo_ms += dt;
-            xp_medido += par[1].1;
-            intervalos += 1;
-        }
-    }
-    let recente = eventos.last().is_some_and(|e| agora - e.0 <= 120_000);
-    let taxa = (recente && intervalos >= 20 && tempo_ms >= 120_000 && xp_medido > 0.0)
+    // Do primeiro evento observado até agora: silêncio com o cliente vivo também é tempo.
+    // Não apagar intervalos longos entre abates: podem ser caminhada, spawn ou captura.
+    let primeiro = eventos.first().map(|e| e.0).unwrap_or(agora);
+    let tempo_ms = (agora - primeiro).max(0);
+    let xp_medido: f64 = eventos.iter().skip(1).map(|e| e.1).sum();
+    let recente = c.ultimo["t"]
+        .as_i64()
+        .is_some_and(|t| (0..=90_000).contains(&(agora - t)))
+        || eventos
+            .last()
+            .is_some_and(|e| (0..=120_000).contains(&(agora - e.0)));
+    let bonus = c
+        .ultimo
+        .pointer("/bonusXp/tr")
+        .and_then(Value::as_f64)
+        .filter(|b| *b > 0.0);
+    let nivel_hunt = jogo::hunt_atual(c).and_then(|(_, n)| n);
+    let xp_comparavel = bonus
+        .zip(nivel_hunt)
+        .map(|(b, n)| eventos.len().saturating_sub(1) as f64 * (jogo::xp_base(n) * b).round())
+        .unwrap_or(xp_medido);
+    let taxa_observada = (recente && eventos.len() >= 21 && tempo_ms >= 120_000 && xp_medido > 0.0)
         .then(|| xp_medido * 3_600_000.0 / tempo_ms as f64);
+    let taxa = taxa_observada.map(|_| xp_comparavel * 3_600_000.0 / tempo_ms as f64);
     let horas = if falta == 0.0 {
         Some(0.0)
     } else {
@@ -66,9 +75,9 @@ pub fn prever(c: &ContaViva, agora: i64) -> Value {
     };
     json!({"meta":META,"nivel":nivel,"xpAtual":xp,"xpFalta":falta,
         "progressoPct":(xp / xp_total(META) * 100.0).clamp(0.0,100.0),
-        "xpH":taxa,"horas":horas,"chegadaEm":horas.map(|h|agora as f64+h*3_600_000.0),
+        "xpH":taxa,"xpHObservado":taxa_observada,"bonusAtual":bonus,"horas":horas,"chegadaEm":horas.map(|h|agora as f64+h*3_600_000.0),
         "amostraMin":tempo_ms as f64/60_000.0,"abates":eventos.len(),"atingida":falta==0.0,
-        "motivo":if falta==0.0 {"Meta atingida."} else if taxa.is_none() {"Aguardando ao menos 2 minutos e 20 intervalos de abates recentes na mesma hunt."} else {"Estimativa mantendo o ritmo atual, jogando continuamente. Bônus, paradas e futuras hunts mudam a previsão."}})
+        "motivo":if falta==0.0 {"Meta atingida."} else if taxa.is_none() {"Aguardando ao menos 2 minutos e 20 intervalos de abates recentes na mesma hunt."} else {"Estimativa com o ritmo de abates observado e os bônus atuais, incluindo caminhada e espera. Mudanças de bônus e de hunt alteram a chegada."}})
 }
 
 #[cfg(test)]
@@ -120,6 +129,10 @@ mod testes {
         for (_, t, _) in &mut c.linhas {
             *t *= 4;
         }
-        assert!(prever(&c, 5_200_000)["xpH"].is_null());
+        assert_eq!(prever(&c, 5_200_000)["xpH"], 90000.0);
+        // Cinco minutos sem matar, com sinal de vida, diminuem o ritmo em vez de sumirem.
+        let mut c = conta();
+        c.ultimo["t"] = json!(1_600_000);
+        assert_eq!(prever(&c, 1_600_000)["xpH"], 180000.0);
     }
 }

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use serde_json::{json, Map, Value};
 
 /// Campos da ficha que o servidor usa para montar equipes (`_EQ_CAMPOS` do relay antigo).
-pub const CAMPOS_EQUIPE: [&str; 19] = [
+pub const CAMPOS_EQUIPE: [&str; 22] = [
     "id",
     "speciesId",
     "looktype",
@@ -26,6 +26,9 @@ pub const CAMPOS_EQUIPE: [&str; 19] = [
     "tmElemental",
     "tmAoe",
     "refinoTotal",
+    "refino",
+    "tmFisico",
+    "heldItemId",
 ];
 
 #[derive(Debug, Default, Clone)]
@@ -45,6 +48,8 @@ pub struct Conta {
     pub automacao: Value,
     pub ativo: Option<i64>,
     pub bonus_guild: Option<f64>,
+    pub bonus_xp: Value,
+    pub bicicleta: Value,
     /// Tipo do dia sazonal (`diaSazonal.tipo`).
     pub dia_tipo: Option<String>,
     /// Tier escolhido na Outland (`outlandTier`).
@@ -97,6 +102,12 @@ impl Conta {
         }
         if let Some(b) = e.get("guildBonusPct").and_then(Value::as_f64) {
             self.bonus_guild = Some(b);
+        }
+        if let Some(v) = e.get("bonusXp") {
+            self.bonus_xp = v.clone();
+        }
+        if let Some(v) = e.get("bicicleta") {
+            self.bicicleta = v.clone();
         }
         if let Some(t) = e.get("outlandTier").and_then(Value::as_i64) {
             self.tier_outland = Some(t);

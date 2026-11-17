@@ -21,29 +21,48 @@ pub(super) fn contexto(c: &ContaViva) -> Value {
     .into_iter()
     .map(|k| (k.into(), p.get(k).cloned().unwrap_or(Value::Null)))
     .collect();
-    json!({"versao":2, "ativo": ficha, "dia":c.ultimo["dia"],
-        "bonus":c.ultimo["bonusXp"], "tier":c.ultimo["outlandTier"],
+    let bonus = |k: &str| {
+        c.ultimo["bonusXp"][k]
+            .as_f64()
+            .map(|v| (v * 10000.0).round() / 10000.0)
+    };
+    json!({"versao":3, "ativo": ficha, "dia":c.ultimo["dia"],
+        "bonus":{"tr":bonus("tr"),"pk":bonus("pk")}, "movimento":c.ultimo["movimento"], "tier":c.ultimo["outlandTier"],
         "regras":c.welcome.get("outlandRegrasId").or_else(|| c.welcome.get("nexusRegrasId")),
         "ballIds":c.ultimo.pointer("/hdx/eu/automation/ballIds"),
         "potionIds":c.ultimo.pointer("/hdx/eu/automation/potionIds")})
 }
 
 /// `shared/sell-value.mjs::xpDoNivel`, versão atual do jogo.
-fn xp_base(n: f64) -> f64 {
-    if n <= 150.0 {
-        (0.6 * n * n).floor() + 8.0
-    } else {
-        (13500.0 * (n / 150.0).powf(1.25)).round()
-    }
+pub(super) fn xp_base(n: f64) -> f64 {
+    crate::motor::jogo::xp_base(n)
 }
 
-fn taxa_abates(cur: &Luta, alt: &Luta, observado: f64) -> f64 {
-    if observado <= 0.0 || cur.kph <= 0.0 || alt.kph <= 0.0 {
-        return 0.0;
+/// Ajusta o tempo entre alvos sem congelar recargas. Não finge calibrar se o combate
+/// simulado já é mais lento que o observado.
+fn pausa_calibrada(
+    me: &Combatente,
+    foe: &Combatente,
+    observado: f64,
+    k: &Constantes,
+) -> Option<f64> {
+    if !observado.is_finite() || observado <= 0.0 {
+        return None;
     }
-    // Deslocamento/nascimento são segundos por abate, não um multiplicador de DPS.
-    let atraso = (3600.0 / observado - 3600.0 / cur.kph).max(0.0);
-    3600.0 / (3600.0 / alt.kph + atraso)
+    let sem_pausa = luta(me, foe, 600.0, k).kph;
+    if observado > sem_pausa * 1.02 {
+        return None;
+    }
+    let (mut lo, mut hi) = (0.0, 120.0);
+    for _ in 0..14 {
+        let meio = (lo + hi) / 2.0;
+        if luta_com_pausa(me, foe, 600.0, k, meio).kph > observado {
+            lo = meio;
+        } else {
+            hi = meio;
+        }
+    }
+    Some((lo + hi) / 2.0)
 }
 
 fn amostra_valida(m: &Value, contexto: &Value, nivel: f64, agora: f64) -> bool {
@@ -77,7 +96,24 @@ pub(super) fn plano(d: &Value, r: &Relogio, c: &ContaViva, ctx: &ContextoHunt) -
     let h = hunt_atual(c);
     let inicio = ctx.hunt_desde.max(c.sessao_inicio as f64) + 15_000.0;
     let ms = (ag - inicio).clamp(0.0, 20.0 * 60e3);
-    let w = janela(c, ms, ag, ag);
+    let mut w = janela(c, ms, ag, ag);
+    let xp_observado = w.xp_h;
+    let xp_pk_observado = w.xp_pk_h;
+    let nivel_h = h.as_ref().and_then(|(_, n)| *n);
+    for (tipo, pk) in [("tr", false), ("pk", true)] {
+        if let Some((nivel, mult)) =
+            nivel_h.zip(c.ultimo["bonusXp"][tipo].as_f64().filter(|m| *m > 0.0))
+        {
+            let por_kill = (xp_base(nivel) * mult).round();
+            if pk {
+                w.xp_pk_kill = Some(por_kill);
+                w.xp_pk_h = w.kph.map(|k| k * por_kill);
+            } else {
+                w.xp_kill = Some(por_kill);
+                w.xp_h = w.kph.map(|k| k * por_kill);
+            }
+        }
+    }
     let medida_ok = w.kills >= 20 && w.span >= 120_000.0 && w.desm == 0;
     let ult = acao_hunt(d, &c.nick);
     let intervalo = hc["intervaloMin"].as_f64().unwrap_or(10.0).max(1.0) * 60e3;
@@ -102,13 +138,14 @@ pub(super) fn plano(d: &Value, r: &Relogio, c: &ContaViva, ctx: &ContextoHunt) -
         .is_some_and(|s| eh_outland(Some(s.id)));
     let atual = valor_atual(&w, obj.0, &ctx.precos, &g, out_atual);
     let lucro = lucro_janela(&w, &ctx.precos);
-    let mut o = json!({"versao":2,"ativo":ver(hc,"ativo"),"objetivo":obj.0,"objNome":obj.1,"un":obj.2,
+    let mut o = json!({"versao":3,"ativo":ver(hc,"ativo"),"objetivo":obj.0,"objNome":obj.1,"un":obj.2,
         "hunt":h.as_ref().map(|(n,l)|json!({"nome":n,"lvl":l})),"kills":w.kills,"killsMin":20,
-        "janelaMin":ms/60e3,"coberturaMin":w.span/60e3,"medidaOk":medida_ok,"xpH":w.xp_h,
+        "janelaMin":ms/60e3,"coberturaMin":w.span/60e3,"medidaOk":medida_ok,"xpH":w.xp_h,"xpPokemonH":w.xp_pk_h,"xpHObservado":xp_observado,"xpPokemonHObservado":xp_pk_observado,
+        "comparacaoXp":"Todas as hunts são comparadas com os bônus atuais da conta.",
         "kph":w.kph,"lucroH":lucro,"atual":atual,"espera":espera,"explorar":null,"degraus":[],
         "candidatos":[],"melhor":null,"capturas":w.capturas,"gemasParcial":true,
         "calibracao":{"fator":1.0,"modelo":"segundos por abate"},"ultimaTroca":ult,
-        "notaModelo":"Previsão por XP do jogo e combate, calibrada pelo tempo observado. Uma troca é um teste; só fica após confirmar o rendimento. Gemas incluem apenas receitas com dados disponíveis."});
+        "notaModelo":"Estimativa de XP sustentado. Inclui tempo sem abates da própria conta e recargas durante caminhada/espera. Espécies ainda não medidas precisam de teste real; não há garantia de ser o máximo global."});
     for k in ["margem", "intervaloMin", "maxPiorPct"] {
         o[k] = hc[k].clone();
     }
@@ -169,11 +206,42 @@ pub(super) fn plano(d: &Value, r: &Relogio, c: &ContaViva, ctx: &ContextoHunt) -
     p.o.insert("piorAtual".into(), json!(cur.pior));
     p.o.insert("analisadas".into(), json!(base.alts.len()));
     let observado = p.w.kph.unwrap_or(0.0);
-    let mult_xp =
-        p.w.xp_kill
-            .filter(|v| *v > 0.0)
-            .map(|x| x / xp_base(base.h_lvl));
+    let mult_xp = c
+        .ultimo
+        .pointer("/bonusXp/tr")
+        .and_then(Value::as_f64)
+        .filter(|v| *v > 0.0)
+        .or_else(|| {
+            p.w.xp_kill
+                .filter(|v| *v > 0.0)
+                .map(|x| x / xp_base(base.h_lvl))
+        });
     p.o.insert("multXpObservado".into(), json!(mult_xp));
+    let mult_pk = c
+        .ultimo
+        .pointer("/bonusXp/pk")
+        .and_then(Value::as_f64)
+        .filter(|v| *v > 0.0)
+        .or_else(|| {
+            p.w.xp_pk_kill
+                .filter(|v| *v > 0.0)
+                .map(|x| x / xp_base(base.h_lvl))
+        });
+    p.o.insert("multXpPokemonObservado".into(), json!(mult_pk));
+    let pausa = base
+        .par_atual
+        .as_ref()
+        .and_then(|(me, foe)| pausa_calibrada(me, foe, observado, ctx.k))
+        .or_else(|| {
+            c.ultimo["pausaEntreAlvos"]
+                .as_f64()
+                .filter(|v| v.is_finite() && *v >= 0.0 && *v <= 120.0)
+        });
+    p.o.insert("calibracao".into(),json!({"modelo":"combate com recargas durante o tempo entre alvos",
+      "pausaSegundos":pausa,"kphObservado":observado,"kphCombateContinuo":cur.kph,
+      "fonte":if observado>0.0 && pausa.is_some(){"amostra da própria conta, incluindo caminhada e espera"}else if pausa.is_some(){"tempo entre alvos informado para a simulação"}else{"sem calibração confiável"}}));
+    p.o.insert("xpPokemonH".into(), json!(p.w.xp_pk_h));
+    let mut exploracoes = Vec::new();
     let mut candidatos = Vec::new();
     let mut resumos = Vec::new();
     let max_pior = hc["maxPiorPct"].as_f64().unwrap_or(0.4).clamp(0.01, 0.95);
@@ -201,12 +269,23 @@ pub(super) fn plano(d: &Value, r: &Relogio, c: &ContaViva, ctx: &ContextoHunt) -
         let kph = if medido {
             nm(m, "kph")
         } else {
-            taxa_abates(&cur, &a.r, observado)
+            pausa
+                .map(|seg| luta_com_pausa(&a.par.0, &a.par.1, 600.0, ctx.k, seg).kph)
+                .unwrap_or(0.0)
         };
         let xp_h = if medido {
             m["xpH"].as_f64()
         } else {
-            mult_xp.map(|b| xp_base(a.h) * b * kph)
+            mult_xp.map(|b| (xp_base(a.h) * b).round() * kph)
+        };
+        let xp_pk_h = if medido {
+            m["xpPokemonH"].as_f64().or_else(|| {
+                xp_h.zip(mult_xp)
+                    .zip(mult_pk)
+                    .map(|((tr, btr), bpk)| tr / btr * bpk)
+            })
+        } else {
+            mult_pk.map(|b| (xp_base(a.h) * b).round() * kph)
         };
         let capturas = medido.then(|| m["capturasPorKill"].as_f64()).flatten();
         let sp = EspValor {
@@ -257,20 +336,37 @@ pub(super) fn plano(d: &Value, r: &Relogio, c: &ContaViva, ctx: &ContextoHunt) -
             p: prev,
             val,
         };
+        if !medido
+            && bruto
+                .zip(p.atual)
+                .is_some_and(|(prev, atual)| prev > atual * 1.03)
+        {
+            exploracoes.push((bruto.unwrap_or(0.0), cand.clone()));
+        }
         resumos.push((
             cand.clone(),
             json!({"nome":cand.nome,"slug":cand.slug,"nivel":a.h,
-            "val":val,"prevBruto":bruto,"xpH":xp_h,"lucroH":lucro_h,"kph":kph,"pior":a.r.pior,
+            "val":val,"prevBruto":bruto,"xpH":xp_h,"xpPokemonH":xp_pk_h,"xpKillTreinador":mult_xp.map(|b|(xp_base(a.h)*b).round()),
+            "xpKillPokemon":mult_pk.map(|b|(xp_base(a.h)*b).round()),"pausaSegundos":pausa,"lucroH":lucro_h,"kph":kph,"pior":a.r.pior,
             "fonte":if medido {"medido"} else {"estimado"}}),
         ));
         candidatos.push(cand);
     }
     candidatos.sort_by(|a, b| b.val.unwrap_or(0.0).total_cmp(&a.val.unwrap_or(0.0)));
     resumos.sort_by(|a, b| b.0.val.unwrap_or(0.0).total_cmp(&a.0.val.unwrap_or(0.0)));
+    exploracoes.sort_by(|a, b| b.0.total_cmp(&a.0));
+    p.explorar = exploracoes.into_iter().next().map(|(_, c)| c);
+    p.o.insert(
+        "explorar".into(),
+        p.explorar
+            .as_ref()
+            .map(|c| json!({"nome":c.nome,"slug":c.slug,"nivel":c.nivel,"xpH":c.p.xp_h}))
+            .unwrap_or(Value::Null),
+    );
     p.o.insert("seguras".into(), json!(candidatos.len()));
     p.o.insert(
         "candidatos".into(),
-        Value::Array(resumos.iter().take(5).map(|r| r.1.clone()).collect()),
+        Value::Array(resumos.iter().map(|r| r.1.clone()).collect()),
     );
     p.o.insert(
         "melhor".into(),
@@ -297,6 +393,13 @@ pub(super) fn plano(d: &Value, r: &Relogio, c: &ContaViva, ctx: &ContextoHunt) -
             "Mantendo a hunt: faltam {} min para reavaliar a troca.",
             (espera / 60e3).ceil()
         )
+    } else if hc["explorar"] != false
+        && p.explorar.is_some()
+        && p.best
+            .as_ref()
+            .is_none_or(|b| b.val.unwrap_or(0.0) < p.alvo.unwrap_or(f64::INFINITY))
+    {
+        p.explorar.as_ref().map(|e|format!("Vou testar {} Nv {}: a previsão sugere mais XP sustentado; só mantenho após comparar os abates reais.",e.nome,nv(e.nivel))).unwrap_or_default()
     } else if let Some(b) = p.best.as_ref() {
         if p.alvo.is_some_and(|al| b.val.unwrap_or(0.0) >= al) {
             format!(
@@ -327,7 +430,7 @@ mod testes {
     fn fixture() -> (Pokedex, ContaViva, Value, Relogio) {
         let dex=Pokedex::de_valor(json!([
             {"d":6,"n":"Hero","t":["FIRE"],"s":[80,80,80,120,80,100],"h":80,"c":"pokebola","m":[["Flame",100,1,"E","FIRE"]]},
-            {"d":10,"n":"Atual","t":["NORMAL"],"s":[200,20,100,20,100,20],"h":40,"c":"pokebola","m":[["Tackle",10,10,"F","NORMAL"]]},
+            {"d":10,"n":"Atual","t":["NORMAL"],"s":[50,20,50,20,50,20],"h":40,"c":"pokebola","m":[["Tackle",10,10,"F","NORMAL"]]},
             {"d":11,"n":"Nova","t":["NORMAL"],"s":[10,10,10,10,10,10],"h":99000,"c":"pokebola","m":[["Tackle",10,10,"F","NORMAL"]]}
         ])).expect("dex de teste");
         let r = Relogio {
@@ -377,7 +480,12 @@ mod testes {
         let k = Constantes::wiki();
         let p = plano(&d, &r, &c, &contexto_teste(&dex, &k, &c));
         assert!(p.medida_ok);
-        assert_eq!(p.best.as_ref().map(|b| b.slug.as_str()), Some("nova_1000"));
+        assert_eq!(
+            p.best.as_ref().map(|b| b.slug.as_str()),
+            Some("nova_1000"),
+            "{}",
+            Value::Object(p.o.clone())
+        );
         assert_eq!(p.o["analisadas"], 2); // inclui a atual, não a Nova 1250 bloqueada pelo treinador
         c.ultimo["trLv"] = json!(1250);
         let p = plano(&d, &r, &c, &contexto_teste(&dex, &k, &c));
@@ -431,20 +539,23 @@ mod testes {
             .is_none_or(|b| b.val.unwrap_or(0.0) < p.alvo.unwrap_or(f64::INFINITY)));
     }
     #[test]
-    fn deslocamento_nao_e_multiplicador_e_cresce_com_combate() {
-        let c = Luta {
-            kph: 1200.0,
-            tkill: Some(3.0),
-            dps_in: 0.0,
-            burst: 0.0,
-            hp: 100.0,
-            bate: 1.0,
-            pior: 0.0,
-        };
-        let rapido = Luta { kph: 3600.0, ..c };
-        // Observado 600/h = 3 segundos combatendo + 3 viajando. Alternativa: 1+3 = 900/h.
-        assert_eq!(taxa_abates(&c, &rapido, 600.0), 900.0);
-        assert_eq!(taxa_abates(&c, &c, 600.0), 600.0);
+    fn caminhada_usa_tempo_real_e_recargas_nao_congelam() {
+        let (dex, c, d, _r) = fixture();
+        let k = Constantes::wiki();
+        let base = melhores_hunts(
+            &d,
+            &c,
+            &contexto_teste(&dex, &k, &c),
+            &d["config"]["Ana"]["hunt"],
+        )
+        .expect("base");
+        let (me, foe) = base.par_atual.expect("alvo");
+        let observado = luta_com_pausa(&me, &foe, 600.0, &k, 3.0).kph;
+        let pausa = pausa_calibrada(&me, &foe, observado, &k).expect("calibração");
+        let refeito = luta_com_pausa(&me, &foe, 600.0, &k, pausa).kph;
+        assert!((refeito - observado).abs() <= 6.0);
+        assert!(observado < luta(&me, &foe, 600.0, &k).kph);
+        assert!(pausa_calibrada(&me, &foe, 100000.0, &k).is_none());
     }
     #[test]
     fn nao_reutiliza_medida_com_bonus_lutador_ou_amostra_incompativeis() {
@@ -463,6 +574,62 @@ mod testes {
         m["span"] = json!(30000);
         assert!(!amostra_valida(&m, &ctx, 1000.0, r.agora_ms as f64));
     }
+    #[test]
+    fn previsao_da_ficha_usa_motor_comum_e_nao_muda_a_conta() {
+        let (dex, mut c, d, r) = fixture();
+        let k = Constantes::wiki();
+        c.ultimo["io"]["active"]["ivs"] =
+            json!({"hp":27,"atk":27,"def":27,"spAtk":27,"spDef":27,"speed":27});
+        c.ultimo["io"]["active"]["shiny"] = json!(false);
+        let antes = c.ultimo.clone();
+        let f = c.ultimo["io"]["active"].clone();
+        let p = super::super::previsao::prever(&d, &r, &c, &contexto_teste(&dex, &k, &c), Some(&f))
+            .expect("ficha completa");
+        assert!(!p["ranking"].as_array().expect("ranking").is_empty());
+        assert_eq!(p["ficha"]["ivs"]["hp"], 27);
+        assert_eq!(antes, c.ultimo);
+        let mut invalida = f;
+        invalida["quality"] = json!(16.0);
+        assert!(super::super::previsao::prever(
+            &d,
+            &r,
+            &c,
+            &contexto_teste(&dex, &k, &c),
+            Some(&invalida)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn compara_com_bonus_atual_sem_misturar_xp_historico() {
+        let (dex, mut c, d, r) = fixture();
+        let k = Constantes::wiki();
+        c.ultimo["bonusXp"]["tr"] = json!(4.0);
+        c.ultimo["bonusXp"]["pk"] = json!(2.0);
+        let a = plano(&d, &r, &c, &contexto_teste(&dex, &k, &c));
+        for (_, _, texto) in &mut c.linhas {
+            *texto = texto.replace("+1.000 xp treinador", "+2.000 xp treinador");
+        }
+        let b = plano(&d, &r, &c, &contexto_teste(&dex, &k, &c));
+        assert_eq!(a.o["xpH"], b.o["xpH"]);
+        assert_ne!(a.o["xpHObservado"], b.o["xpHObservado"]);
+        assert_eq!(a.o["candidatos"], b.o["candidatos"]);
+        let p = super::super::previsao::prever(&d, &r, &c, &contexto_teste(&dex, &k, &c), None)
+            .expect("previsão");
+        assert!(p["ranking"]
+            .as_array()
+            .expect("ranking")
+            .iter()
+            .any(|h| h["atual"] == true));
+        let candidato = &p["candidatos"][0];
+        assert!(
+            (candidato["xpH"].as_f64().unwrap_or(0.0)
+                - 2.0 * candidato["xpPokemonH"].as_f64().unwrap_or(0.0))
+            .abs()
+                < 1000.0
+        );
+    }
+
     #[test]
     fn xp_hp_e_um_nivel_a_mais_nao_invalidam_contexto_mas_equipamento_sim() {
         let (_, mut c, _, _) = fixture();

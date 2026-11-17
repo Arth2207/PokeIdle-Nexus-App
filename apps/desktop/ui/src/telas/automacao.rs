@@ -160,7 +160,6 @@ fn cartao_regra(
             k.as_str() != "ativo"
                 && k.as_str() != "objetivoManual"
                 && k.as_str() != "ativoManual"
-                && !(secao == "hunt" && k.as_str() == "explorar")
                 && (v.is_boolean() || v.is_number())
         })
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -196,6 +195,7 @@ fn cartao_regra(
                             "intervaloMin" => "Intervalo entre trocas (min)".into(),
                             "maxPiorPct" => "Risco em 5 s (% do HP)".into(),
                             "soOutland" => "Somente Outlands".into(),
+                            "explorar" => "Testar hunts com ganho de XP previsto".into(),
                             _ => campo_pt(&k),
                         }
                     } else { campo_pt(&k) };

@@ -72,4 +72,4 @@ jobs:
         run: |
           tag="nexus-web-controle-${GITHUB_SHA:0:7}"
           (cd release && sha256sum *.exe > SHA256SUMS)
-          gh release create "$tag" release/*.exe release/SHA256SUMS --target "$GITHUB_SHA" --prerelease --title "Nexus 0.1.3 — controle pelo site" --notes "Prévia com ativação por conta pelo painel web. Atualização única do cliente necessária; mantém a coleta e as contas existentes."
+          gh release create "$tag" release/*.exe release/SHA256SUMS --target "$GITHUB_SHA" --prerelease --title "Nexus 0.1.3 — caçada calibrada e controle pelo site" --notes "Prévia com cálculo de caçada compartilhado com o servidor, dados completos da ficha e ativação por conta pelo painel web. Atualização única do cliente necessária para o controle remoto; mantém a coleta e as contas existentes."

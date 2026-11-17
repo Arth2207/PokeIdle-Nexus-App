@@ -118,6 +118,11 @@ pub async fn gravar_lote(
     let inseridos = eventos::gravar(&estado.db, &conta, Some(&conta_id), &lote.eventos)
         .await
         .map_err(ErroLote::Banco)?;
+    if let Err(e) =
+        persistencia::cacada_contexto::registrar(&estado.db, &conta, &lote.eventos).await
+    {
+        tracing::warn!(erro=%e,"cache de contexto da caçada indisponível; eventos preservados");
+    }
     for tipo in TIPOS.iter().copied().chain(["desconhecido"]) {
         let aceitos = lote
             .eventos

@@ -283,7 +283,17 @@ pub fn de_ficha<'a>(
         shiny: js::verdadeiro(f.get("shiny")),
         ..Opcoes::default()
     };
-    let mut mon = Combatente::novo(sp, nivel, &op, k);
+    let mut refinada = sp.clone();
+    for (i, campo) in ["hp", "atk", "def", "spAtk", "spDef", "speed"]
+        .iter()
+        .enumerate()
+    {
+        let v = js::mais(f.get("refino").and_then(|r| r.get(*campo)));
+        if v.is_finite() && v > 0.0 {
+            refinada.base[i] += v;
+        }
+    }
+    let mut mon = Combatente::novo(&refinada, nivel, &op, k);
     aplicar_stats_recebidos(&mut mon, f);
     Some((mon, sp))
 }
@@ -360,6 +370,22 @@ pub fn multiplicar_atributos(mon: &mut Combatente, mult: f64) {
 mod testes_ficha_atual {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn refino_soma_na_base_e_stats_recebidos_nao_sao_refinados_duas_vezes(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let dex = Pokedex::de_valor(
+            json!([{"d":6,"n":"Charizard","t":["FIRE"],"s":[78,84,78,109,85,100],"m":[]}]),
+        )?;
+        let f = json!({"speciesId":6,"level":100,"quality":1.0,"potencia":1,"ivs":{"hp":27,"atk":27,"def":27,"spAtk":27,"spDef":27,"speed":27},"refino":{"hp":4}});
+        let (m, _) = de_ficha(&dex, &f, &Constantes::wiki()).ok_or("ficha")?;
+        assert_eq!(m.st.hp, 136.0);
+        let mut f = f;
+        f["stats"] = json!({"hp":100,"atk":200,"def":300,"spAtk":400,"spDef":500,"speed":600});
+        let (m, _) = de_ficha(&dex, &f, &Constantes::wiki()).ok_or("ficha")?;
+        assert_eq!(m.st.hp, 100.0);
+        Ok(())
+    }
+
     #[test]
     fn atributos_reais_e_z_move_respeitam_ficha_sem_inventar_area(
     ) -> Result<(), Box<dyn std::error::Error>> {

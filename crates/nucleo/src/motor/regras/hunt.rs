@@ -23,6 +23,7 @@ use crate::motor::config;
 use crate::motor::jogo::{hunt_atual, janela, num, slug_de, Janela};
 use crate::motor::Relogio;
 
+pub mod previsao;
 mod selecao;
 
 const TESTE_MIN: f64 = 5.0;
@@ -178,7 +179,19 @@ struct Selvagem {
 
 /// `S_.fight(me, foe, secs)` (dt = 0,1), com `pior = burst / hp`.
 pub fn luta(me: &Combatente, foe: &Combatente, secs: f64, k: &Constantes) -> Luta {
+    luta_com_pausa(me, foe, secs, k, 0.0)
+}
+
+/// Caminhada, captura e espera por alvo consomem tempo; as recargas continuam correndo.
+pub fn luta_com_pausa(
+    me: &Combatente,
+    foe: &Combatente,
+    secs: f64,
+    k: &Constantes,
+    pausa: f64,
+) -> Luta {
     let dt = 0.1;
+    let mut liberar_alvo = 0.0;
     let mut pronto: HashMap<&str, f64> = HashMap::new();
     for g in &me.golpes {
         pronto.insert(g.nome.as_str(), 0.0);
@@ -201,6 +214,10 @@ pub fn luta(me: &Combatente, foe: &Combatente, secs: f64, k: &Constantes) -> Lut
     let mut janela_dano: VecDeque<(f64, f64)> = VecDeque::new();
     let mut soma = 0.0_f64;
     while t < secs {
+        if t < liberar_alvo {
+            t += dt;
+            continue;
+        }
         let sel = w.get_or_insert_with(|| Selvagem {
             hp: foe.hp,
             pronto: foe.golpes.iter().map(|_| t).collect(),
@@ -259,6 +276,7 @@ pub fn luta(me: &Combatente, foe: &Combatente, secs: f64, k: &Constantes) -> Lut
         if sel.hp <= 0.0 {
             kills += 1;
             w = None;
+            liberar_alvo = t + dt + pausa.max(0.0);
         }
         t += dt;
     }
@@ -593,6 +611,7 @@ struct Alt<'a> {
     slug: String,
     h: f64,
     r: Luta,
+    par: (Combatente, Combatente),
 }
 
 struct Base<'a> {
@@ -600,6 +619,7 @@ struct Base<'a> {
     h_nome: String,
     h_lvl: f64,
     cur: Option<Luta>,
+    par_atual: Option<(Combatente, Combatente)>,
     alts: Vec<Alt<'a>>,
 }
 
@@ -649,11 +669,12 @@ fn melhores_hunts<'a>(
         .as_str()
         .and_then(|t| t.parse::<crate::combate::tipos::Tipo>().ok());
     let selvagem = Opcoes {
-        qualidade: 1.1,
+        qualidade: 1.0,
+        ivs: [16.5; 6],
         selvagem: true,
         ..Opcoes::default()
     };
-    let f = |sp: &EspecieCombate, lvl: f64, secs: f64| {
+    let par = |sp: &EspecieCombate, lvl: f64| {
         let mut meu = me.clone();
         let mut foe = Combatente::novo(sp, lvl, &selvagem, ctx.k);
         // O bônus sazonal vale nas hunts do Mapa, não nas Outlands.
@@ -667,9 +688,24 @@ fn melhores_hunts<'a>(
                 }
             }
         }
-        luta(&meu, &foe, secs, ctx.k)
+        (meu, foe)
     };
-    let cur = ctx.dex.por_nome(&h_nome).map(|w| f(w, h_lvl, 180.0));
+    let atual_h = conta.welcome["hunts"].as_array().and_then(|hs| {
+        hs.iter().find(|h| {
+            h["slug"] == conta.ultimo["huntSlug"]
+                || (h["nome"].as_str() == Some(&h_nome) && h["nivel"].as_f64() == Some(h_lvl))
+        })
+    });
+    let atual_id = atual_h
+        .and_then(|h| h.pointer("/especies/0/pokeId"))
+        .and_then(Value::as_i64);
+    let par_atual = atual_id
+        .and_then(|id| ctx.dex.especies().iter().find(|s| s.id == id))
+        .or_else(|| ctx.dex.por_nome(&h_nome))
+        .map(|sp| par(sp, h_lvl));
+    let cur = par_atual
+        .as_ref()
+        .map(|(meu, foe)| luta(meu, foe, 600.0, ctx.k));
     // O catálogo vivo é a autoridade: a mesma espécie pode existir em regiões/níveis diferentes.
     let lista = conta.welcome.get("hunts").and_then(Value::as_array);
     let alts = lista
@@ -701,12 +737,14 @@ fn melhores_hunts<'a>(
             if (modo == "out" && !out) || (modo == "shiny" && out) {
                 return None;
             }
+            let par = par(sp, nivel);
             Some(Alt {
                 sp,
                 nome: nome.to_owned(),
                 slug: slug.to_owned(),
                 h: nivel,
-                r: f(sp, nivel, 90.0),
+                r: luta(&par.0, &par.1, 600.0, ctx.k),
+                par,
             })
         })
         .collect();
@@ -715,6 +753,7 @@ fn melhores_hunts<'a>(
         h_nome,
         h_lvl,
         cur,
+        par_atual,
         alts,
     })
 }
@@ -969,7 +1008,7 @@ pub fn motor_hunt_completo(
                 "medida",
                 json!({ "chave": chave, "medida": {
                     "h": jn(pb.h_lvl), "contexto": contexto_medida(conta), "kills": wm.kills, "span": wm.span,
-                    "capturasPorKill": wm.capturas as f64 / wm.kills as f64, "xpKill": jo(wm.xp_kill), "kph": jo(wm.kph), "xpH": jo(wm.xp_h),
+                    "capturasPorKill": wm.capturas as f64 / wm.kills as f64, "xpKill": jo(wm.xp_kill), "kph": jo(wm.kph), "xpH": jo(wm.xp_h), "xpPokemonH":jo(wm.xp_pk_h),
                     "t": jn(ag), "sp": quem_sp, "lvl": jn(pb.at_lvl) } }),
             );
             ac.gravar(
@@ -1038,7 +1077,7 @@ pub fn motor_hunt_completo(
         .clone()
         .filter(|u| ver(u, "teste") || ver(u, "vigiar") || !u["acomp"].is_null())
     {
-        if u["versao"] != 2 || u["contexto"] != contexto_medida(conta) {
+        if u["versao"] != 3 || u["contexto"] != contexto_medida(conta) {
             ac.mexer_acao(vec![
                 ("teste", json!(false)),
                 ("vigiar", json!(false)),
@@ -1482,7 +1521,7 @@ pub fn motor_hunt_completo(
         "acaoNova",
         mapa_obj(vec![
             ("t", jn(ag)),
-            ("versao", json!(2)),
+            ("versao", json!(3)),
             ("contexto", contexto_medida(conta)),
             ("auto", json!(true)),
             ("de", json!(pb.h_nome)),
@@ -1759,7 +1798,7 @@ mod testes {
                 hunt_desde: c.hunt_desde as f64,
             };
             let p = plano_hunt(&d, &r, &c, &ctx);
-            assert_eq!(p["versao"], 2);
+            assert_eq!(p["versao"], 3);
             let tr = num(c.ultimo.get("trLv")).unwrap_or(0.0);
             for cand in p["candidatos"].as_array().ok_or("falta ranking")? {
                 assert!(cand["nivel"].as_f64().is_some_and(|n| n <= tr));

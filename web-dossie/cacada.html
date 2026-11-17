@@ -1,0 +1,713 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<script>if(!document.querySelector('.max .bar'))location.replace('/dossie.html?go='+encodeURIComponent(location.pathname)+location.hash)</script>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Caçada · Dossiê PokeIdle</title>
+<meta name="description" content="Escolhe um pokemon das suas fichas e descobre a melhor hunt em cada faixa de nível — XP/hora, ouro/hora, o que ele bate e apanha.">
+<link rel="stylesheet" href="tema.css">
+<script src="tema.js"></script>
+<script src="ficha-parse.js?v=20261117"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Michroma&family=Hanken+Grotesk:wght@400;500;600;700;800&display=swap">
+<style>
+/* Caçada: mesma identidade do Dossiê — vidro fosco sobre a aurora dos tipos + wallpaper da espécie. */
+:root{
+  --glass:color-mix(in srgb,var(--panel) 72%,transparent); --glass-hi:color-mix(in srgb,var(--panel-hi) 88%,transparent); --edge:color-mix(in srgb,var(--hair-2) 40%,transparent);
+}
+html{background:var(--room-lo)}
+body{margin:0;min-height:100%;color:var(--ink);font:15px/1.55 var(--f-text);font-variant-numeric:tabular-nums;
+  background:radial-gradient(90% 70% at 62% 30%,var(--room-hi),color-mix(in srgb,var(--room-hi) 50%,var(--room-lo)) 55%,var(--room-lo));background-attachment:fixed}
+:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.glass{background:var(--glass);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  border:1px solid var(--edge);box-shadow:0 1px 0 rgba(255,255,255,.6) inset,0 18px 40px -24px rgba(30,34,40,.35)}
+:root[data-theme="dark"] .glass{box-shadow:0 1px 0 rgba(255,255,255,.08) inset,0 18px 40px -24px rgba(0,0,0,.6)}
+#pokebg{position:fixed;inset:-3%;z-index:-3;pointer-events:none;background-size:cover;background-position:center 30%;opacity:0;transition:opacity .7s;filter:saturate(1.1) brightness(.97)}
+#pokebg.on{opacity:.5}
+:root[data-theme="dark"] #pokebg.on{opacity:.38}
+#pokebg::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,color-mix(in srgb,var(--room) 55%,transparent),color-mix(in srgb,var(--room) 88%,transparent))}
+.wrap{max-width:1240px;margin:0 auto;padding:18px 18px 60px}
+.bar{display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:var(--raio);margin-bottom:22px}
+.mark{font:15px var(--f-mark);letter-spacing:.18em;white-space:nowrap}
+.mark span{color:var(--ink-3)}
+.mark em{font:600 9px var(--f-text);letter-spacing:.28em;color:var(--ink-3);font-style:normal;display:block;margin-top:2px}
+.bar .sp{flex:1}
+.cbtn{border:1px solid var(--hair);background:color-mix(in srgb,var(--room) 55%,transparent);border-radius:999px;padding:9px 16px;cursor:pointer;font:700 13px var(--f-text);transition:transform .2s;color:var(--ink);text-decoration:none;display:inline-flex;align-items:center;gap:7px}
+.cbtn:hover{transform:translateY(-2px)}
+.cbtn.pri{background:linear-gradient(120deg,var(--t1),var(--t2));color:#fff;border-color:transparent;box-shadow:0 10px 26px -12px var(--t1)}
+.cbtn.pri:hover{filter:brightness(1.08)}
+.cbtn:disabled{opacity:.5;cursor:wait;transform:none}
+h1{font:600 clamp(20px,3vw,28px)/1.15 var(--f-mark);letter-spacing:.02em;margin:0 0 8px}
+h1 b{background:linear-gradient(120deg,var(--t1),var(--t2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.lede{color:var(--ink-2);max-width:64ch;font-size:14px}
+.lede b{color:var(--ink)}
+h2{font:600 14px var(--f-mark);letter-spacing:.06em;margin:0 0 4px}
+#entrada{display:grid;grid-template-columns:1.4fr 1fr;gap:16px;margin-bottom:26px}
+@media(max-width:900px){#entrada{grid-template-columns:1fr}}
+.card{border-radius:var(--raio);padding:20px 22px}
+.fbusca{margin:12px 0 10px}
+.fbusca input{width:100%;border:1px solid var(--hair);background:var(--field);border-radius:999px;padding:9px 16px;font:600 13.5px var(--f-text);color:var(--ink);outline:none;box-sizing:border-box}
+.fbusca input:focus{border-color:var(--t1)}
+.fbusca input::placeholder{color:var(--ink-3)}
+#fichas-lista{max-height:340px;overflow-y:auto;display:grid;gap:6px;scrollbar-width:thin;scrollbar-color:var(--ink-3) transparent}
+.fich{display:grid;grid-template-columns:44px 1fr auto;gap:11px;align-items:center;border:1px solid var(--hair);
+  border-radius:var(--raio-p);padding:7px 12px 7px 8px;background:color-mix(in srgb,var(--panel) 40%,transparent);cursor:pointer;transition:.15s}
+.fich:hover{background:var(--hover);transform:translateY(-1px)}
+.fich.sel{border-color:color-mix(in srgb,var(--t1) 55%,transparent);background:color-mix(in srgb,var(--t1) 9%,transparent)}
+.fich img{width:44px;height:44px;object-fit:contain}
+.fich .fn{font-weight:700;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fich .fn small{color:var(--ink-3);font-weight:600}
+.fich .fx{font-size:11.5px;color:var(--ink-3);display:flex;gap:8px;flex-wrap:wrap}
+.fich .fnv{text-align:right;font:700 12px var(--f-text);color:var(--ink-2);white-space:nowrap}
+.fich .fnv small{display:block;font-weight:600;color:var(--ink-3);font-size:10.5px}
+.vazio{padding:18px;text-align:center;color:var(--ink-3);font-size:13px}
+.fich .fdono{color:var(--ink-3);font-weight:400}
+.fdel{border:0;background:none;color:var(--ink-3);font-size:15px;cursor:pointer;padding:2px 6px;border-radius:6px;line-height:1}
+.fdel:hover{color:var(--bad);background:var(--hover)}
+.quem{display:flex;align-items:baseline;gap:6px;font-size:11.5px;color:var(--ink-3);margin:10px 0 8px}
+.quem b{color:var(--ink-2)}
+#st{font:500 13px var(--f-text);color:var(--ink-3)}
+#st b{color:var(--ok)}
+details.colar{margin-top:14px;border-top:1px solid var(--hair);padding-top:12px}
+details.colar summary{cursor:pointer;font:700 12px var(--f-text);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+details.colar summary:hover{color:var(--ink)}
+.lamina{position:relative;border:1px solid var(--hair);border-radius:var(--raio-p);background:var(--field);margin:10px 0;overflow:hidden}
+.lamina textarea{width:100%;min-height:130px;resize:vertical;background:transparent;border:0;padding:12px 14px;
+  font:12.5px/1.6 ui-monospace,SFMono-Regular,monospace;color:var(--ink);caret-color:var(--t2);display:block;outline:none;box-sizing:border-box}
+.lamina textarea::placeholder{color:var(--ink-3)}
+.ficha-prev{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 10px}
+.chip{border:1px solid var(--hair);border-radius:999px;padding:4px 11px;font:600 11.5px var(--f-text);color:var(--ink-3);transition:.25s}
+.chip.hit{border-color:color-mix(in srgb,var(--t1) 55%,transparent);color:var(--t1);background:color-mix(in srgb,var(--t1) 9%,transparent)}
+.field-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+.f{display:grid;gap:5px}
+.f label{font-size:11px;color:var(--ink-3);letter-spacing:.08em;text-transform:uppercase;font-weight:700}
+.f input,.f select{width:100%;min-width:104px;border:1px solid var(--hair);background:var(--field);border-radius:10px;padding:8px 10px;font:600 14px var(--f-text);color:var(--ink);outline:none}
+.f input:focus,.f select:focus{border-color:var(--t1)}
+.poke-card{display:grid;grid-template-columns:96px 1fr;gap:14px;align-items:center;margin:12px 0}
+.poke-card img{width:96px;height:96px;object-fit:contain;filter:drop-shadow(0 8px 18px rgba(0,0,0,.35))}
+.poke-card .nome{font:600 18px var(--f-mark)}
+.poke-card .sub{color:var(--ink-2);font-size:13px;margin-top:4px}
+.tipos{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.tipo{display:inline-flex;align-items:center;border-radius:999px;padding:3px 10px;font:700 10.5px var(--f-text);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--tc,var(--ink-2));background:color-mix(in srgb,var(--tc,var(--ink-3)) 13%,transparent);border:1px solid color-mix(in srgb,var(--tc,var(--ink-3)) 32%,transparent)}
+#saida{display:none}
+#saida.on{display:block}
+.resumo{display:flex;flex-wrap:wrap;gap:10px;margin:4px 0 18px}
+.resumo .k{border:1px solid var(--hair);border-radius:var(--raio-p);padding:9px 15px;background:var(--glass);backdrop-filter:blur(8px)}
+.resumo .k small{display:block;color:var(--ink-3);font-size:11px;letter-spacing:.06em;text-transform:uppercase}
+.resumo .k b{font:700 15px var(--f-text)}
+.layout{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:16px;align-items:start}
+@media(max-width:980px){.layout{grid-template-columns:1fr}}
+#agora .lista{display:grid;gap:9px;margin-top:12px}
+.hunt{display:grid;grid-template-columns:40px 1fr auto;gap:12px;align-items:center;
+  border:1px solid var(--hair);border-radius:var(--raio-p);padding:10px 14px;background:color-mix(in srgb,var(--panel) 45%,transparent);transition:.18s}
+.hunt:hover{background:var(--hover)}
+.hunt.melhor{border-color:color-mix(in srgb,var(--t1) 50%,transparent);background:linear-gradient(120deg,color-mix(in srgb,var(--t1) 10%,transparent),color-mix(in srgb,var(--panel) 40%,transparent))}
+.hunt .rank{font:600 14px var(--f-mark);color:var(--ink-3);text-align:center}
+.hunt.melhor .rank{color:var(--t1)}
+.hunt .hn{font-weight:700}
+.hunt .hx{font-size:12px;color:var(--ink-2);display:flex;flex-wrap:wrap;gap:4px 10px;margin-top:2px}
+.hunt .hx b{color:var(--ink)}
+.hunt .val{text-align:right;white-space:nowrap}
+.hunt .val .xp{font:700 15px var(--f-text);color:var(--t1)}
+.hunt .val .aux{font-size:11.5px;color:var(--ink-3)}
+.badge{border-radius:999px;padding:2px 8px;font:700 9.5px var(--f-text);letter-spacing:.05em;text-transform:uppercase;vertical-align:1px}
+.badge.seguro{color:var(--ok);background:color-mix(in srgb,var(--ok) 10%,transparent)}
+.badge.arriscado{color:var(--warn);background:color-mix(in srgb,var(--warn) 12%,transparent)}
+.badge.morre{color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,transparent)}
+.badge.medido{color:var(--t1);background:color-mix(in srgb,var(--t1) 12%,transparent)}
+.badge.outland{color:var(--t2);background:color-mix(in srgb,var(--t2) 12%,transparent)}
+.eff{font:600 11.5px var(--f-text)}
+.eff.up{color:var(--ok)} .eff.down{color:var(--bad)}
+#timeline{position:sticky;top:16px}
+#timeline .scroll{max-height:76vh;overflow-y:auto;margin-top:12px;padding-right:8px;scrollbar-width:thin;scrollbar-color:var(--ink-3) transparent}
+.fx{position:relative;padding:0 0 16px 24px;border-left:2px solid var(--hair);margin-left:8px}
+.fx::before{content:"";position:absolute;left:-7px;top:4px;width:12px;height:12px;border-radius:50%;background:var(--room);border:2px solid var(--ink-3)}
+.fx.atual::before{background:var(--t1);border-color:var(--t2);box-shadow:0 0 14px var(--t1)}
+.fx.atual{border-left-color:color-mix(in srgb,var(--t1) 55%,transparent)}
+.fx .faixa{font:600 12.5px var(--f-mark);color:var(--ink-2);margin-bottom:7px}
+.fx.atual .faixa{color:var(--t1)}
+.fx .faixa .agora{font:700 9px var(--f-text);letter-spacing:.1em;color:#fff;background:linear-gradient(120deg,var(--t1),var(--t2));border-radius:999px;padding:2px 7px;margin-left:8px;vertical-align:middle}
+.mini{display:flex;align-items:center;gap:9px;border:1px solid var(--hair);border-radius:10px;padding:6px 10px;margin-bottom:6px;background:color-mix(in srgb,var(--panel) 40%,transparent);font-size:12.5px}
+.mini.melhor{border-color:color-mix(in srgb,var(--t1) 45%,transparent)}
+.mini .mn{font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mini .mx{color:var(--ink-3);font-size:11.5px;white-space:nowrap}
+.mini .mx b{color:var(--t1);font-weight:700}
+footer{margin-top:40px;color:var(--ink-3);font-size:12.5px;max-width:80ch;line-height:1.6}
+#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);background:var(--panel-hi);border:1px solid var(--hair-2);
+  border-radius:999px;padding:11px 20px;font:700 13.5px var(--f-text);color:var(--ink);opacity:0;transition:.3s;z-index:80;backdrop-filter:blur(10px)}
+#toast.on{transform:translateX(-50%) translateY(0);opacity:1}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:sp 1s linear infinite;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
+/* ===== wiki drawer: abre ao clicar numa hunt ===== */
+#wiki{position:fixed;inset:0;z-index:90;pointer-events:none}
+#wiki .wscrim{position:absolute;inset:0;background:var(--scrim);opacity:0;transition:.25s}
+#wiki.on{pointer-events:auto}
+#wiki.on .wscrim{opacity:1}
+.wpanel{position:absolute;top:0;right:0;width:min(460px,96vw);height:100%;overflow-y:auto;padding:20px 22px 40px;
+  background:var(--glass-hi);backdrop-filter:blur(16px);border-left:1px solid var(--edge);
+  transform:translateX(40px);opacity:0;transition:transform .28s cubic-bezier(.2,.7,.2,1),opacity .28s;scrollbar-width:thin;scrollbar-color:var(--ink-3) transparent}
+#wiki.on .wpanel{transform:none;opacity:1}
+.wtop{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-bottom:8px}
+.whead{display:grid;grid-template-columns:110px 1fr;gap:14px;align-items:center;margin:4px 0 16px}
+.whead img{width:110px;height:110px;object-fit:contain;filter:drop-shadow(0 10px 22px rgba(0,0,0,.4))}
+.whead .wn{font:600 19px var(--f-mark);line-height:1.15}
+.whead .wsub{color:var(--ink-2);font-size:12.5px;margin-top:5px}
+.wsec{border-top:1px solid var(--hair);padding-top:12px;margin-top:14px}
+.wsec h3{font:600 11.5px var(--f-mark);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);margin:0 0 8px}
+.wpq{display:grid}
+.wpq .r{display:grid;grid-template-columns:96px 1fr;gap:10px;padding:8px 0;border-bottom:1px solid var(--hair);font-size:13px;align-items:baseline}
+.wpq .r:last-child{border-bottom:0}
+.wpq .r small{color:var(--ink-3);font-weight:700;letter-spacing:.06em;text-transform:uppercase;font-size:10px}
+.wpq .r .v{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font-weight:600;color:var(--ink)}
+.wpq .r .v .d{font-weight:500;color:var(--ink-3);font-size:11.5px}
+.t-ok{color:var(--ok)}.t-warn{color:var(--warn)}.t-bad{color:var(--bad)}.t-neu{color:var(--ink)}
+.wstats{display:grid;gap:6px}
+.wst{display:grid;grid-template-columns:52px 1fr 34px;gap:8px;align-items:center;font-size:12px}
+.wst small{color:var(--ink-3);font-weight:700;letter-spacing:.05em}
+.wst .trilho{height:5px;border-radius:3px;background:var(--hair);overflow:hidden}
+.wst .trilho i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,var(--t1),var(--t2))}
+.wst b{text-align:right;font-weight:700;color:var(--ink-2)}
+.wmv{display:grid;gap:5px}
+.wmv .mv{display:flex;align-items:center;gap:8px;font-size:12.5px}
+.wmv .mv .mvn{font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wmv .mv .mvp{color:var(--ink-3);white-space:nowrap}
+.wmv .mv .mvc{border-radius:999px;padding:1px 7px;font:700 9.5px var(--f-text);letter-spacing:.05em}
+.mvc.f{color:var(--v-fighting);background:color-mix(in srgb,var(--v-fighting) 14%,transparent)}
+.mvc.e{color:var(--v-psychic);background:color-mix(in srgb,var(--v-psychic) 14%,transparent)}
+.wloot{display:grid;gap:5px}
+.wloot .li{display:flex;gap:8px;align-items:center;font-size:12.5px}
+.wloot .li .ln{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wloot .li .lp{color:var(--ink-3);white-space:nowrap;font-weight:600}
+.wloot .li .lq{color:var(--ink-3);white-space:nowrap}
+.wlinks{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}
+/* ===== entrada: igual ao Dossiê ===== */
+#intro{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;overflow:hidden;background:#0b0e1a;cursor:pointer;
+  animation:intro-sai 1.8s ease 6.2s forwards;will-change:opacity}
+#intro .ibg{position:absolute;inset:-4%;background-size:cover;background-position:center;opacity:0;
+  animation:ibg-entra 1.4s ease .1s forwards,ibg-zoom 8.4s ease-out forwards;will-change:transform,opacity}
+#intro .ibg::after{content:'';position:absolute;inset:0;
+  background:radial-gradient(ellipse at center,rgba(8,10,20,.18),rgba(8,10,20,.88) 85%),linear-gradient(180deg,rgba(8,10,20,.35),rgba(8,10,20,.6))}
+#intro .titulo{position:relative;display:grid;justify-items:center;text-align:center;
+  animation:palavra-voa 7.6s cubic-bezier(.22,.9,.3,1) forwards;will-change:transform,opacity}
+#intro .palavra{font:800 clamp(52px,13vw,160px)/1 var(--f-mark);letter-spacing:.02em;
+  background:linear-gradient(110deg,#fff 15%,#8fb0ff 55%,#b48cff 90%);-webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 10px 46px rgba(122,150,255,.5))}
+#intro .sub{margin-top:16px;font:600 13px var(--f-mark);letter-spacing:.3em;text-transform:uppercase;color:rgba(255,255,255,.72);text-shadow:0 2px 18px rgba(0,0,0,.55);
+  animation:sub-entra 1.6s ease 2.2s backwards}
+@keyframes sub-entra{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@keyframes palavra-voa{0%{transform:scale(.06);opacity:0}30%{transform:scale(1);opacity:1}62%{transform:scale(1.05);opacity:1}100%{transform:scale(7);opacity:0}}
+@keyframes ibg-entra{to{opacity:1}}
+@keyframes ibg-zoom{from{transform:scale(1.15)}to{transform:scale(1.01)}}
+@keyframes intro-sai{to{opacity:0;visibility:hidden}}
+</style>
+</head>
+<body>
+<div id="intro"><div class="ibg"></div><div class="titulo"><div class="palavra">CA<span style="color:transparent;-webkit-text-stroke:2px rgba(255,255,255,.75)">ÇADA</span></div><div class="sub">a linha de caça do seu pokemon</div></div></div>
+<div id="pokebg" aria-hidden="true"></div>
+<div class="wrap">
+ <header class="bar glass">
+   <div class="mark">CA<span>ÇADA</span><em>DOSSIÊ · MELHORES HUNTS</em></div>
+   <span class="sp"></span>
+   <a class="cbtn" href="/dossie.html">← Dossiê</a>
+   <a class="cbtn" href="/capturas.html">Fichas</a>
+   <a class="cbtn" href="/apoie.html">♥ Apoie</a>
+ </header>
+
+ <section id="entrada">
+   <div class="card glass">
+     <h1>Onde <b>ele</b> rende mais</h1>
+     <p class="lede">Cole a ficha e escolha a conta. A previsão usa os bônus atuais, o dia sazonal e o tempo sem abates medido nessa conta para comparar as hunts liberadas agora.</p>
+     <label for="conta-calibracao">Conta para usar os bônus e o ritmo reais</label>
+     <select id="conta-calibracao" style="width:100%;padding:12px;margin:8px 0 16px"><option value="">Escolha a conta</option></select>
+     <div class="lamina"><textarea id="ficha" spellcheck="false" placeholder="Copia a ficha no jogo e joga aqui…"></textarea></div>
+     <div class="ficha-prev" id="prev">
+       <span class="chip" data-c="nome">espécie</span><span class="chip" data-c="nivel">nível</span><span class="chip" data-c="qualidade">qualidade</span>
+       <span class="chip" data-c="potencia">potência</span><span class="chip" data-c="iv">IVs</span><span class="chip" data-c="pve">PvE</span>
+     </div>
+     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+       <button class="cbtn pri" id="btn-analisar">Analisar caçada</button>
+       <span id="st">cola a ficha do jogo aqui…</span>
+     </div>
+     <div class="quem">coladas neste navegador</div>
+     <div class="fbusca"><input id="q-ficha" type="search" placeholder="Filtrar por nome, Nv, potência…" autocomplete="off"></div>
+     <div id="fichas-lista"><div class="vazio">as fichas que você colar aparecem aqui</div></div>
+   </div>
+   <div class="card glass" id="lado-poke">
+     <h2>Seu exemplar</h2>
+     <div class="poke-card" id="pokecard" hidden>
+       <img id="art" alt="">
+       <div>
+         <div class="nome" id="p-nome"></div>
+         <div class="sub" id="p-sub"></div>
+         <div class="tipos" id="p-tipos"></div>
+       </div>
+     </div>
+     <p class="lede" id="sem-poke">Nenhum escolhido ainda. Também dá para ajustar na mão:</p>
+     <div class="field-row">
+       <div class="f"><label for="i-nome">Espécie</label><input id="i-nome" list="dl-sp" placeholder="Charizard"></div>
+       <div class="f"><label for="i-nv">Nível</label><input id="i-nv" type="number" min="1" value="10"></div>
+       <div class="f"><label for="i-q">Qualidade</label><input id="i-q" type="number" step="0.001" min="0.8" max="1.8" value="1.1"></div>
+       <div class="f"><label for="i-p">Potência</label><select id="i-p"><option value="1">P1</option><option value="2">P2</option><option value="3">P3</option><option value="4">P4</option><option value="5">P5</option></select></div>
+       <div class="f"><label for="i-sh">Shiny</label><select id="i-sh"><option value="0">Não</option><option value="1">Sim</option></select></div>
+     </div>
+   </div>
+ </section>
+
+ <section id="saida">
+   <div class="resumo" id="resumo"></div>
+   <div class="layout">
+     <div class="card glass" id="agora">
+       <h2>Melhores hunts agora</h2>
+       <p class="lede" id="agora-lede"></p>
+       <div class="lista" id="agora-lista"></div>
+     </div>
+     <div class="card glass" id="timeline">
+       <h2>Linha de caça completa</h2>
+       <p class="lede">Comparação das hunts liberadas para a conta, mantendo o nível e os atributos da ficha. A faixa atual fica marcada.</p>
+       <div class="scroll" id="timeline-list"></div>
+     </div>
+   </div>
+ </section>
+
+ <footer>O cálculo é o mesmo do motor de troca de hunts: usa o catálogo vivo, a ficha, os bônus e o dia sazonal. O tempo sem abates da conta entra na simulação e os golpes recarregam durante esse tempo. Previsões para outra hunt ainda precisam de teste real: distância entre alvos, spawn, área e desmaios podem mudar o rendimento.</footer>
+</div>
+<div id="wiki" aria-hidden="true"><div class="wscrim"></div>
+<aside class="wpanel" role="dialog" aria-label="Ficha da hunt">
+  <div class="wtop"><a class="cbtn" id="w-dossie" target="_blank" rel="noopener">Abrir no Dossiê ↗</a><button class="cbtn" id="w-fechar">✕</button></div>
+  <div id="w-body"></div>
+</aside></div>
+<datalist id="dl-sp"></datalist>
+<div id="toast"></div>
+
+<script src="sim.js"></script>
+<script src="previsao.js"></script>
+<script>
+(()=>{const i=document.getElementById('intro');if(!i)return;
+try{if(sessionStorage.getItem('hdx-intro')){i.remove();return}}catch(e){}
+try{sessionStorage.setItem('hdx-intro','1')}catch(e){}
+const fecha=()=>{i.style.animation='intro-sai .4s ease forwards';setTimeout(()=>i.remove(),420)};
+i.addEventListener('click',fecha);
+setTimeout(()=>i.remove(),8300);
+fetch('/api/dossie/fotos').then(r=>r.ok?r.json():null).then(d=>{
+  const hd=(d&&d.fotos||[]).filter(f=>(f.w||0)>=1920);
+  if(hd.length)i.querySelector('.ibg').style.backgroundImage='url('+hd[Math.floor(Math.random()*hd.length)].url+')';
+}).catch(()=>{});
+})();
+</script>
+<script>
+"use strict";
+(()=>{ /* tudo dentro da IIFE: sim.js já declara PT/TYPES no escopo global — sem colisão aqui dentro */
+const $=i=>document.getElementById(i);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const nf=(x,d=0)=>x==null?'—':Number(x).toLocaleString('pt-BR',{maximumFractionDigits:d});
+const nfK=x=>x==null?'—':x>=1e6?nf(x/1e6,1)+'M':x>=1e3?nf(x/1e3,1)+'k':nf(x);
+const toast=t=>{const e=$('toast');e.textContent=t;e.classList.add('on');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('on'),2600)};
+fetch('/api/dossie/cacada-contas').then(r=>r.json()).then(d=>{for(const nick of d.contas||[]){const o=document.createElement('option');o.value=nick;o.textContent=nick;$('conta-calibracao').appendChild(o);}}).catch(()=>{});
+const slugDe=n=>String(n||'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');
+const PTN={NORMAL:'Normal',FIRE:'Fogo',WATER:'Água',GRASS:'Planta',ELECTRIC:'Elétrico',ICE:'Gelo',FIGHTING:'Lutador',POISON:'Venenoso',GROUND:'Terra',FLYING:'Voador',PSYCHIC:'Psíquico',BUG:'Inseto',ROCK:'Pedra',GHOST:'Fantasma',DRAGON:'Dragão',DARK:'Sombrio',STEEL:'Metal',FAIRY:'Fada'};
+const TIPO_FUNDO={FIRE:'fogo',WATER:'terra-agua',GRASS:'planta',ELECTRIC:'eletrico',PSYCHIC:'psiquico',DRAGON:'dragao',DARK:'sombrio',FIGHTING:'lutador',POISON:'veneno',GHOST:'fantasma',NORMAL:'normal',ICE:'todos',BUG:'todos',ROCK:'ruinas',GROUND:'terra-agua',STEEL:'todos',FAIRY:'todos',FLYING:'fogo-cidade'};
+let WALLCAT=null,USERFOTOS=null;
+fetch('/api/dossie/fotos').then(r=>r.ok?r.json():null).then(d=>{USERFOTOS=d&&d.fotos||[]}).catch(()=>{});
+fetch('dex-walls.json').then(r=>r.ok?r.json():null).then(d=>{WALLCAT=d}).catch(()=>{});
+function wallpaperDe(sp){
+  const bg=$("pokebg"),d=sp.d,t=TIPO_FUNDO[sp.t[0]]||'todos';
+  const cand=[];
+  if(USERFOTOS&&USERFOTOS.length){const hd=USERFOTOS.filter(f=>(f.w||0)>=1920);if(hd.length){const pool=hd.slice().sort(()=>Math.random()-.5);cand.push(...pool.map(f=>f.url))}}
+  const lista=WALLCAT&&WALLCAT[d]&&WALLCAT[d].walls;
+  if(lista&&lista.length){const top=lista.filter(w=>w.fav>0);const pool=top.length?top:lista;const w=pool[Math.floor(Math.random()*pool.length)];cand.push(w.f)}
+  cand.push(`dex-${d}-w1.jpg`,`dex-${d}-w1.png`,`dex-${d}.jpg`,`dex-${d}.png`,`fundo-${t}.webp`);
+  (function prox(i){if(i>=cand.length)return;
+    const im=new Image();
+    im.onload=()=>{bg.style.backgroundImage=`url('${cand[i]}')`;bg.classList.add("on")};
+    im.onerror=()=>prox(i+1);im.src=cand[i];
+  })(0);
+}
+window.kf=x=>x>=1e6?(x/1e6).toLocaleString('pt-BR',{maximumFractionDigits:1})+'M':x>=1e3?(x/1e3).toLocaleString('pt-BR',{maximumFractionDigits:1})+'k':Math.round(x).toLocaleString('pt-BR');
+
+let CONTEXTO_XP=null;
+let DEX=[],BYN=new Map(),BYD=new Map(),XPK=new Map(),CRN=new Map(),FICHAS=[],FICHA_SEL=null;
+async function boot(){
+  const [px,cx]=await Promise.all([fetch('pokedex.json').then(r=>r.json()),fetch('creatures.json').then(r=>r.json()).catch(()=>null)]);
+  DEX=px;BYN=new Map(DEX.map(x=>[x.n.toLowerCase(),x]));BYD=new Map(DEX.map(x=>[x.d,x]));
+  const nrm=x=>String(x).toLowerCase().replace(/[^a-z0-9]/g,'');
+  if(cx&&cx.creatures)for(const c of cx.creatures){if(c.name&&c.experience)XPK.set(nrm(c.name),+c.experience);if(c.name)CRN.set(nrm(c.name),c)}
+  $('dl-sp').innerHTML=DEX.filter(x=>x.h).map(x=>`<option value="${esc(x.n)}">`).join('');
+  try{setServerConstants(JSON.parse(localStorage.getItem('hdx-pub')||'null'))}catch(e){}
+  await carregarFichas();
+  /* ficha colada no Dossiê já abre analisando aqui */
+  try{
+    const ult=localStorage.getItem('hdx-cacada-ultima');
+    let i=ult?FICHAS.findIndex(f=>f.id===ult):-1;
+    if(i<0){const sel=localStorage.getItem('hdx2-sel');if(sel){try{i=FICHAS.findIndex(f=>f.nome===JSON.parse(sel))}catch(e){i=FICHAS.findIndex(f=>f.nome===sel)}}}
+    if(i>=0)setTimeout(()=>{const el=$('fichas-lista').querySelector(`.fich[data-i="${i}"]`);if(el)el.click()},250)
+  }catch(e){}
+}
+/* ===== "coladas aqui": histórico local das fichas coladas neste navegador ===== */
+const LSF='hdx-cacada-coladas';
+const locais=()=>{try{return JSON.parse(localStorage.getItem(LSF)||'[]')}catch(e){return[]}};
+const POSTADAS=new Set();
+function registrar(f){
+  if(!f||!f.sp)return;
+  const id='loc-'+(f.pokemon_id||slugDe(f.sp.n)+'-'+f.nivel+'-'+f.qualidade);
+  const row={id,nome:f.sp.n,slug:slugDe(f.sp.n),dex_id:f.sp.d,
+    nivel:f.nivel,nivel_efetivo:f.nivel_efetivo,potencia:f.potencia,qualidade:f.qualidade,iv_total:f.iv_total,
+    iv_hp:f.iv[0],iv_atk:f.iv[1],iv_def:f.iv[2],iv_spatk:f.iv[3],iv_spdef:f.iv[4],iv_spd:f.iv[5],
+    tipo_1:f.sp.t[0],tipo_2:f.sp.t[1]||null,capturado_por:f.capturado_por||null,capturado_em:f.capturado_em||null,raw_text:f.raw_text,_local:true};
+  const arr=locais().filter(l=>l.id!==id);
+  arr.unshift(row);
+  try{localStorage.setItem(LSF,JSON.stringify(arr.slice(0,120)))}catch(e){}
+  try{localStorage.setItem('hdx-cacada-ultima',id)}catch(e){}
+  carregarFichas();
+  /* autosave silencioso no banco geral — igual ao "Colar ficha" do Dossiê */
+  if(!POSTADAS.has(id)){POSTADAS.add(id);
+    fetch('/api/dossie/ficha',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({pokemon_id:f.pokemon_id,nome:f.sp.n,slug:slugDe(f.sp.n),dex_id:f.sp.d,nivel:f.nivel,
+        tipo_1:f.sp.t[0],tipo_2:f.sp.t[1]||null,potencia:f.potencia,qualidade:f.qualidade,iv_total:f.iv_total,
+        pve_power:f.pve_power,hp_combate:f.hp_combate,pvp_power:f.pvp_power,nivel_efetivo:f.nivel_efetivo,score:f.score,
+        stat_hp:f.stats[0],stat_atk:f.stats[1],stat_def:f.stats[2],stat_spatk:f.stats[3],stat_spdef:f.stats[4],stat_spd:f.stats[5],
+        iv_hp:f.iv[0],iv_atk:f.iv[1],iv_def:f.iv[2],iv_spatk:f.iv[3],iv_spdef:f.iv[4],iv_spd:f.iv[5],
+        capturado_em:f.capturado_em,capturado_por:f.capturado_por,raw_text:f.raw_text,oculto:true})}).catch(()=>{});
+  }
+}
+/* espécies que o Dossiê já lembra deste navegador (hdx-tenho + hdx2-me-{nome}) —
+   cobre fichas coladas antes da ponte exportarPraCacada e página em cache */
+function dasDoDossie(){
+  const out=[];
+  try{
+    const tenho=JSON.parse(localStorage.getItem('hdx-tenho')||'{}');
+    const mine=JSON.parse(localStorage.getItem('hdx2-mine')||'{}');
+    for(const nome in tenho){
+      const sp=BYN.get(String(nome).toLowerCase());if(!sp)continue;
+      const me=JSON.parse(localStorage.getItem('hdx2-me-'+nome)||'null')||mine[nome]||{};
+      const iv=(me.iv&&me.iv.length===6?me.iv:null)||[16,16,16,16,16,16];
+      out.push({id:'me-'+sp.n,nome:sp.n,slug:slugDe(sp.n),dex_id:sp.d,
+        nivel:me.lv||100,nivel_efetivo:null,potencia:'P'+(me.p||1),qualidade:me.q||1.1,iv_total:null,
+        iv_hp:iv[0],iv_atk:iv[1],iv_def:iv[2],iv_spatk:iv[3],iv_spdef:iv[4],iv_spd:iv[5],
+        shiny:!!me.sh,tipo_1:sp.t[0],tipo_2:sp.t[1]||null,capturado_por:null,raw_text:null,_local:true,_dossie:true});
+    }
+  }catch(e){}
+  return out;
+}
+async function carregarFichas(){
+  const dos=locais();
+  FICHAS=dos.concat(dasDoDossie().filter(m=>!dos.some(l=>l.nome===m.nome))).filter(f=>f.nome);
+  if(!FICHAS.length)return;
+  desenharFichas($('q-ficha').value||'');
+}
+function desenharFichas(filtro){
+  const lista=$('fichas-lista');
+  const q=(filtro||'').toLowerCase().trim();
+  const vis=FICHAS.filter(f=>{
+    if(!q)return true;
+    const hay=[f.nome,f.nick,f.potencia,'nv'+f.nivel,'nv'+(f.nivel_efetivo||''),f.capturado_por].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+  lista.innerHTML=vis.slice(0,80).map(f=>{
+    const i=FICHAS.indexOf(f);
+    const nv=+(f.nivel_efetivo||f.nivel||1);
+    const sub=[];
+    if(f.potencia)sub.push(f.potencia);
+    if(f.qualidade)sub.push('q '+nf(+f.qualidade,3));
+    if(f.iv_total)sub.push('IV '+f.iv_total);
+    return `<div class="fich ${FICHA_SEL===f?'sel':''}" data-i="${i}" role="button" tabindex="0">
+      <img data-d="${f.dex_id}" alt="">
+      <div><div class="fn">${esc(f.nome)}${f.nick?` <small>“${esc(f.nick)}”</small>`:''}</div>
+        <div class="fx">${sub.map(s=>`<span>${esc(s)}</span>`).join('')}${f.capturado_por?`<span class="fdono">· ${esc(f.capturado_por)}</span>`:''}</div></div>
+      <div class="fnv">Nv ${nf(nv)}<small>${f.nivel&&f.nivel_efetivo&&+f.nivel!==+f.nivel_efetivo?'ficha Nv '+nf(+f.nivel):'&nbsp;'}</small>${f._local?`<button class="fdel" type="button" data-del="${esc(f.id)}" title="apagar ficha local">×</button>`:''}</div>
+    </div>`}).join('')||'<div class="vazio">nada com esse filtro</div>';
+  lista.querySelectorAll('img[data-d]').forEach(im=>{const spx=BYD.get(+im.dataset.d);if(spx)arteDe(im,spx);else im.style.visibility='hidden'});
+}
+let _fq=null;$('q-ficha').addEventListener('input',e=>{clearTimeout(_fq);_fq=setTimeout(()=>desenharFichas(e.target.value),120)});
+$('fichas-lista').addEventListener('click',e=>{
+  const del=e.target.closest('[data-del]');
+  if(del){e.stopPropagation();
+    const id=del.dataset.del;
+    if(id.startsWith('me-')){
+      const nome=id.slice(3);
+      try{const t=JSON.parse(localStorage.getItem('hdx-tenho')||'{}');delete t[nome];localStorage.setItem('hdx-tenho',JSON.stringify(t))}catch(e){}
+      try{localStorage.removeItem('hdx2-me-'+nome)}catch(e){}
+    }else{
+      try{localStorage.setItem(LSF,JSON.stringify(locais().filter(l=>l.id!==id)))}catch(e){}
+    }
+    carregarFichas();return}
+  const el=e.target.closest('.fich');if(!el)return;
+  FICHA_SEL=FICHAS[+el.dataset.i];
+  document.querySelectorAll('.fich.sel').forEach(x=>x.classList.remove('sel'));
+  el.classList.add('sel');
+  preencherDe(FICHA_SEL);
+  rodar();
+});
+$('fichas-lista').addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){const el=e.target.closest('.fich');if(el){e.preventDefault();el.click()}}});
+function preencherDe(f){
+  $('i-nome').value=f.nome;
+  $('i-nv').value=+(f.nivel_efetivo||f.nivel||1);
+  if(f.qualidade)$('i-q').value=nf(+f.qualidade,3).replace(',','.');
+  if(f.potencia)$('i-p').value=+String(f.potencia).replace(/\D/g,'')||1;
+  $('i-sh').value=(f.shiny||(/\bshiny\b/i.test(f.raw_text||'')&&!/não shiny|sem shiny/i.test(f.raw_text||'')))?'1':'0';
+}
+function numBR(x){if(x==null)return null;x=String(x).replace(/[^\d.,-]/g,'');if(!x)return null;
+  if(x.includes(','))x=x.replace(/\./g,'').replace(',','.');else x=x.replace(/\./g,'');
+  const v=parseFloat(x);return isFinite(v)?v:null}
+function parseFicha(txt){
+  if(globalThis.NexusFicha){const f=NexusFicha.parse(txt);const sp=(f.dex&&DEX.find(s=>s.d===f.dex))||BYN.get((f.nome||'').toLowerCase());if(sp&&f.nivel&&f.qualidade&&f.iv.every(v=>v!=null)){f.sp=sp;f.dex_id=sp.d;return f;}}
+
+  const L=txt.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  const f={iv:[null,null,null,null,null,null],raw_text:txt};
+  const depois=re=>{const i=L.findIndex(l=>re.test(l));return i<0?null:L[i+1]};
+  const ROT=/^(nv|fire|water|grass|electric|ice|fighting|poison|ground|flying|psychic|bug|rock|ghost|dragon|dark|steel|fairy|normal|potência|qualidade|iv|poder|ranking|hp|atk|def|sp|spd|xp|experiência|faltam|próximo|identidade|capturado|espécie|calcular|comparar|reduzir|ver |copiar|stats|evolução|mega|a potência|é este|total|o preço|dual|refinar|a linha)/i;
+  f.nome=(L.find(l=>!ROT.test(l)&&!/^[⚔#\d+.,×\-—\/+]/.test(l)&&!/^P\d$/.test(l)&&!/stone$/i.test(l))||L[0]||'').replace(/\s+/g,' ');
+  const nv=txt.match(/Nv\s*(\d+)/);if(nv)f.nivel=+nv[1];
+  const nvEf=txt.match(/conta como Nv\s*(\d+)/i);if(nvEf)f.nivel_efetivo=+nvEf[1];
+  f.tipos=L.filter(l=>/^[A-Z]{3,10}$/.test(l)&&TYPES.includes(l));
+  const pot=txt.match(/Potência\s*\n\s*(P\d)/i)||txt.match(/\b(P[1-5])\b/);if(pot)f.potencia=pot[1];
+  const q=depois(/^\s*qualidade/i);if(q!=null)f.qualidade=numBR(q);
+  const ivs=txt.match(/IV somado\s*\n?\s*(\d+)\s*\/\s*(\d+)/i);if(ivs){f.iv_total=+ivs[1];f.iv_max=+ivs[2]}
+  const pve=depois(/Poder no PvE/i);if(pve)f.pve_power=numBR(pve);
+  const hp=depois(/HP de combate/i);if(hp)f.hp_combate=numBR(hp);
+  const pvp=depois(/Poder no PvP/i);if(pvp)f.pvp_power=numBR(pvp);
+  const sc=txt.match(/(\d+,\d+)\s*\n\s*\/\s*10,0\s*\n\s*(\S+)/);if(sc){f.score=numBR(sc[1]);f.score_label=sc[2]}
+  const pid=txt.match(/Identidade\s*\n?\s*#?(\d{5,})/i)||txt.match(/#(\d{6,})/);if(pid)f.pokemon_id=pid[1];
+  const ce=depois(/Capturado em/i);if(ce){const m=ce.match(/(\d{2})\/(\d{2})\/(\d{4})/);if(m)f.capturado_em=`${m[3]}-${m[2]}-${m[1]}`}
+  const cp=depois(/Capturado por/i);if(cp&&!/espécie/i.test(cp))f.capturado_por=cp;
+  f.stats=[null,null,null,null,null,null];
+  const SIDX={HP:0,ATK:1,DEF:2,'SP.ATK':3,SPATK:3,'SP.DEF':4,SPDEF:4,SPD:5};
+  for(let i=0;i<L.length;i++){const k=SIDX[L[i].toUpperCase()];if(k==null)continue;const v=numBR(L[i+1]);if(v==null)continue;f.stats[k]=v;const m=(L[i+2]||'').match(/IV\s*(\d+)/);if(m)f.iv[k]=+m[1]}
+  f.shiny=/\bshiny\b/i.test(txt)&&!/não shiny|sem shiny/i.test(txt);
+  const esp=txt.match(/Espécie\s*#(\d+)/i);if(esp)f.dex=+esp[1];
+  if(!f.iv_total&&f.iv.every(v=>v!=null))f.iv_total=f.iv.reduce((a,b)=>a+b,0);
+  // ficha-relato "# Nome — ficha do PokeIdle" (formato markdown)
+  const mde=txt.match(/Espécie:\s*([^\n(]+?)\s*\(#(\d+)\)/i);
+  if(mde){
+    f.nome=mde[1].trim(); f.dex=+mde[2];
+    const tl=txt.match(/Espécie:[^\n]*/i);
+    if(tl)f.tipos=(tl[0].match(/[A-Z]{4,10}/g)||[]).filter(t=>TYPES.includes(t));
+    const g=re=>{const m=txt.match(re);return m?m[1]:null};
+    const num=s=>s==null?null:+(String(s).replace(/[^\d]/g,''));
+    const nv2=g(/Nível:\s*([\d.,]+)/i); if(nv2)f.nivel=num(nv2);
+    const p2=g(/Potência:\s*(P\d)/i); if(p2)f.potencia=p2;
+    const q2=g(/Qualidade:\s*([\d.,]+)/i); if(q2)f.qualidade=parseFloat(q2);
+    const iv2=txt.match(/IV somado:\s*(\d+)\s*de\s*(\d+)/i); if(iv2){f.iv_total=+iv2[1];f.iv_max=+iv2[2]}
+    const pw=g(/Poder \(⚔\):\s*([\d.,]+)/i); if(pw)f.pve_power=num(pw);
+    const hc=g(/HP de combate:\s*([\d.,]+)/i); if(hc)f.hp_combate=num(hc);
+    const nt=g(/Nota da Calculadora:\s*([\d.,]+)/i); if(nt)f.score=parseFloat(nt);
+    if(/Shiny:\s*n[aã]o/i.test(txt))f.shiny=false; else if(/Shiny:\s*sim\b/i.test(txt))f.shiny=true;
+    for(const m of txt.matchAll(/\|\s*(HP|ATK|DEF|SP\.?\s*ATK|SP\.?\s*DEF|SPD)\s*\|\s*([\d.,]+)\s*\|\s*(\d+)\s*\|\s*([\d.,]+)\s*\|/gi)){
+      const k=SIDX[m[1].toUpperCase().replace(/\s/g,'')]; if(k==null)continue;
+      f.iv[k]=+m[3]; f.stats[k]=num(m[4]);
+    }
+  }
+  f.sp=(f.dex&&BYD.get(f.dex))||BYN.get((f.nome||'').toLowerCase())||null;
+  return f;
+}
+const HUNTS=()=>DEX.filter(x=>x.h&&x.c==='pokebola');
+const nrmSp=n=>String(n).toLowerCase().replace(/[^a-z0-9]/g,'');
+async function calcular(sp,{nivel,q,pot,shiny,ivs},onProg){
+  const conta=$('conta-calibracao').value;
+  if(!conta)throw Error('Escolha a conta para usar os bônus e o tempo entre alvos corretos.');
+  const f=FICHA||FICHA_SEL||{sp,nivel,qualidade:q,potencia:'P'+pot,shiny,iv:ivs};
+  const ficha=NexusFicha.toGame(f,sp);
+  const r=await fetch('/api/dossie/cacada-previsao',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({conta,ficha})});
+  const d=await r.json();CONTEXTO_XP=d;if(!r.ok)throw Error(d.erro||'Não foi possível calcular.');
+  if(!d.ranking?.length)throw Error(d.motivo||'Aguardando uma amostra estável da conta para calibrar.');
+  WIKI.clear();const faixas=new Map();
+  for(const h of d.ranking){
+    const nivel=+h.nivel,alvo=DEX.find(s=>s.d===h.dex)||BYN.get(h.nome.toLowerCase());
+    const it={nome:h.nome,dex:alvo?.d,slug:h.slug,tipos:alvo?.t||[],nivel,kph:Math.round(h.kph),
+      tkill:h.kph?+(3600/h.kph).toFixed(1):null,xpKill:h.xpKillTreinador||h.xpH/h.kph,
+      xpH:Math.round(h.xpH),xpPokemonH:Math.round(h.xpPokemonH||0),ouroH:null,
+      medido:String(h.fonte||'').startsWith('medido'),outland:alvo?.c==='outland',pior:h.pior,
+      veredito:h.pior<.4?'SEGURO':h.pior<1?'ARRISCADO':'MORRE'};
+    const chave=nivel<=100?Math.floor((nivel-1)/10):nivel;
+    WIKI.set(h.slug,it);(faixas.get(chave)||faixas.set(chave,[]).get(chave)).push(it);
+  }
+  const max=Number(d.nivelTreinador)||nivel;
+  const atual=Math.max(...[...faixas.keys()].filter(k=>k<=max));
+  $('st').textContent='Previsão calibrada · '+conta+' · '+Number(d.calibracao?.pausaSegundos||0).toLocaleString('pt-BR',{maximumFractionDigits:1})+' s entre alvos (caminhada, captura e espera).';
+  return [...faixas.entries()].sort((a,b)=>a[0]-b[0]).map(([chave,hunts])=>{
+    hunts.sort((a,b)=>b.xpH-a.xpH);if(hunts[0])hunts[0].melhor=true;
+    return {chave,rotulo:'Nv '+(chave<=9?chave*10+1:chave),lo:chave<=9?chave*10+1:chave,hi:chave<=9?chave*10+10:chave,atual:chave===atual,hunts};
+  });
+}
+const WIKI=new Map();
+const BADGE={SEGURO:'seguro',ARRISCADO:'arriscado',MORRE:'morre'};
+const chipsEff=it=>{
+  const p=[];
+  if(it.bate>1)p.push(`<span class="eff up" title="Melhor efetividade que ele causa, amplificada na hunt (golpe ${PTN[it.bateT]||it.bateT||''})">bate ×${(+it.bate).toFixed(2).replace('.',',')}</span>`);
+  if(it.apanha>1)p.push(`<span class="eff down" title="Melhor efetividade que ele sofre (golpe ${PTN[it.apanhaT]||it.apanhaT||''})">apanha ×${(+it.apanha).toFixed(2).replace('.',',')}</span>`);
+  return p.join('');
+};
+const miniTipos=t=>(t||[]).map(x=>`<span class="tipo" data-tipo="${esc(x)}">${PTN[x]||x}</span>`).join('');
+/* outland (dex 2000–2999) é a MESMA espécie com prefixo — a arte vem da base */
+const baseDe=sp=>{if(!sp||!(sp.d>=2000&&sp.d<3000))return sp;
+  const p=sp.n.toLowerCase().split(' ');
+  for(let i=1;i<p.length;i++){const b=BYN.get(p.slice(i).join(' '));if(b&&b.d<2000)return b}
+  return sp};
+let ARTE_N=null;
+const arteD=sp=>{const d=+sp?.d;if(!(d>1025))return d;
+ if(!ARTE_N&&DEX.length){ARTE_N=new Map();for(const x of DEX)if(x.d>0&&x.d<=1025&&!ARTE_N.has(x.n.toLowerCase()))ARTE_N.set(x.n.toLowerCase(),x.d)}
+ const w=String(sp.n||'').toLowerCase().replace(/-/g,' ').split(/\s+/).filter(Boolean);
+ if(ARTE_N)for(let i=0;i<w.length;i++)for(let j=w.length;j>i;j--){const b=ARTE_N.get(w.slice(i,j).join(' '));if(b)return b}
+ if(d>=3000&&d<4000)return d-3000;const m=d%1000;return m>0&&m<=1025?m:d};
+function arteDe(img,sp){
+  const b=baseDe(sp)||sp;
+  const cand=[`dex-${b.d}.svg`,`dex-${b.d}.png`,`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/${arteD(b)}.png`];
+  let i=0;img.style.visibility='';
+  img.onerror=()=>{i++;if(i<cand.length)img.src=cand[i];else{img.onerror=null;img.style.visibility='hidden'}};
+  img.src=cand[0];
+}
+function renderAgora(faixas,nivel){
+  const ate=nivel+5;
+  const pool=[];
+  for(const f of faixas)for(const h of f.hunts)if(h.nivel<=ate)pool.push(h);
+  pool.sort((a,b)=>b.xpH-a.xpH);
+  const top=pool.slice(0,14);
+  $('agora-lede').innerHTML=`Todas as hunts que ele já alcança — do Nv 1 ao <b>Nv ${ate}</b> (nível dele +5), ordenadas pelo XP/hora que a simulação estima. Bônus de tipo pesa muito: hunt onde ele bate ×2,5 ou mais costuma ganhar mesmo dando menos XP por abate.`;
+  $('agora-lista').innerHTML=top.map((it,i)=>`
+    <div class="hunt ${i===0?'melhor':''}" data-slug="${esc(it.slug)}" role="button" tabindex="0" title="Abrir a wiki dessa hunt" style="cursor:pointer">
+      <div class="rank">${i===0?'★':i+1}</div>
+      <div>
+        <div class="hn">${esc(it.nome)} <span class="badge ${BADGE[it.veredito]}">${it.veredito}</span> ${it.medido?'<span class="badge medido">medido</span>':''} ${it.outland?'<span class="badge outland">outland</span>':''}</div>
+        <div class="hx"><span>Nv <b>${nf(it.nivel)}</b></span><span><b>${nf(it.kph)}</b> abates/h</span><span><b>${it.tkill||'—'}s</b>/abate</span><span><b>${nf(it.xpKill)}</b> XP/abate</span>${chipsEff(it)}</div>
+      </div>
+      <div class="val"><div class="xp"><b data-conta="${it.xpH}" data-fmt="kf">${nfK(it.xpH)}</b> XP treinador/h</div><div class="aux">${nfK(it.xpPokemonH)} XP Pokémon/h</div></div>
+    </div>`).join('')||'<p class="lede">Nenhuma hunt simulada nesse alcance.</p>';
+}
+function renderTimeline(faixas){
+  $('timeline-list').innerHTML=faixas.map(f=>{
+    const top=f.hunts.slice(0,3);
+    return `<div class="fx ${f.atual?'atual':''}" id="fx-${f.chave}">
+      <div class="faixa">${f.rotulo}${f.atual?'<span class="agora">VOCÊ ESTÁ AQUI</span>':''}</div>
+      ${top.map((it,i)=>`<div class="mini ${i===0?'melhor':''}" data-slug="${esc(it.slug)}" role="button" tabindex="0" title="Abrir a wiki dessa hunt" style="cursor:pointer">
+        <span class="mn">${i===0?'★ ':''}${esc(it.nome)}</span>
+        <span class="badge ${BADGE[it.veredito]}">${it.veredito.slice(0,1)}</span>
+        <span class="mx"><b>${nfK(it.xpH)}</b> xp/h</span>
+      </div>`).join('')}
+      ${f.hunts.length>3?`<div class="mini" style="justify-content:center;color:var(--ink-3)">+ ${f.hunts.length-3} outras</div>`:''}
+    </div>`}).join('');
+  const at=document.querySelector('.fx.atual');
+  if(at)at.scrollIntoView({block:'center'});
+}
+function renderPoke(sp,f,nivel,q,pot,shiny){
+  $('sem-poke').hidden=true;$('pokecard').hidden=false;
+  $('p-nome').textContent=sp.n+(shiny?' ★':'');
+  const nvFicha=FICHA_SEL&&+FICHA_SEL.nivel&&+FICHA_SEL.nivel!==nivel?` <span style="color:var(--ink-3)">(ficha Nv ${nf(+FICHA_SEL.nivel)})</span>`:'';
+  $('p-sub').innerHTML=`Nv ${nf(nivel)}${nvFicha} · qualidade ${q} · ${'P'+pot}${f&&f.iv_total?` · IV ${f.iv_total}/${f.iv_max||192}`:''}`;
+  $('p-tipos').innerHTML=miniTipos(sp.t);
+  arteDe($('art'),sp);
+  try{HDX.tipo(sp.t)}catch(e){}
+  try{wallpaperDe(sp)}catch(e){}
+}
+function renderResumo(sp,faixas,nivel){
+  const todos=faixas.flatMap(f=>f.hunts);
+  const seg=todos.filter(h=>h.veredito==='SEGURO').length;
+  const bateu=todos.filter(h=>h.bate>=2.5).length;
+  const melhorAtual=(faixas.find(f=>f.atual)||{}).hunts?.[0];
+  $('resumo').innerHTML=`
+    <div class="k"><small>espécie</small><b>${esc(sp.n)}</b></div>
+    <div class="k"><small>nível</small><b>${nivel}</b></div>
+    <div class="k"><small>hunts simuladas</small><b data-conta="${todos.length}">${nf(todos.length)}</b></div>
+    <div class="k"><small>seguras p/ ele</small><b data-conta="${seg}">${nf(seg)}</b></div>
+    <div class="k"><small>bate ×2,5 ou mais</small><b data-conta="${bateu}">${nf(bateu)}</b></div>
+    ${melhorAtual?`<div class="k"><small>melhor na faixa atual</small><b>${esc(melhorAtual.nome)} · ${nfK(melhorAtual.xpH)} xp/h</b></div>`:''}`;
+}
+/* ===== wiki da hunt: espécie + por que ela rende ===== */
+const STATN_PT=['HP','ATK','DEF','SpATK','SpDEF','SPD'];
+function criaturaDe(sp){
+  let nome=nrmSp(sp.n),c=CRN.get(nome);
+  const partes=sp.n.toLowerCase().split(' ');
+  for(let i=1;i<partes.length&&!c;i++)c=CRN.get(nrmSp(partes.slice(i).join(' ')));
+  return c||null;
+}
+function pqDe(it){
+  const VER={SEGURO:'farmável afk',ARRISCADO:'leva poção',MORRE:'provável desmaio'};
+  return [
+    ['bate',`×${nf(it.bate,2)}${it.bateT?` <span class="d">golpe de ${PTN[it.bateT]||it.bateT}</span>`:''}`,it.bate>=2.5?'ok':'neu'],
+    ['apanha',it.apanha>1?`×${nf(it.apanha,2)}${it.apanhaT?` <span class="d">golpe de ${PTN[it.apanhaT]||it.apanhaT}</span>`:''}`:'×1 <span class="d">ele não te machuca por tipo</span>',it.apanha>=2?'warn':'ok'],
+    ['ritmo',`${it.tkill?'~'+it.tkill+'s':'—'} por abate <span class="d">→</span> ${nf(it.kph)} abates/h`,'neu'],
+    ['XP',`${nf(it.xpKill)} por abate ${it.medido?'<span class="badge medido">medido</span>':'<span class="d">estimado</span>'}`,it.medido?'ok':'neu'],
+    ['ouro',`${nfK(it.ouroH)}/h <span class="d">curva do Nexus</span>`,'neu'],
+    ['risco',`${Math.round(it.pior*100)}% do HP na pior rajada <span class="d">→ ${VER[it.veredito]}</span>`,it.veredito==='SEGURO'?'ok':it.veredito==='ARRISCADO'?'warn':'bad'],
+  ];
+}
+function abrirWiki(slug){
+  const it=WIKI.get(slug);if(!it)return;
+  const sp=BYD.get(it.dex)||{},cr=criaturaDe(sp),pq=pqDe(it);
+  const stats=(sp.s||[]).map((v,i)=>{const pct=Math.min(100,Math.round(v/160*100));return `<div class="wst"><small>${STATN_PT[i]}</small><div class="trilho"><i style="width:${pct}%"></i></div><b>${v}</b></div>`}).join('');
+  const moves=(sp.m||[]).slice().sort((a,b)=>b[2]-a[2]).slice(0,6).map(mv=>`<div class="mv"><span class="mvn">${esc(mv[0])}</span><span class="mvc ${mv[3]==='F'?'f':'e'}">${mv[3]==='F'?'FÍS':'ESP'}</span><span class="tipo" data-tipo="${esc(mv[4])}" style="font-size:9px;padding:1px 7px">${PTN[mv[4]]||mv[4]}</span><span class="mvp">${nf(mv[1])} pwr · ${nf(mv[2],1)} dps</span></div>`).join('');
+  const loot=(cr&&cr.loot||[]).filter(l=>l.chance>0).sort((a,b)=>b.chance-a.chance).slice(0,8)
+    .map(l=>`<div class="li"><span class="ln">${esc(l.name)}</span><span class="lq">${l.minCount===l.maxCount?l.minCount:l.minCount+'–'+l.maxCount}×</span><span class="lp">${nf(l.chance/1000,1)}%</span></div>`).join('');
+  $('w-body').innerHTML=`
+    <div class="whead"><img id="w-art" alt="">
+      <div><div class="wn">${esc(it.nome)}</div>
+        <div class="wsub">#${it.dex} · hunt Nv ${nf(it.nivel)}${cr&&cr.rarity?' · '+cr.rarity.toLowerCase():''}${it.outland?' · outland':''}</div>
+        <div class="tipos" style="margin-top:7px">${miniTipos(sp.t||it.tipos)}</div></div></div>
+    <div class="wsec"><h3>Por que essa hunt</h3><div class="wpq">${pq.map(([l,v,t])=>`<div class="r"><small>${l}</small><div class="v t-${t}">${v}</div></div>`).join('')}</div></div>
+    <div class="resumo" style="margin-top:14px">
+      <div class="k"><small>XP/hora</small><b data-conta="${it.xpH}" data-fmt="kf">${nfK(it.xpH)}</b></div>
+      <div class="k"><small>ouro/hora</small><b>${nfK(it.ouroH)}</b></div>
+      <div class="k"><small>abates/h</small><b data-conta="${it.kph}">${nf(it.kph)}</b></div>
+      <div class="k"><small>segurança</small><b>${it.veredito}</b></div>
+    </div>
+    ${cr&&cr.description?`<div class="wsec"><h3>Wiki</h3><p class="lede" style="font-size:13px">${esc(cr.description)}</p></div>`:''}
+    ${stats?`<div class="wsec"><h3>Stats base</h3><div class="wstats">${stats}</div></div>`:''}
+    ${moves?`<div class="wsec"><h3>Golpes do selvagem</h3><div class="wmv">${moves}</div></div>`:''}
+    ${loot?`<div class="wsec"><h3>Loot que cai</h3><div class="wloot">${loot}</div></div>`:''}
+    <div class="wlinks"><a class="cbtn" href="/dossie.html?sp=${encodeURIComponent(it.nome)}" target="_blank" rel="noopener">Dossiê completo de ${esc(it.nome)} ↗</a></div>`;
+  arteDe($('w-art'),sp);
+  $('w-dossie').href='/dossie.html?sp='+encodeURIComponent(it.nome);
+  $('wiki').classList.add('on');$('wiki').setAttribute('aria-hidden','false');
+}
+function fecharWiki(){$('wiki').classList.remove('on');$('wiki').setAttribute('aria-hidden','true')}
+$('w-fechar').onclick=fecharWiki;
+$('wiki').querySelector('.wscrim').onclick=fecharWiki;
+addEventListener('keydown',e=>{if(e.key==='Escape')fecharWiki()});
+const clicou=e=>{const el=e.target.closest&&e.target.closest('[data-slug]');if(el)abrirWiki(el.dataset.slug)};
+$('agora-lista').addEventListener('click',clicou);
+$('timeline-list').addEventListener('click',clicou);
+for(const l of ['agora-lista','timeline-list'])$(l).addEventListener('keydown',e=>{if(e.key==='Enter'){const el=e.target.closest&&e.target.closest('[data-slug]');if(el){e.preventDefault();abrirWiki(el.dataset.slug)}}});
+
+let FICHA=null;
+function preview(){
+  const f=parseFicha($('ficha').value);FICHA=f;let hits=0;
+  const ok=(k,v)=>{const e=$('prev').querySelector(`[data-c="${k}"]`);if(v){hits++;e.classList.add('hit');e.innerHTML=`<b>${esc(v)}</b>`}else{e.classList.remove('hit');e.innerHTML=k==='iv'?'IVs':k==='pve'?'PvE':k}};
+  ok('nome',f.sp?f.sp.n:f.nome);ok('nivel',(f.nivel_efetivo||f.nivel)&&'Nv '+(f.nivel_efetivo||f.nivel));ok('qualidade',f.qualidade&&nf(f.qualidade,3));
+  ok('potencia',f.potencia);ok('iv',f.iv_total&&f.iv_total+'/'+(f.iv_max||192));ok('pve',f.pve_power&&'⚔'+nf(f.pve_power));
+  $('st').innerHTML=f.sp?`<b>✓ ${esc(f.sp.n)}</b> reconhecido — pode analisar${f.capturado_por?' · de '+esc(f.capturado_por):''}`:(f.nome?`achei "${esc(f.nome)}" mas não bateu espécie`:(hits?hits+' campo(s) lido(s)':'cola a ficha do jogo aqui…'));
+  if(f.sp&&$('ficha').value.trim()){FICHA_SEL=null;document.querySelectorAll('.fich.sel').forEach(x=>x.classList.remove('sel'));registrar(f)}
+}
+let _pv=null;$('ficha').addEventListener('input',()=>{clearTimeout(_pv);_pv=setTimeout(preview,160)});
+$('ficha').addEventListener('paste',()=>setTimeout(preview,80));
+async function rodar(){
+  if(!globalThis.NexusFicha){$('st').textContent='Leitor da ficha não carregou — recarregue a página.';return;}
+  const f=$('ficha').value.trim()?(FICHA||parseFicha($('ficha').value)):FICHA_SEL;
+  let sp=f&&(f.sp||(f.dex_id&&BYD.get(+f.dex_id)))||null;
+  if(!sp){const nome=(f&&f.nome)||$('i-nome').value.trim();if(nome)sp=BYN.get(nome.toLowerCase())||null}
+  if(!sp){toast('Não reconheci a espécie — escolhe uma ficha ou escreve o nome');return}
+  const nivel=Math.max(1,+(f&&(f.nivel_efetivo||f.nivel)||0)||+$('i-nv').value||1);
+  const q=Math.min(1.8,Math.max(0.8,+(f&&f.qualidade||0)||numBR($('i-q').value)||1.1));
+  const pot=Math.min(5,Math.max(1,+(String((f&&f.potencia)||'').replace(/\D/g,''))||+$('i-p').value||1));
+  const shiny=!!((f&&f.shiny)||$('i-sh').value==='1');
+  let ivs=[16,16,16,16,16,16];
+  if(f&&f.iv_hp!=null)ivs=[f.iv_hp,f.iv_atk,f.iv_def,f.iv_spatk,f.iv_spdef,f.iv_spd].map(v=>v==null?16:Math.min(32,Math.max(1,+v)));
+  else if(f&&f.iv&&f.iv.some(v=>v!=null))ivs=f.iv.map(v=>v==null?16:Math.min(32,Math.max(1,v)));
+  else if(f&&f.iv_total)ivs=Array(6).fill(Math.round(f.iv_total/6));
+  const btn=$('btn-analisar');btn.disabled=true;btn.innerHTML='<span class="spin"></span> simulando…';
+  try{
+    renderPoke(sp,f,nivel,q,pot,shiny);
+    const faixas=await calcular(sp,{nivel,q,pot,shiny,ivs},(i,t)=>{$('st').textContent=`simulando… ${i}/${t}`});
+    renderResumo(sp,faixas,nivel);renderAgora(faixas,nivel);renderTimeline(faixas);
+    $('saida').classList.add('on');$('st').textContent='✓ bônus atual ×'+nf(CONTEXTO_XP?.bonusAtual?.tr||CONTEXTO_XP?.multXpObservado,4)+' · '+nf(CONTEXTO_XP?.calibracao?.pausaSegundos,1)+' s entre alvos (caminhada, captura e espera)';
+    $('saida').scrollIntoView({behavior:'smooth',block:'start'});
+  }catch(e){console.error(e);toast('Deu erro na simulação: '+e.message);$('st').textContent='erro: '+e.message}
+  btn.disabled=false;btn.textContent='Analisar caçada';
+}
+$('btn-analisar').onclick=()=>{rodar().catch(e=>{console.error(e);toast('Erro: '+e.message)})};
+
+boot().catch(e=>{console.error(e);$('st').textContent='falha ao carregar dados: '+e.message});
+})();
+</script>
+</body>
+</html>

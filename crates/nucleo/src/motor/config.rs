@@ -30,7 +30,7 @@ const CONTAS_BOSS: &[&str] = &["Alllphhha"];
 fn efeito_do_papel(tipo: &str) -> Option<Value> {
     match tipo {
         "farm" => Some(json!({
-            "hunt": { "ativo": true, "objetivo": "equilibrio", "soOutland": false },
+            "hunt": { "ativo": true, "objetivo": "xp", "soOutland": false },
             "rodizio": { "ativo": true }
         })),
         "espolio" => Some(json!({

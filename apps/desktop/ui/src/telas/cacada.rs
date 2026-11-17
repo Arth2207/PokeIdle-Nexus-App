@@ -10,6 +10,7 @@ use crate::dados::{curto, inteiro, lista, num, recurso, txt};
 use crate::Estado;
 
 const ABAS: &[&str] = &[
+    "Melhor agora",
     "Meta 3000",
     "Sessão ao vivo",
     "Mapa de hunts",
@@ -85,7 +86,7 @@ fn meta_3000(p: &Value) -> AnyView {
             <div class="kpis">
                 <Kpi titulo="Nível atual" valor=num(p,"nivel").map_or("—".into(),inteiro) unidade="/ 3000" />
                 <Kpi titulo="XP restante" valor=num(p,"xpFalta").map_or("—".into(),curto) />
-                <Kpi titulo="Ritmo observado" valor=num(p,"xpH").map_or("—".into(),curto) unidade="XP de treinador/h" />
+                <Kpi titulo="Ritmo com bônus atual" valor=num(p,"xpH").map_or("—".into(),curto) unidade="XP de treinador/h" />
                 <Kpi titulo="Tempo até a meta" valor=duracao ajuda="Horas de caçada contínua no ritmo atual." />
             </div>
             <div class="secao">{format!("Chegada prevista: {chegada}")}</div>
@@ -287,14 +288,14 @@ fn mapa(c: &Value, metrica: &'static str, tickers: &[Value]) -> AnyView {
         .fold(1.0_f64, f64::max);
     view! {
         <div class="kpis">
-            <Kpi titulo="Melhor hunt (7 dias)" valor=nome_melhor.clone() comparacao=melhor.as_ref().map_or(String::new(), |m| format!("{} {metrica}", curto(chave(m)))) />
+            <Kpi titulo="Maior média histórica (7 dias)" valor=nome_melhor.clone() comparacao=melhor.as_ref().map_or(String::new(), |m| format!("{} {metrica}", curto(chave(m)))) />
             <Kpi titulo="Sua hunt atual" valor=nome_hunt(&atual) comparacao=da_atual.map_or("sem medida nos 7 dias".into(), |v| format!("{} {metrica}", curto(v))) />
-            <Kpi titulo="Ganho potencial" valor=ganho.map_or("—".into(), |g| format!("+{}", curto(g.max(0.0)))) unidade=metrica bom=ganho.map(|g| g <= 0.0) />
+            <Kpi titulo="Diferença histórica" valor=ganho.map_or("—".into(), |g| format!("+{}", curto(g.max(0.0)))) unidade=metrica bom=ganho.map(|g| g <= 0.0) />
         </div>
         {trocar.map(|g| view! {
-            <Veredito titulo=format!("Trocar para {nome_melhor}")
+            <Veredito titulo=format!("Histórico: {nome_melhor}")
                 motivo=format!("+{} {metrica} medidos nos últimos 7 dias (todas as contas, sessões de 30 min ou mais).", curto(g))
-                acao="O motor troca de hunt sozinho quando a regra “Troca de hunt” está ligada (Automação).".to_owned() tom="bom" />
+                acao="Histórico de outras sessões não determina a melhor hunt para o Pokémon atual. Consulte a previsão calibrada abaixo.".to_owned() tom="bom" />
         })}
         <div class="hunts">
             {l.into_iter().map(|(x, drops, valor_h)| {
@@ -346,13 +347,58 @@ fn mapa(c: &Value, metrica: &'static str, tickers: &[Value]) -> AnyView {
     .into_any()
 }
 
+fn previsao(p: &Value) -> AnyView {
+    let melhor = &p["melhorAgora"];
+    let linhas: Vec<Vec<String>> = lista(p, "ranking")
+        .iter()
+        .take(30)
+        .map(|h| {
+            vec![
+                txt(h, "nome"),
+                num(h, "nivel").map_or("—".into(), inteiro),
+                num(h, "xpH").map_or("—".into(), curto),
+                num(h, "xpPokemonH").map_or("—".into(), curto),
+                num(h, "kph").map_or("—".into(), inteiro),
+                txt(h, "fonte"),
+            ]
+        })
+        .collect();
+    let pausa = num(&p["calibracao"], "pausaSegundos");
+    let movimento = if !p["movimento"].is_object() {
+        "Locomoção não informada"
+    } else if p["movimento"]["bicicletaEquipada"].is_null() {
+        "A pé, conforme informado pelo jogo"
+    } else {
+        "Bicicleta equipada, conforme informado pelo jogo"
+    };
+    view! {
+        <div class="kpis">
+            <Kpi titulo="Melhor candidata para XP" valor=txt(melhor,"nome") comparacao=txt(melhor,"fonte") />
+            <Kpi titulo="XP do treinador/h" valor=num(melhor,"xpH").map_or("—".into(),curto) />
+            <Kpi titulo="XP do Pokémon/h" valor=num(melhor,"xpPokemonH").map_or("—".into(),curto) />
+            <Kpi titulo="Sem atacar entre alvos" valor=pausa.map_or("—".into(),|v|format!("{v:.1}")) unidade="s/alvo" ajuda="Calibrado pelo ritmo real. Inclui caminhada, captura e espera; as recargas continuam correndo." />
+        </div>
+        <div class="dica">{format!("{} · tipo sazonal: {} · conta {}",movimento,txt(p,"dia"),txt(p,"conta"))}</div>
+        <div class="dica">{txt(p,"comparacaoXp")}</div>
+        <div class="dica">{txt(p,"notaModelo")}</div>
+        <Tabela cab=vec!["Hunt","Nível","XP treinador/h","XP Pokémon/h","Abates/h","Fonte"] linhas=linhas />
+        {pausa.is_none().then(||view!{<div class="dica">"Aguardando uma amostra estável da própria conta para calibrar. Nenhuma taxa de caminhada foi inventada."</div>})}
+    }.into_any()
+}
+
 #[component]
 pub fn Cacada(e: Estado) -> impl IntoView {
     let versao = RwSignal::new(0u32);
-    let aba = RwSignal::new("Meta 3000");
+    let aba = RwSignal::new("Melhor agora");
     let progressao = recurso(e, versao, move || {
         Some(format!(
             "/api/progressao?conta={}",
+            rotulo_ativo(e).unwrap_or_default()
+        ))
+    });
+    let previsao_atual = recurso(e, versao, move || {
+        Some(format!(
+            "/api/cacada/previsao?conta={}",
             rotulo_ativo(e).unwrap_or_default()
         ))
     });
@@ -370,6 +416,7 @@ pub fn Cacada(e: Estado) -> impl IntoView {
         {cabecalho("Caçada", "Onde caçar, e a caçada atual está rendendo o esperado?", versao)}
         <Abas opcoes=ABAS ativa=aba />
         {move || match aba.get() {
+            "Melhor agora" => carregado(previsao_atual.get(), move |p| previsao(&p)),
             "Meta 3000" => carregado(progressao.get(), move |p| meta_3000(&p)),
             "Sessão ao vivo" => carregado(cacada.get(), move |c| {
                 let h = hist.get().and_then(|h| h.and_then(Result::ok));

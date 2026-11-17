@@ -45,6 +45,15 @@ pub fn num_texto(s: &str) -> Option<f64> {
     m.as_str().parse().ok()
 }
 
+/// XP base publicado pelo jogo, antes dos bônus e do arredondamento final.
+pub fn xp_base(n: f64) -> f64 {
+    if n <= 150.0 {
+        (0.6 * n * n).floor() + 8.0
+    } else {
+        (13500.0 * (n / 150.0).powf(1.25)).round()
+    }
+}
+
 /// `janela(conta, ms, ate)`: ritmo da conta nas linhas do HUD entre `ate - ms` e `ate`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Janela {
@@ -54,18 +63,20 @@ pub struct Janela {
     pub kph: Option<f64>,
     pub span: f64,
     pub xp_kill: Option<f64>,
+    pub xp_pk_kill: Option<f64>,
     pub gold_kill: Option<f64>,
     pub pot_kill: Option<f64>,
     pub bolas_kill: Option<f64>,
     pub desm: u64,
     pub xp_h: Option<f64>,
+    pub xp_pk_h: Option<f64>,
 }
 
 pub fn janela(conta: &ContaViva, ms: f64, ate: f64, agora: f64) -> Janela {
     let desde = ate - ms;
     let mut capturas = 0;
-    let (mut kills, mut xp, mut gold, mut pot, mut bolas, mut desm) =
-        (0usize, 0.0, 0.0, 0u64, 0u64, 0u64);
+    let (mut kills, mut xp, mut xp_pk, mut gold, mut pot, mut bolas, mut desm) =
+        (0usize, 0.0, 0.0, 0.0, 0u64, 0u64, 0u64);
     for (_, _, x) in conta
         .linhas
         .iter()
@@ -75,6 +86,7 @@ pub fn janela(conta: &ContaViva, ms: f64, ate: f64, agora: f64) -> Janela {
             kills += 1;
             // `o.xp += num(m[2])`: `null` soma 0.
             xp += m.get(2).and_then(|g| num_texto(g.as_str())).unwrap_or(0.0);
+            xp_pk += m.get(3).and_then(|g| num_texto(g.as_str())).unwrap_or(0.0);
             gold += m.get(4).and_then(|g| num_texto(g.as_str())).unwrap_or(0.0);
             continue;
         }
@@ -100,10 +112,12 @@ pub fn janela(conta: &ContaViva, ms: f64, ate: f64, agora: f64) -> Janela {
         kph,
         span,
         xp_kill: por(xp),
+        xp_pk_kill: por(xp_pk),
         gold_kill: por(gold),
         pot_kill: por(pot as f64),
         bolas_kill: por(bolas as f64),
         desm,
+        xp_pk_h: kph.map(|k| xp_pk / kills as f64 * k),
         xp_h: kph
             .filter(|k| *k != 0.0 && kills > 0)
             .map(|k| xp / kills as f64 * k),
@@ -224,6 +238,8 @@ mod testes {
         assert_eq!(j.xp_kill, Some(1000.0));
         assert_eq!(j.gold_kill, Some(2000.0));
         assert_eq!(j.xp_h, Some(36_000.0));
+        assert_eq!(j.xp_pk_h, Some(1800.0));
+        assert_eq!(j.xp_pk_kill, Some(50.0));
         assert_eq!(j.bolas_kill, Some(1.0 / 3.0));
     }
 

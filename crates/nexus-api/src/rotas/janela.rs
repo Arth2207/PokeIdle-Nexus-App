@@ -213,14 +213,25 @@ pub async fn progressao(
     }
     let conta = p.get("conta").map(String::as_str).unwrap_or_default();
     match persistencia::motor::janela_progressao(&estado.db, conta).await {
-        Ok(Some(j)) => match nucleo::motor::regras::ContaViva::de_json(&j) {
-            Some(c) => Json(nucleo::motor::progressao::prever(
-                &c,
+        Ok(Some(mut j)) => {
+            if let Err(e) = persistencia::cacada_contexto::enriquecer(
+                &estado.db,
+                &mut j,
                 crate::bolsa::agora_ms(),
-            ))
-            .into_response(),
-            None => erro(StatusCode::SERVICE_UNAVAILABLE, "leitura da conta inválida"),
-        },
+            )
+            .await
+            {
+                tracing::warn!(erro=%e,"contexto de XP indisponível");
+            }
+            match nucleo::motor::regras::ContaViva::de_json(&j) {
+                Some(c) => Json(nucleo::motor::progressao::prever(
+                    &c,
+                    crate::bolsa::agora_ms(),
+                ))
+                .into_response(),
+                None => erro(StatusCode::SERVICE_UNAVAILABLE, "leitura da conta inválida"),
+            }
+        }
         Ok(None) => Json(
             json!({"meta":3000,"motivo":"Abra a conta no app para receber nível e XP recentes."}),
         )

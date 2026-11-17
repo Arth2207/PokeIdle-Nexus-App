@@ -73,6 +73,7 @@ static PUBLICO_HTML: LazyLock<HashSet<&str>> = LazyLock::new(|| {
 static PUBLICO_DEP: LazyLock<HashSet<&str>> = LazyLock::new(|| {
     HashSet::from([
         "sim.js",
+        "ficha-parse.js",
         "veredito.js",
         "previsao.js",
         "pokedex.json",

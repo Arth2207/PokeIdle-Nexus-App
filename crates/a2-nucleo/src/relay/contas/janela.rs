@@ -140,6 +140,8 @@ fn mon(p: &Value) -> Value {
         "id": p.get("id"), "speciesId": p.get("speciesId"), "level": p.get("level"), "ivs": p.get("ivs"),
         "quality": p.get("quality").or(p.get("qualidade")), "potencia": p.get("potencia"),
         "shiny": p.get("shiny"), "refino": p.get("refino"),
+        "nome":p.get("nome"),"stats":p.get("stats"),"maxHp":p.get("maxHp"),
+        "refinoTotal":p.get("refinoTotal"),"tmFisico":p.get("tmFisico"),
         "tmElemental": p.get("tmElemental").cloned().unwrap_or(Value::Null),
         "tmAoe": i32::from(p.get("tmAoe").and_then(Value::as_bool) == Some(true)),
         "heldItemId": p.get("heldItemId").cloned().unwrap_or(Value::Null),
@@ -265,6 +267,8 @@ pub fn montar(c: &Conta, x: &Contexto) -> Value {
     let ultimo = json!({
         "t": x.agora, "nick": c.nick, "trLv": c.level.map(|l| l.to_string()),
         "trXp": xp_txt(c.xp.0, c.xp.1, c.xp.2),
+        "xp":c.xp.0,"bonusXp":c.bonus_xp,
+        "movimento":{"bicicletaEquipada":c.bicicleta["equipada"],"raridade":c.bicicleta["equipadaRar"]},
         "gold": c.ouro.map(milhar),
         "ativo": ativo.map(|p| json!({
             "nome": p.get("nome"), "lv": format!("Nv {}", n(p, "level")),

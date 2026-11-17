@@ -53,7 +53,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let plano = hunt::plano_hunt(&d, &r, &c, &ctx);
         resultados.push(
             json!({"conta":c.nick,"ms":inicio.elapsed().as_millis(),"plano":plano,
-            "progressao":nucleo::motor::progressao::prever(&c,r.agora_ms)}),
+            "progressao":nucleo::motor::progressao::prever(&c,r.agora_ms),
+            "previsao":hunt::previsao::prever(&d,&r,&c,&ctx,None).ok()}),
         );
     }
     println!("{}", serde_json::to_string_pretty(&resultados)?);
