@@ -20,6 +20,33 @@ pub struct VendaBruta {
     pub shiny: bool,
 }
 
+impl VendaBruta {
+    /// O cache de vendas precisa só dos campos lidos pelo precificador. O JSON
+    /// completo continua no banco; não alteramos fichas de ofertas nem respostas.
+    pub(crate) fn compactar_ficha(&mut self) {
+        if let Some(serde_json::Value::Object(ficha)) = self.ficha.as_mut() {
+            ficha.retain(|campo, _| {
+                matches!(
+                    campo.as_str(),
+                    "speciesId"
+                        | "nome"
+                        | "ivs"
+                        | "quality"
+                        | "potencia"
+                        | "level"
+                        | "shiny"
+                        | "tmElemental"
+                        | "tmAoe"
+                        | "nota"
+                        | "refino"
+                        | "refinoTotal"
+                        | "ivTotal"
+                )
+            });
+        }
+    }
+}
+
 /// Tira o prefixo de quantidade da descrição: `"3 × Rare Candy"` vira `"Rare Candy"`.
 ///
 /// Equivale ao regex `/^\d+\s*[×x]\s*(.+)$/` do legado, sem depender de crate de regex.
@@ -47,6 +74,47 @@ mod testes {
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn compactacao_preserva_precificacao_e_descarta_dados_alheios() {
+        use crate::precificador::ficha::Ficha;
+        let original = serde_json::json!({
+            "speciesId": 6, "nome": "Charizard", "ivs": {
+                "hp": 27, "atk": 26, "def": 25, "spAtk": 24, "spDef": 23, "speed": 22
+            }, "quality": 1.6, "potencia": 2, "level": 1111, "shiny": true,
+            "tmElemental": "FIRE", "tmAoe": true, "nota": 3.7,
+            "refino": {"hp": 2, "outro": 3}, "refinoTotal": 5, "ivTotal": 147,
+            "historico": ["dado volumoso"], "stats": {"hp": 2407}, "xp": 999
+        });
+        let mut venda = VendaBruta {
+            id: 1,
+            em: 1,
+            lido_em: None,
+            ficha: Some(original.clone()),
+            tipo: "pokemon".into(),
+            moeda: "orb".into(),
+            preco: Some(100),
+            quantidade: None,
+            descricao: None,
+            item_id: None,
+            especie: Some(6),
+            shiny: true,
+        };
+        venda.compactar_ficha();
+        let compacta = venda.ficha.as_ref().unwrap();
+        assert_eq!(Ficha::de_json(&original), Ficha::de_json(compacta));
+        assert!(compacta.get("historico").is_none());
+        assert!(compacta.get("stats").is_none());
+        assert!(compacta.get("xp").is_none());
+        venda.compactar_ficha();
+        assert_eq!(
+            Ficha::de_json(&original),
+            Ficha::de_json(venda.ficha.as_ref().unwrap())
+        );
+        venda.ficha = None;
+        venda.compactar_ficha();
+        assert!(venda.ficha.is_none());
+    }
 
     #[test]
     fn tira_quantidade_da_descricao() {

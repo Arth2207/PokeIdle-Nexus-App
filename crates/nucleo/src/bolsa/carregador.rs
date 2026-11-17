@@ -72,7 +72,8 @@ impl Carregador {
             }
         };
         self.ultima_leitura = lidas.len();
-        lidas.into_iter().for_each(|v| {
+        lidas.into_iter().for_each(|mut v| {
+            v.compactar_ficha();
             self.vendas.insert(v.id, v);
         });
         self.vendas.retain(|_, v| v.em >= desde);
