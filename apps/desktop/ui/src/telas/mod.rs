@@ -10,6 +10,7 @@ pub mod escaneamento;
 pub mod financas;
 pub mod mercado;
 pub mod outlands;
+mod plano_pvp;
 pub mod pregao;
 pub mod pvp;
 pub mod safari;

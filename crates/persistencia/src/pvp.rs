@@ -24,9 +24,35 @@ async fn eventos(
     .await
 }
 
+/// Limites reais dos rankings na hora de Brasília. A semana recomeça no domingo.
+pub async fn calendario(db: &PgPool, mensal: bool) -> Result<(i64, i64), sqlx::Error> {
+    sqlx::query_as(
+        "WITH relogio AS (SELECT now() AT TIME ZONE 'America/Sao_Paulo' AS local),
+         periodo AS (
+             SELECT CASE WHEN $1 THEN date_trunc('month', local)
+                         ELSE date_trunc('week', local + interval '1 day') - interval '1 day' END AS inicio,
+                    CASE WHEN $1 THEN interval '1 month' ELSE interval '7 days' END AS duracao
+               FROM relogio
+         )
+         SELECT (extract(epoch FROM inicio AT TIME ZONE 'America/Sao_Paulo') * 1000)::bigint,
+                (extract(epoch FROM (inicio + duracao) AT TIME ZONE 'America/Sao_Paulo') * 1000)::bigint
+           FROM periodo",
+    )
+    .bind(mensal)
+    .fetch_one(db)
+    .await
+}
+
 /// Partidas de PvP das contas do dono.
 pub async fn partidas(db: &PgPool, desde_ms: i64) -> Result<Vec<(i64, Value)>, sqlx::Error> {
-    eventos(db, "pvp.partida", desde_ms, 20_000).await
+    sqlx::query_as(
+        "SELECT (extract(epoch FROM em) * 1000)::bigint, dados FROM nexus.evento
+          WHERE tipo = 'pvp.partida' AND em >= to_timestamp($1::float8 / 1000)
+          ORDER BY em DESC LIMIT 20000",
+    )
+    .bind(desde_ms as f64)
+    .fetch_all(db)
+    .await
 }
 
 /// Avisos de shiny capturado no servidor.
@@ -133,22 +159,40 @@ pub async fn semana_pvp(db: &PgPool, conta: &str) -> Result<Value, sqlx::Error> 
 /// `{atual: {semana, total, cortes}, anterior: {semana, cortes}}`.
 pub async fn cortes_pvp(db: &PgPool) -> Result<Value, sqlx::Error> {
     let linhas: Vec<Value> = sqlx::query_scalar(
-        "(SELECT jsonb_build_object('semana', dados->>'semana', 'total', dados->'total',
-                                    'cortes', dados->'cortes', 'em', em)
-            FROM nexus.evento WHERE tipo = 'pvp.cortes' ORDER BY em DESC LIMIT 20)
-         UNION ALL
-         (SELECT jsonb_build_object('semana', dados->'dados'->>'semana', 'total', dados->'dados'->'total',
-                   'cortes', (SELECT coalesce(jsonb_object_agg(l->>0, l->4), '{}')
-                                FROM jsonb_array_elements(dados->'dados'->'linhas') l
-                               WHERE (l->>0)::int IN (10, 100, 500)), 'em', em)
-            FROM nexus.evento
-           WHERE tipo = 'ws.bruto' AND dados->>'tipo' = 'pvpTabela'
-             AND (dados->'dados'->>'total')::int > 0
-           ORDER BY em DESC LIMIT 40)",
+        "WITH semana AS (
+           SELECT (date_trunc('week', (now() AT TIME ZONE 'America/Sao_Paulo') + interval '1 day')
+                    - interval '1 day') AT TIME ZONE 'America/Sao_Paulo' AS inicio
+         ), periodos AS (
+           SELECT inicio, now() AS fim FROM semana UNION ALL
+           SELECT inicio - interval '7 days', inicio FROM semana
+         )
+         SELECT t.leitura FROM periodos CROSS JOIN LATERAL (
+           (SELECT jsonb_build_object('semana', dados->>'semana', 'total', dados->'total',
+                                     'cortes', dados->'cortes', 'em', em) AS leitura
+             FROM nexus.evento WHERE tipo = 'pvp.cortes'
+               AND em >= periodos.inicio AND em < periodos.fim ORDER BY em DESC LIMIT 30)
+           UNION ALL
+           (SELECT jsonb_build_object('semana', dados->'dados'->>'semana',
+                     'total', dados->'dados'->'total', 'cortes',
+                     (SELECT coalesce(jsonb_object_agg(l->>0, l->4), '{}')
+                        FROM jsonb_array_elements(dados->'dados'->'linhas') l
+                       WHERE (l->>0)::int IN (10, 50, 100, 500)), 'em', em)
+             FROM nexus.evento WHERE tipo = 'ws.bruto' AND dados->>'tipo' = 'pvpTabela'
+               AND (dados->'dados'->>'total')::int > 0
+               AND em >= periodos.inicio AND em < periodos.fim ORDER BY em DESC LIMIT 40)
+         ) t",
     )
     .fetch_all(db)
     .await?;
-    Ok(juntar_cortes(linhas))
+    let mut cortes = juntar_cortes(linhas);
+    let inicio: String = sqlx::query_scalar(
+        "SELECT to_char(date_trunc('week', (now() AT TIME ZONE 'America/Sao_Paulo') + interval '1 day')
+                         - interval '1 day', 'YYYY-MM-DD')"
+    ).fetch_one(db).await?;
+    if cortes["atual"]["semana"].as_str() != Some(&inicio) {
+        cortes = serde_json::json!({"atual":null,"anterior":cortes["atual"]});
+    }
+    Ok(cortes)
 }
 
 /// Junta as leituras (mais novas primeiro em cada fonte) por semana: em cada semana vale a
@@ -220,15 +264,15 @@ const SQL_MENSAL: &str = "
       SELECT conta, em, jsonb_build_object('mes', dados->>'mes', 'fimEm', dados->'fimEm',
                'eu', dados->'eu', 'faixas', dados->'faixas', 'total', dados->'total',
                'cortes', coalesce(dados->'cortes', '{}'), 'em', em) x
-        FROM nexus.evento WHERE tipo = 'pvp.mensal'
+        FROM nexus.evento WHERE tipo = 'pvp.mensal' AND em >= now() - interval '75 days'
       UNION ALL
       SELECT conta, em, jsonb_build_object('mes', d->>'mes', 'fimEm', d->'fimEm', 'eu', d->'eu',
                'faixas', d->'faixas', 'total', d->'tabela'->'total',
                'cortes', (SELECT coalesce(jsonb_object_agg(l->>0, l->3), '{}')
                             FROM jsonb_array_elements(coalesce(d->'tabela'->'linhas', '[]')) l
-                           WHERE (l->>0)::int IN (10, 100, 500, 2000)), 'em', em)
+                           WHERE (l->>0)::int IN (10, 50, 100, 500, 2000)), 'em', em)
         FROM (SELECT conta, em, dados->'dados' d FROM nexus.evento
-               WHERE tipo = 'ws.bruto' AND dados->>'tipo' = 'pvpMensal') b
+               WHERE tipo = 'ws.bruto' AND dados->>'tipo' = 'pvpMensal' AND em >= now() - interval '75 days') b
     ) u";
 
 /// Ranking mensal da conta (rótulo ou nick) e os cortes do mês, juntando todas as contas:
@@ -239,16 +283,42 @@ pub async fn mensal_pvp(db: &PgPool, conta: &str) -> Result<Value, sqlx::Error> 
         "{SQL_MENSAL} WHERE conta IN (SELECT $1 UNION SELECT conta FROM nexus.motor_janela
                                        WHERE lower(janela->>'nick') = lower($1))
                         AND x->'eu' IS NOT NULL AND x->'eu' <> 'null'
+                        AND x->>'mes' = to_char(now() AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')
           ORDER BY x->>'em' DESC LIMIT 1"
     )))
     .bind(conta)
     .fetch_optional(db)
     .await?;
     let linhas: Vec<(String, Value)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "{SQL_MENSAL} ORDER BY x->>'em' DESC LIMIT 80"
+        "WITH leituras AS ({SQL_MENSAL}), meses AS (
+             SELECT DISTINCT x->>'mes' AS mes FROM leituras WHERE x->>'mes' IS NOT NULL
+             ORDER BY mes DESC LIMIT 2
+         )
+         SELECT l.conta, l.x FROM meses CROSS JOIN LATERAL
+            (SELECT conta, x FROM leituras WHERE x->>'mes' = meses.mes
+             ORDER BY x->>'em' DESC LIMIT 80) l"
     )))
     .fetch_all(db)
     .await?;
+    let ritmo: Option<f64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "WITH leituras AS ({SQL_MENSAL}), amostra AS (
+            SELECT (x#>>'{{eu,pontos}}')::float8 AS pontos, (x->>'em')::timestamptz AS em
+            FROM leituras
+            WHERE conta IN (SELECT $1 UNION SELECT conta FROM nexus.motor_janela
+                            WHERE lower(janela->>'nick') = lower($1))
+              AND x->>'mes' = to_char(now() AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')
+              AND x#>>'{{eu,pontos}}' IS NOT NULL
+              AND (x->>'em')::timestamptz >= now() - interval '7 days'
+         ), antigo AS (SELECT * FROM amostra ORDER BY em LIMIT 1),
+            recente AS (SELECT * FROM amostra ORDER BY em DESC LIMIT 1)
+         SELECT CASE WHEN recente.em - antigo.em >= interval '24 hours'
+                     THEN (recente.pontos - antigo.pontos) * 86400 / extract(epoch FROM recente.em - antigo.em)
+                END FROM antigo CROSS JOIN recente"
+    )))
+    .bind(conta)
+    .fetch_optional(db)
+    .await?
+    .flatten();
     // O mês faz o papel da semana na junção dos cortes.
     let como_semana: Vec<Value> = linhas
         .into_iter()
@@ -260,7 +330,9 @@ pub async fn mensal_pvp(db: &PgPool, conta: &str) -> Result<Value, sqlx::Error> 
             x
         })
         .collect();
-    Ok(serde_json::json!({"eu": eu.map(|x| x.1), "cortes": juntar_cortes(como_semana)}))
+    Ok(
+        serde_json::json!({"eu": eu.map(|x| x.1), "cortes": juntar_cortes(como_semana), "saldoDia": ritmo}),
+    )
 }
 
 #[cfg(test)]

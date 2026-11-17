@@ -70,8 +70,16 @@ fn nick(
     }
 }
 
-async fn carregar_partidas(estado: &Estado, dias: i64) -> Result<Vec<meta::Partida>, sqlx::Error> {
-    let linhas = persistencia::pvp::partidas(&estado.db, agora_ms() - dias * DIA_MS).await?;
+async fn carregar_partidas(
+    estado: &Estado,
+    p: &HashMap<String, String>,
+) -> Result<Vec<meta::Partida>, sqlx::Error> {
+    let desde = match p.get("periodo").map(String::as_str) {
+        Some("semanal") => persistencia::pvp::calendario(&estado.db, false).await?.0,
+        Some("mensal") => persistencia::pvp::calendario(&estado.db, true).await?.0,
+        _ => agora_ms() - dias(p, 14) * DIA_MS,
+    };
+    let linhas = persistencia::pvp::partidas(&estado.db, desde).await?;
     Ok(linhas
         .iter()
         .filter_map(|(em, d)| meta::Partida::de_evento(*em, d))
@@ -79,7 +87,7 @@ async fn carregar_partidas(estado: &Estado, dias: i64) -> Result<Vec<meta::Parti
 }
 
 pub async fn meta_pvp(State(estado): State<Estado>, Query(p): Params) -> Response {
-    let partidas = match carregar_partidas(&estado, dias(&p, 14)).await {
+    let partidas = match carregar_partidas(&estado, &p).await {
         Ok(v) => v,
         Err(e) => return banco(&e),
     };
@@ -104,14 +112,19 @@ pub async fn sugestao_pvp(
         Ok(v) => v.map(|x| x.1),
         Err(e) => return banco(&e),
     };
-    let partidas = match carregar_partidas(&estado, dias(&p, 14)).await {
+    let partidas = match carregar_partidas(&estado, &p).await {
         Ok(v) => v,
         Err(e) => return banco(&e),
     };
+    // A pontuação mensal tem escala própria e não representa o elo das partidas.
     let pontos = p
         .get("faixa")
         .and_then(|f| f.parse::<i64>().ok())
-        .or_else(|| atual.as_ref().and_then(|a| a.get("pontos")?.as_i64()));
+        .or_else(|| {
+            (p.get("periodo").map(String::as_str) != Some("mensal"))
+                .then(|| atual.as_ref()?.get("pontos")?.as_i64())
+                .flatten()
+        });
     let mut m = meta::agregar(&partidas, pontos.map(meta::faixa));
     if m.partidas < MIN_PARTIDAS_FAIXA {
         m = meta::agregar(&partidas, None);
@@ -263,18 +276,24 @@ pub async fn colecao(
 /// ritmo) e os cortes do ranking (posições 10, 100 e 500) desta semana e da anterior.
 pub async fn painel(
     State(estado): State<Estado>,
-    Query(p): Query<std::collections::HashMap<String, String>>,
+    cliente: Option<Extension<Cliente>>,
+    Query(p): Params,
 ) -> Response {
-    let nick = p.get("nick").map(String::as_str).unwrap_or_default();
+    let nick = match nick(cliente.as_ref(), &p) {
+        Ok(n) => n,
+        Err((st, msg)) => return erro(st, msg),
+    };
+    let nick = do_jogo(&estado, nick).await;
     let r = async {
-        let atual = persistencia::pvp::estado_pvp(&estado.db, nick)
+        let atual = persistencia::pvp::estado_pvp(&estado.db, &nick)
             .await?
             .map(|x| x.1);
         Ok::<_, sqlx::Error>(serde_json::json!({
             "atual": atual,
-            "semana": persistencia::pvp::semana_pvp(&estado.db, nick).await?,
+            "semana": persistencia::pvp::semana_pvp(&estado.db, &nick).await?,
             "cortes": persistencia::pvp::cortes_pvp(&estado.db).await?,
-            "mensal": persistencia::pvp::mensal_pvp(&estado.db, nick).await?,
+            "mensal": persistencia::pvp::mensal_pvp(&estado.db, &nick).await?,
+            "fimSemana": persistencia::pvp::calendario(&estado.db, false).await?.1,
         }))
     }
     .await;

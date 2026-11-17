@@ -254,12 +254,14 @@ pub fn aba_pvp(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
         nick_ativo(e).map(|n| format!("/api/pvp/sugestao?nick={n}"))
     });
     let col = recurso(e, versao, move || {
-        nick_ativo(e).map(|n| format!("/api/pvp/colecao?nick={n}"))
+        nick_ativo(e).map(|n| format!("/api/equipes/colecao?nick={n}"))
     });
     let modo = RwSignal::new("Semanal");
     view! {
         <a class="btn" href="mapa-pvp/index.html">"Mapa PvP"</a>
         <crate::comp::Abas opcoes=MODOS ativa=modo />
+        {super::plano_pvp::painel(e, versao, modo)}
+        <details><summary class="secao">"Abrir estatísticas e formações detalhadas"</summary>
         {move || (modo.get() == "Mensal").then(|| carregado(painel.get(), |p| mensal(&p)))}
         {move || (modo.get() == "Semanal").then(|| carregado(painel.get(), move |p| {
             let a = p.get("atual").cloned().unwrap_or(Value::Null);
@@ -365,6 +367,7 @@ pub fn aba_pvp(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
                 })}
             }
         })}
+        </details>
     }
 }
 

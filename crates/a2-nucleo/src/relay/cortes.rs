@@ -1,6 +1,6 @@
 //! Cortes do ranking do PvP: a cada [`CORTES_MS`] pede as páginas 1 e 5 da tabela semanal
-//! (`pvp.tabela`) e manda só os pontos das posições 10, 100 e 500 (evento `pvp.cortes`); e o
-//! ranking mensal (`pvp.mensal`) de cada conta: os números dela, os cortes (10, 100, 500 e
+//! (`pvp.tabela`) e manda só os pontos das posições 10, 50, 100 e 500 (evento `pvp.cortes`); e o
+//! ranking mensal (`pvp.mensal`) de cada conta: os números dela, os cortes (10, 50, 100, 500 e
 //! 2000) e as faixas de prêmio (evento `pvp.mensal`). Nunca vai nick de ninguém.
 
 use std::collections::{BTreeMap, VecDeque};
@@ -12,9 +12,9 @@ use super::{Entrega, Fluxo};
 /// Intervalo entre duas leituras dos cortes.
 pub const CORTES_MS: i64 = 3_600_000;
 /// Posições acompanhadas.
-pub const POSICOES: [i64; 3] = [10, 100, 500];
+pub const POSICOES: [i64; 4] = [10, 50, 100, 500];
 /// Posições acompanhadas no mensal (as faixas de prêmio terminam em 100, 500 e 2000).
-pub const POSICOES_MES: [i64; 4] = [10, 100, 500, 2000];
+pub const POSICOES_MES: [i64; 5] = [10, 50, 100, 500, 2000];
 
 pub struct Cortes {
     ligado: bool,
@@ -188,7 +188,7 @@ mod testes {
         };
         assert_eq!(
             eventos[0]["cortes"],
-            json!({"10": 9990, "100": 9900, "500": 9500})
+            json!({"10": 9990, "50": 9950, "100": 9900, "500": 9500})
         );
         // Depois vêm as páginas do mensal; esgotadas, nada até a próxima hora.
         while c.pedir(4).is_some() {}
