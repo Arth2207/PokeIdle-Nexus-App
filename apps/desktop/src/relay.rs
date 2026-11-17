@@ -43,6 +43,21 @@ impl EstadoRelay {
     }
 }
 
+#[tauri::command]
+pub fn ranking_pvp(app: AppHandle, estado: tauri::State<'_, crate::Estado>) -> Option<Value> {
+    if let Some(ranking) = travar(&estado.relay.relay)
+        .as_mut()
+        .and_then(Relay::ranking_pvp)
+    {
+        return Some(ranking);
+    }
+    let dados: Value =
+        serde_json::from_slice(&std::fs::read(arquivo_estado(&app, "treino")?).ok()?).ok()?;
+    let mut ranking = a2_nucleo::relay::treino::ranking::Ranking::default();
+    ranking.restaurar(dados.get("ranking")?);
+    Some(ranking.para_mapa())
+}
+
 /// Arquivo onde um fluxo guarda o estado dele (ex.: o diário de contagens).
 fn arquivo_estado(app: &AppHandle, nome: &str) -> Option<std::path::PathBuf> {
     let dir = app.path().app_data_dir().ok()?;

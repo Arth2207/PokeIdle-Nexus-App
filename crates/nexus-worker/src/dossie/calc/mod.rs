@@ -152,7 +152,7 @@ fn carregar_de(pokedex: &PathBuf, evolucoes: &PathBuf) -> Result<Dados, String> 
 
 static DADOS: OnceLock<Result<Dados, String>> = OnceLock::new();
 
-fn dados() -> Result<&'static Dados, Erro> {
+pub(super) fn dados() -> Result<&'static Dados, Erro> {
     DADOS
         .get_or_init(carregar)
         .as_ref()

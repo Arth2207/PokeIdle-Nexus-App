@@ -20,6 +20,7 @@ mod jsonjs;
 mod leitura;
 pub mod paridade;
 mod precos;
+mod tracker_pvp;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -371,6 +372,7 @@ async fn despachar(d: &Dossie, p: &Pedido, corpo: Body) -> Result<Response, Erro
         | "GET /api/ia/playbook"
         | "GET /api/ia/performance"
         | "GET /api/ia/estado" => leitura::ia(d, p),
+        "GET /api/dossie/pvp/presenca" => tracker_pvp::presenca(d, p).await,
         "GET /api/dossie/calc/catalogo" => Ok(enviar(&calc::catalogo()?, 200)),
         "POST /api/dossie/calc/dossie" => {
             if !d.limites.ok(&p.ip, 120) {

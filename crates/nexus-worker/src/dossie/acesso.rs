@@ -61,6 +61,7 @@ static PUBLICO_HTML: LazyLock<HashSet<&str>> = LazyLock::new(|| {
     HashSet::from([
         "dossie.html",
         "cacada.html",
+        "mapa-pvp/index.html",
         "capturas.html",
         "apoie.html",
         "galeria.html",
@@ -72,6 +73,8 @@ static PUBLICO_HTML: LazyLock<HashSet<&str>> = LazyLock::new(|| {
 
 static PUBLICO_DEP: LazyLock<HashSet<&str>> = LazyLock::new(|| {
     HashSet::from([
+        "mapa-pvp/mapa.css",
+        "mapa-pvp/mapa.js",
         "sim.js",
         "ficha-parse.js",
         "veredito.js",

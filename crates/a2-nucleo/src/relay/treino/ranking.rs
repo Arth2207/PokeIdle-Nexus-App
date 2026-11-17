@@ -32,6 +32,7 @@ pub struct Ranking {
     pedido_em: Option<i64>,
     perfil_em: Option<i64>,
     fila: VecDeque<String>,
+    posicoes: BTreeMap<String, i64>,
     /// nick → time (fichas), na ordem da tabela.
     times: BTreeMap<String, (i64, Vec<Value>)>,
     mudou: bool,
@@ -56,20 +57,26 @@ impl Ranking {
     pub fn receber(&mut self, msg: &Value) -> bool {
         match msg.get("t").and_then(Value::as_str) {
             Some("pvpTabela") => {
-                let nicks: Vec<String> = msg
+                let mut linhas: Vec<(i64, String)> = msg
                     .get("linhas")
                     .and_then(Value::as_array)
                     .into_iter()
                     .flatten()
                     .filter_map(|l| Some((l.get(0)?.as_i64()?, l.get(1)?.as_str()?.to_owned())))
                     .filter(|(pos, _)| *pos >= 1 && *pos as usize <= TOP)
-                    .map(|(_, n)| n)
                     .collect();
-                if !nicks.is_empty() {
-                    self.times.retain(|n, _| nicks.contains(n));
-                    self.fila = nicks.into();
+                if linhas.is_empty() {
+                    return false;
                 }
-                false
+                linhas.sort_by_key(|(pos, _)| *pos);
+                self.posicoes = linhas
+                    .iter()
+                    .map(|(pos, nick)| (nick.clone(), *pos))
+                    .collect();
+                self.times.retain(|n, _| self.posicoes.contains_key(n));
+                self.fila = linhas.into_iter().map(|(_, nick)| nick).collect();
+                self.mudou = true;
+                true
             }
             Some("perfil") => {
                 let Some(p) = msg.get("perfil") else {
@@ -78,6 +85,11 @@ impl Ranking {
                 let Some(nick) = p.get("nick").and_then(Value::as_str) else {
                     return false;
                 };
+                let nick = self
+                    .posicoes
+                    .keys()
+                    .find(|n| n.eq_ignore_ascii_case(nick))
+                    .map_or(nick, String::as_str);
                 let time: Vec<Value> = p
                     .get("pvpTime")
                     .and_then(Value::as_array)
@@ -113,13 +125,34 @@ impl Ranking {
         std::mem::take(&mut self.mudou)
     }
 
+    /// Só os dados visíveis no mapa, sem as fichas usadas para simular o treino.
+    pub fn para_mapa(&self) -> Value {
+        let times: serde_json::Map<String, Value> = self
+            .times
+            .iter()
+            .filter(|(nick, _)| self.posicoes.is_empty() || self.posicoes.contains_key(*nick))
+            .map(|(nick, (pontos, time))| {
+                let especies: Vec<_> = time
+                    .iter()
+                    .filter_map(|p| p.get("speciesId").and_then(Value::as_i64))
+                    .map(|id| json!({"speciesId": id}))
+                    .collect();
+                (
+                    nick.clone(),
+                    json!({"pontos": pontos, "posicao": self.posicoes.get(nick), "time": especies}),
+                )
+            })
+            .collect();
+        json!({"times": times, "pedidoEm": self.pedido_em})
+    }
+
     pub fn para_json(&self) -> Value {
         let t: serde_json::Map<String, Value> = self
             .times
             .iter()
             .map(|(n, (p, t))| (n.clone(), json!({"pontos": p, "time": t})))
             .collect();
-        json!({"times": t, "pedidoEm": self.pedido_em})
+        json!({"times": t, "pedidoEm": self.pedido_em, "posicoes": self.posicoes})
     }
 
     pub fn restaurar(&mut self, v: &Value) {
@@ -139,6 +172,11 @@ impl Ranking {
                 self.times.insert(n.clone(), (pontos, time));
             }
         }
+        self.posicoes = v
+            .get("posicoes")
+            .cloned()
+            .and_then(|p| serde_json::from_value(p).ok())
+            .unwrap_or_default();
         self.pedido_em = v.get("pedidoEm").and_then(Value::as_i64);
     }
 }

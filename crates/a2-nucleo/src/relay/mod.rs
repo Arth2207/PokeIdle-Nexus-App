@@ -55,6 +55,10 @@ pub trait Fluxo: Send {
         None
     }
     fn restaurar(&mut self, _v: &Value) {}
+    /// Liga a leitura do ranking para o mapa e retorna a última amostra disponível.
+    fn ranking_pvp(&mut self) -> Option<Value> {
+        None
+    }
     /// Rota de leitura no servidor (`GET`) de que o fluxo precisa agora, se precisar.
     fn consulta(&mut self, _agora: i64) -> Option<String> {
         None
@@ -110,6 +114,10 @@ impl Relay {
         for f in &mut self.fluxos {
             f.receber_conta(conta, msg, agora);
         }
+    }
+
+    pub fn ranking_pvp(&mut self) -> Option<Value> {
+        self.fluxos.iter_mut().find_map(|f| f.ranking_pvp())
     }
 
     /// Estados a guardar, por nome do fluxo.

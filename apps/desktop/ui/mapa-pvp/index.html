@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mapa PvP · Holodex Nexus</title>
+<link rel="stylesheet" href="mapa.css">
+<script src="mapa.js" defer></script>
+</head>
+<body>
+<header>
+  <div><span class="marca">Holodex Nexus / PvP</span><h1>Mapa de equipes</h1></div>
+  <a class="botao" id="voltar" href="../index.html">Voltar ao painel</a>
+</header>
+<main>
+  <div class="controles">
+    <input type="search" id="busca" aria-label="Buscar Pokémon ou jogador" placeholder="Buscar Pokémon ou jogador…">
+    <label><input type="checkbox" id="usadas"> Só usadas</label>
+    <label><input type="checkbox" id="linhas" checked> Todas as ligações</label>
+    <div class="zoom" aria-label="Zoom do mapa">
+      <button id="menos" aria-label="Diminuir zoom">−</button><button id="mais" aria-label="Aumentar zoom">+</button><button id="ajustar">Enquadrar</button>
+    </div>
+  </div>
+  <div id="tipos" aria-label="Filtrar por tipo"></div>
+  <div class="conteudo">
+    <section class="grafico" aria-label="Mapa radial">
+      <canvas id="mapa" aria-label="Mapa de espécies e equipes. Use a busca e as listas para selecionar pelo teclado."></canvas>
+      <p class="ajuda">Arraste para mover · Clique para destacar · Esc limpa a seleção</p>
+    </section>
+    <aside aria-label="Dados do mapa">
+      <div class="fonte">
+        <p id="status" role="status">Carregando Pokédex e dados do PvP…</p>
+        <label for="ranking">Carregar ranking</label>
+        <input id="ranking" type="file" accept=".json,application/json" aria-describedby="arquivo-ajuda">
+        <small id="arquivo-ajuda">Use o arquivo relay-treino.json salvo pelo Nexus Desktop.</small>
+        <button id="meta" hidden>Voltar ao meta observado</button>
+        <p id="erro" role="alert" hidden></p>
+      </div>
+      <div id="selecao" aria-live="polite" hidden></div>
+      <h2 id="titulo-usos">Mais usados</h2>
+      <div id="especies" class="lista"></div>
+      <h2 id="titulo-grupos">Equipes</h2>
+      <div id="grupos" class="lista"></div>
+    </aside>
+  </div>
+</main>
+</body>
+</html>

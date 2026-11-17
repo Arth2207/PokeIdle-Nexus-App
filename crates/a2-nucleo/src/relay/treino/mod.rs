@@ -46,6 +46,7 @@ pub struct Treino {
     comum: Comum,
     /// Times reais do topo do PvP (adversários de todas as contas).
     ranking: Ranking,
+    mapa_aberto: bool,
     mudou: bool,
 }
 
@@ -61,6 +62,7 @@ impl Treino {
             vez: 0,
             comum: Comum::default(),
             ranking: Ranking::default(),
+            mapa_aberto: false,
             mudou: false,
         }
     }
@@ -100,11 +102,14 @@ impl Fluxo for Treino {
     fn receber(&mut self, _msg: &Value, _agora: i64) {}
 
     fn receber_conta(&mut self, conta: &str, msg: &Value, agora: i64) {
+        if (self.ligado || self.mapa_aberto)
+            && conta.eq_ignore_ascii_case(&self.dono)
+            && self.ranking.receber(msg)
+        {
+            self.repassar_reais();
+        }
         if !self.ligado {
             return;
-        }
-        if self.ranking.receber(msg) {
-            self.repassar_reais();
         }
         if let Some((pares, nota)) = self.conta(conta).receber(msg, agora) {
             self.comum.registrar(&pares, nota);
@@ -193,12 +198,14 @@ impl Fluxo for Treino {
     }
 
     fn pedir(&mut self, agora: i64) -> Option<Value> {
+        if self.mapa_aberto || (self.ligado && !self.contas.is_empty()) {
+            // Tabela e perfis do topo (na janela da dona).
+            if let Some(p) = self.ranking.pedir(agora) {
+                return Some(p);
+            }
+        }
         if !self.ligado || self.contas.is_empty() {
             return None;
-        }
-        // Tabela e perfis do topo (na janela da dona).
-        if let Some(p) = self.ranking.pedir(agora) {
-            return Some(p);
         }
         let nomes: Vec<String> = self.contas.keys().cloned().collect();
         let n = nomes.len();
@@ -223,6 +230,11 @@ impl Fluxo for Treino {
 
     fn entregar(&mut self, _agora: i64) -> Vec<Entrega> {
         Vec::new()
+    }
+
+    fn ranking_pvp(&mut self) -> Option<Value> {
+        self.mapa_aberto = true;
+        Some(self.ranking.para_mapa())
     }
 
     fn salvar(&mut self) -> Option<Value> {
@@ -298,6 +310,42 @@ mod testes {
     fn resultado(venceu_b: bool) -> Value {
         json!({"t": "treino", "resultado": {"venceuA": !venceu_b, "cooldownMs": 1000,
             "placar": [{"id": 1, "dano": 100}, {"id": 2, "dano": if venceu_b { 300 } else { 100 }}]}})
+    }
+
+    #[test]
+    fn mapa_coleta_ranking_com_treino_desligado() {
+        let mut treino = Treino::novo("Sikien", false);
+        assert_eq!(treino.pedir(0), None);
+        assert_eq!(
+            treino.ranking_pvp().map(|r| r["times"].clone()),
+            Some(json!({}))
+        );
+        assert_eq!(
+            treino.pedir(1),
+            Some(json!({"t": "pvp.tabela", "pagina": 1}))
+        );
+        treino.receber_conta(
+            "Sikien",
+            &json!({"t": "pvpTabela", "linhas": [[1, "Líder"]]}),
+            2,
+        );
+        assert_eq!(
+            treino.pedir(3),
+            Some(json!({"t": "ranking.perfil", "nick": "Líder"}))
+        );
+        let perfil = json!({"t": "perfil", "perfil": {"nick": "Líder", "pvpRank": {"pontos": 900},
+            "pvpTime": [{"speciesId": 6, "ivs": {"hp": 31}}]}});
+        treino.receber_conta("Outra conta", &perfil, 4);
+        assert_eq!(
+            treino.ranking_pvp().map(|r| r["times"].clone()),
+            Some(json!({}))
+        );
+        treino.receber_conta("Sikien", &perfil, 5);
+        assert_eq!(
+            treino.ranking_pvp().map(|r| r["times"]["Líder"].clone()),
+            Some(json!({"posicao":1, "pontos":900, "time":[{"speciesId":6}]})),
+        );
+        assert!(treino.contas.is_empty());
     }
 
     #[test]

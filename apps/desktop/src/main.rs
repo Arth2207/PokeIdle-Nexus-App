@@ -421,7 +421,7 @@ fn coletor_evento(window: Webview, msg: Value, estado: State<'_, Estado>) {
     ) {
         estado.relay.receber_conta(&conta, &msg, agora);
     }
-    // Tabela e perfis do topo do PvP só servem ao treino (não viram evento: têm nicks).
+    // Tabela e perfis do topo do PvP ficam no cliente (não viram evento: têm nicks).
     if matches!(tipo, Some("pvpTabela" | "perfil" | "pvpMensal")) {
         return;
     }
@@ -708,6 +708,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             api::api_get,
+            relay::ranking_pvp,
             api::api_post,
             iniciar_nucleo,
             definir_descoberta,
