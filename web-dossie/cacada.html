@@ -219,9 +219,7 @@ footer{margin-top:40px;color:var(--ink-3);font-size:12.5px;max-width:80ch;line-h
  <section id="entrada">
    <div class="card glass">
      <h1>Onde <b>ele</b> rende mais</h1>
-     <p class="lede">Cole a ficha e escolha a conta. A previsão usa os bônus atuais, o dia sazonal e o tempo sem abates medido nessa conta para comparar as hunts liberadas agora.</p>
-     <label for="conta-calibracao">Conta para usar os bônus e o ritmo reais</label>
-     <select id="conta-calibracao" style="width:100%;padding:12px;margin:8px 0 16px"><option value="">Escolha a conta</option></select>
+     <p class="lede">Cole a ficha. A previsão procura uma amostra compatível para usar os bônus, o dia sazonal e o tempo entre alvos.</p>
      <div class="lamina"><textarea id="ficha" spellcheck="false" placeholder="Copia a ficha no jogo e joga aqui…"></textarea></div>
      <div class="ficha-prev" id="prev">
        <span class="chip" data-c="nome">espécie</span><span class="chip" data-c="nivel">nível</span><span class="chip" data-c="qualidade">qualidade</span>
@@ -305,7 +303,6 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 const nf=(x,d=0)=>x==null?'—':Number(x).toLocaleString('pt-BR',{maximumFractionDigits:d});
 const nfK=x=>x==null?'—':x>=1e6?nf(x/1e6,1)+'M':x>=1e3?nf(x/1e3,1)+'k':nf(x);
 const toast=t=>{const e=$('toast');e.textContent=t;e.classList.add('on');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('on'),2600)};
-fetch('/api/dossie/cacada-contas').then(r=>r.json()).then(d=>{for(const nick of d.contas||[]){const o=document.createElement('option');o.value=nick;o.textContent=nick;$('conta-calibracao').appendChild(o);}}).catch(()=>{});
 const slugDe=n=>String(n||'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');
 const PTN={NORMAL:'Normal',FIRE:'Fogo',WATER:'Água',GRASS:'Planta',ELECTRIC:'Elétrico',ICE:'Gelo',FIGHTING:'Lutador',POISON:'Venenoso',GROUND:'Terra',FLYING:'Voador',PSYCHIC:'Psíquico',BUG:'Inseto',ROCK:'Pedra',GHOST:'Fantasma',DRAGON:'Dragão',DARK:'Sombrio',STEEL:'Metal',FAIRY:'Fada'};
 const TIPO_FUNDO={FIRE:'fogo',WATER:'terra-agua',GRASS:'planta',ELECTRIC:'eletrico',PSYCHIC:'psiquico',DRAGON:'dragao',DARK:'sombrio',FIGHTING:'lutador',POISON:'veneno',GHOST:'fantasma',NORMAL:'normal',ICE:'todos',BUG:'todos',ROCK:'ruinas',GROUND:'terra-agua',STEEL:'todos',FAIRY:'todos',FLYING:'fogo-cidade'};
@@ -505,12 +502,11 @@ function parseFicha(txt){
 const HUNTS=()=>DEX.filter(x=>x.h&&x.c==='pokebola');
 const nrmSp=n=>String(n).toLowerCase().replace(/[^a-z0-9]/g,'');
 async function calcular(sp,{nivel,q,pot,shiny,ivs},onProg){
-  const conta=$('conta-calibracao').value;
-  if(!conta)throw Error('Escolha a conta para usar os bônus e o tempo entre alvos corretos.');
+  let conta='';
   const f=FICHA||FICHA_SEL||{sp,nivel,qualidade:q,potencia:'P'+pot,shiny,iv:ivs};
   const ficha=NexusFicha.toGame(f,sp);
   const r=await fetch('/api/dossie/cacada-previsao',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({conta,ficha})});
-  const d=await r.json();CONTEXTO_XP=d;if(!r.ok)throw Error(d.erro||'Não foi possível calcular.');
+  const d=await r.json();CONTEXTO_XP=d;conta=d.conta||'';if(!r.ok)throw Error(d.erro||'Não foi possível calcular.');
   if(!d.ranking?.length)throw Error(d.motivo||'Aguardando uma amostra estável da conta para calibrar.');
   WIKI.clear();const faixas=new Map();
   for(const h of d.ranking){

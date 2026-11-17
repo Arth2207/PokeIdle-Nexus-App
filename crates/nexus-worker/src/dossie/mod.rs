@@ -287,33 +287,83 @@ async fn despachar(d: &Dossie, p: &Pedido, corpo: Body) -> Result<Response, Erro
             Ok(enviar(&json!({"contas":contas}), 200))
         }
         "POST /api/dossie/cacada-previsao" => {
-            if !acesso::privado(d, p) {
-                return Ok(enviar(
-                    &json!({"erro":"Abra o dossiê pelo acesso privado para calibrar com sua conta."}),
-                    403,
-                ));
-            }
             if !d.limites.ok(&p.ip, 30) {
                 return Ok(enviar(&json!({"erro":"muitas requisições"}), 429));
             }
             let b = ler_json(corpo).await?;
-            let nick = b["conta"]
-                .as_str()
-                .filter(|s| !s.is_empty() && s.len() <= 128)
-                .ok_or_else(|| Erro::novo(400, "Escolha a conta para usar bônus e ritmo reais."))?;
+            let ficha = b.get("ficha").filter(|f| f.is_object()).cloned();
+            let nick = if acesso::privado(d, p) {
+                b["conta"]
+                    .as_str()
+                    .filter(|s| !s.is_empty() && s.len() <= 128)
+                    .map(str::to_owned)
+            } else {
+                None
+            };
+            let nick = match nick {
+                Some(n) => n,
+                None => {
+                    let f = ficha.as_ref().ok_or_else(|| {
+                        Erro::novo(400, "Cole a ficha completa para identificar a amostra.")
+                    })?;
+                    let janelas:Vec<serde_json::Value>=sqlx::query_scalar("SELECT janela FROM nexus.motor_janela WHERE em>now()-interval '90 seconds'").fetch_all(&d.db).await?;
+                    let mut matches: Vec<(f64, String)> = janelas
+                        .iter()
+                        .filter_map(|j| {
+                            let a = &j["ultimo"]["io"]["active"];
+                            if !["speciesId", "quality", "potencia", "shiny", "ivs"]
+                                .iter()
+                                .all(|k| f.get(*k) == a.get(*k))
+                            {
+                                return None;
+                            }
+                            let delta = (f["level"].as_f64()? - a["level"].as_f64()?).abs();
+                            Some((delta, j["nick"].as_str()?.to_owned()))
+                        })
+                        .collect();
+                    matches.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    if matches.is_empty() || matches.get(1).is_some_and(|m| m.0 == matches[0].0) {
+                        return Ok(enviar(
+                            &json!({"erro":"Não encontrei uma amostra única compatível. Copie a ficha atual completa do Pokémon."}),
+                            400,
+                        ));
+                    }
+                    matches.remove(0).1
+                }
+            };
             let entrada = persistencia::cacada_contexto::entradas(
                 &d.db,
-                nick,
+                &nick,
                 chrono::Utc::now().timestamp_millis(),
             )
             .await?
             .ok_or_else(|| Erro::novo(404, "Aguardando dados recentes da conta."))?;
-            let ficha = b.get("ficha").filter(|f| f.is_object()).cloned();
             let resultado = tokio::task::spawn_blocking(move || entrada.calcular(ficha))
                 .await
                 .map_err(|e| Erro::novo(500, e.to_string()))?;
             match resultado {
-                Ok(v) => Ok(enviar(&v, 200)),
+                Ok(mut v) => {
+                    if !acesso::privado(d, p) {
+                        if let Some(m) = v.as_object_mut() {
+                            m.retain(|k, _| {
+                                [
+                                    "ranking",
+                                    "melhorAgora",
+                                    "calibracao",
+                                    "bonusAtual",
+                                    "multXpObservado",
+                                    "multXpPokemonObservado",
+                                    "nivelTreinador",
+                                    "dia",
+                                    "notaModelo",
+                                    "comparacaoXp",
+                                ]
+                                .contains(&k.as_str())
+                            });
+                        }
+                    }
+                    Ok(enviar(&v, 200))
+                }
                 Err(e) => Ok(enviar(&json!({"erro":e}), 400)),
             }
         }
