@@ -4,16 +4,39 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mapa PvP · Holodex Nexus</title>
-<link rel="stylesheet" href="mapa.css">
-<script src="mapa.js" defer></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Unbounded:wght@400;500;600;700;800&display=swap">
+<script>
+  const temaSalvo = () => { try { return localStorage.getItem('hdx-tema'); } catch { return null; } };
+  function aplicarTema() {
+    const tema = temaSalvo();
+    document.documentElement.dataset.theme = tema === 'dark' || (!tema && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  }
+  aplicarTema();
+  addEventListener('storage', e => { if (e.key === 'hdx-tema') aplicarTema(); });
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', aplicarTema);
+  if (new URLSearchParams(location.search).get('origem') === 'dossie') {
+    const tema = document.createElement('link');
+    tema.rel = 'stylesheet';
+    tema.href = '/tema.css';
+    document.head.append(tema);
+  }
+</script>
+<link rel="stylesheet" href="mapa.css?v=dossie">
+<script src="mapa.js?v=dossie" defer></script>
 </head>
 <body>
-<header>
-  <div><span class="marca">Holodex Nexus / PvP</span><h1>Mapa de equipes</h1></div>
-  <a class="botao" id="voltar" href="../index.html">Voltar ao painel</a>
-</header>
+<div class="pagina">
+  <nav class="vidro barra" aria-label="Navegação">
+    <span class="marca" id="marca">DOS<span>SIÊ</span></span>
+    <a class="botao" id="voltar" href="../index.html">Voltar ao painel</a>
+  </nav>
+  <header class="cabecalho">
+    <h1>Mapa PvP</h1>
+  </header>
 <main>
-  <div class="controles">
+  <div class="controles vidro">
     <input type="search" id="busca" aria-label="Buscar Pokémon ou jogador" placeholder="Buscar Pokémon ou jogador…">
     <label><input type="checkbox" id="usadas"> Só usadas</label>
     <label><input type="checkbox" id="linhas" checked> Todas as ligações</label>
@@ -23,11 +46,11 @@
   </div>
   <div id="tipos" aria-label="Filtrar por tipo"></div>
   <div class="conteudo">
-    <section class="grafico" aria-label="Mapa radial">
+    <section class="grafico vidro" aria-label="Mapa radial">
       <canvas id="mapa" aria-label="Mapa de espécies e equipes. Use a busca e as listas para selecionar pelo teclado."></canvas>
       <p class="ajuda">Arraste para mover · Clique para destacar · Esc limpa a seleção</p>
     </section>
-    <aside aria-label="Dados do mapa">
+    <aside class="vidro" aria-label="Dados do mapa">
       <div class="fonte">
         <p id="status" role="status">Carregando Pokédex e dados do PvP…</p>
         <label for="ranking">Carregar ranking</label>
@@ -44,5 +67,6 @@
     </aside>
   </div>
 </main>
+</div>
 </body>
 </html>

@@ -3,6 +3,7 @@ const mapa = el('mapa');
 const ctx = mapa.getContext('2d');
 const invoke = window.__TAURI__?.core?.invoke;
 const dossie = new URLSearchParams(location.search).get('origem') === 'dossie';
+if (!dossie) el('marca').textContent = 'NEXUS';
 if (dossie) {
   el('voltar').href = '/dossie.html';
   el('voltar').textContent = 'Voltar ao Dossiê';
@@ -241,11 +242,13 @@ function circulo(x, y, raio, cor) {
   ctx.fill();
 }
 
+let paleta;
+
 function rotulo(texto, x, y, cor, tamanho, alinhamento = 'center') {
-  ctx.font = '600 ' + tamanho + 'px system-ui';
+  ctx.font = '700 ' + tamanho + 'px Manrope, system-ui';
   ctx.textAlign = alinhamento;
   ctx.lineWidth = 3;
-  ctx.strokeStyle = '#0a101b';
+  ctx.strokeStyle = paleta.room;
   ctx.strokeText(texto,x,y);
   ctx.fillStyle = cor;
   ctx.fillText(texto,x,y);
@@ -253,6 +256,12 @@ function rotulo(texto, x, y, cor, tamanho, alinhamento = 'center') {
 
 function renderizar() {
   const {escala, x, y} = transformar();
+  const tema = getComputedStyle(document.documentElement);
+  const cor = chave => tema.getPropertyValue('--' + chave).trim();
+  paleta = {
+    room:cor('room'), ink:cor('ink'), suave:cor('ink-2'), ligacao:cor('ligacao'),
+    selecao:cor('selecao'), marcador:cor('marcador'),
+  };
   ctx.setTransform(mapa.width / largura,0,0,mapa.height / altura,0,0);
   ctx.clearRect(0,0,largura,altura);
   ctx.translate(x,y);
@@ -270,7 +279,10 @@ function renderizar() {
     ctx.fill();
     ctx.stroke();
     const label = polar((setor.inicio + setor.fim) / 2, 274);
-    if (setor.fim - setor.inicio > .13 || zoom > 1.5) rotulo(rotuloTipo,label.x,label.y,cor,12);
+    if (setor.fim - setor.inicio > .13 || zoom > 1.5) {
+      const rotuloCor = tema.getPropertyValue('--t-' + setor.tipo.toLowerCase()).trim();
+      rotulo(rotuloTipo,label.x,label.y,rotuloCor || paleta.suave,12);
+    }
   }
   for (const ext of externos) {
     for (const p of ext.ligacoes) {
@@ -279,7 +291,7 @@ function renderizar() {
       ctx.beginPath();
       ctx.moveTo(ext.x,ext.y);
       ctx.lineTo(p.x,p.y);
-      ctx.strokeStyle = ativa ? '#ff8dcb' : selecao ? '#54769322' : '#6fa9c659';
+      ctx.strokeStyle = ativa ? paleta.selecao : paleta.ligacao + (selecao ? '24' : '60');
       ctx.lineWidth = ativa ? 2.8 : 1;
       ctx.setLineDash(ativa ? [7,4] : []);
       ctx.stroke();
@@ -288,15 +300,15 @@ function renderizar() {
   ctx.setLineDash([]);
   desenharEspecies(escala,x,y);
   const resumo = setores.reduce((total, s) => total + s.pontos.length, 0);
-  rotulo('POKÉDEX',0,-2,'#edf4ff',14);
-  rotulo(numero.format(resumo) + ' espécies',0,16,'#a7b7ce',11);
+  rotulo('POKÉDEX',0,-2,paleta.ink,14);
+  rotulo(numero.format(resumo) + ' espécies',0,16,paleta.suave,11);
   for (const ext of externos) {
     const ativo = selecao?.grupo === ext.grupo || selecao?.sp && ext.grupo.ids.has(selecao.sp.d);
-    circulo(ext.x,ext.y,ativo ? 9 : 6,ativo ? '#ff8dcb' : '#73e5d4');
+    circulo(ext.x,ext.y,ativo ? 9 : 6,ativo ? paleta.selecao : paleta.marcador);
     if (ativo || grupos.length <= 12 || zoom > 1.3) {
       const label = polar(ext.a,332);
       rotulo(ext.grupo.nome.slice(0,26),label.x,label.y + (Math.abs(ext.x) < 35 ? 4 : 0),
-        ativo ? '#ffd2ed' : '#badbdc',11, Math.abs(ext.x) < 35 ? 'center' : ext.x > 0 ? 'left' : 'right');
+        ativo ? paleta.selecao : paleta.suave,11, Math.abs(ext.x) < 35 ? 'center' : ext.x > 0 ? 'left' : 'right');
     }
   }
 }
@@ -335,7 +347,7 @@ function desenharEspecies(escala, centroX, centroY) {
   for (const {p,x,y,ativo} of pontosSimples) {
     const raio = ativo ? 3.5 : p.sp.uso ? 2.5 : 1.35;
     if (!cabe(x-raio,y-raio,raio*2,raio*2)) continue;
-    const cor = ativo ? '#ffe19a' : tipos[p.sp.tipo][1] + (selecao ? '38' : p.sp.uso ? 'a0' : '68');
+    const cor = ativo ? paleta.marcador : tipos[p.sp.tipo][1] + (selecao ? '38' : p.sp.uso ? 'a0' : '68');
     circulo(p.x,p.y,raio/escala,cor);
   }
   for (const {p,lado,ativo} of spritesVisiveis) {
@@ -346,14 +358,14 @@ function desenharEspecies(escala, centroX, centroY) {
       ctx.drawImage(img,p.x-medida/2,p.y-medida/2,medida,medida);
       ctx.globalAlpha = 1;
     } else {
-      circulo(p.x,p.y,(ativo ? 4 : 2.5)/escala,ativo ? '#ffe19a' : tipos[p.sp.tipo][1]+'a0');
+      circulo(p.x,p.y,(ativo ? 4 : 2.5)/escala,ativo ? paleta.marcador : tipos[p.sp.tipo][1]+'a0');
     }
   }
 
   // Rótulos também disputam espaço em pixels para continuarem legíveis ao ampliar.
   ctx.save();
   ctx.setTransform(mapa.width/largura,0,0,mapa.height/altura,0,0);
-  ctx.font = '600 12px system-ui';
+  ctx.font = '700 12px Manrope, system-ui';
   for (const {p,x,y,ativo,lado} of spritesVisiveis) {
     if (!ativo) continue;
     const nome = p.sp.n;
@@ -368,7 +380,7 @@ function desenharEspecies(escala, centroX, centroY) {
     if (!local) continue;
     const [lx,ly] = local;
     ocupados.push({x:lx,y:ly,w,h});
-    rotulo(nome,lx+4,ly+13,'#ffe19a',12,'left');
+    rotulo(nome,lx+4,ly+13,paleta.marcador,12,'left');
   }
   ctx.restore();
 }
@@ -438,6 +450,8 @@ mapa.addEventListener('wheel', e => {
   ampliar(e.deltaY < 0 ? 1.15 : 1/1.15,e.offsetX,e.offsetY);
 },{passive:false});
 new ResizeObserver(medir).observe(mapa);
+new MutationObserver(desenhar).observe(document.documentElement,{attributeFilter:['data-theme']});
+document.fonts?.ready.then(desenhar);
 
 function montarFiltros() {
   for (const [tipo,[nome,cor]] of Object.entries(tipos)) {
