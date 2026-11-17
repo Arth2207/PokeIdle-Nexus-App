@@ -9,6 +9,7 @@ mod janela;
 mod motor;
 mod pvp;
 mod raros;
+mod relay;
 mod saude;
 mod vendas;
 
@@ -72,6 +73,7 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/boss/fichas", get(pvp::fichas_raid))
         .route("/api/comandos/fila", get(pvp::fila_comandos))
         .route("/api/equipes/colecao", get(pvp::colecao))
+        .route("/api/relay/controle", get(relay::estado))
         .route("/api/contas", get(janela::contas))
         .route("/api/cacada", get(janela::cacada))
         .route("/api/progressao", get(janela::progressao))
@@ -96,6 +98,7 @@ pub fn router(estado: Estado) -> Router {
         .route("/api/bolsa/vendas", post(vendas::gravar))
         .route("/api/motor/janela", post(janela::gravar))
         .route("/api/motor/config", post(janela::alterar_config))
+        .route("/api/relay/controle", post(relay::controlar))
         .route("/api/equipes/ingest", post(equipes::ingest))
         .route("/api/boss/tentativa", post(equipes::tentativa))
         .route("/ingest", post(ingestao::ingest))

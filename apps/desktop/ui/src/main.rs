@@ -1,5 +1,6 @@
 //! Tela do app A2 em Leptos (CSR). Fala com o Tauri pela ponte global `window.__TAURI__`.
 mod comp;
+mod config_web;
 mod dados;
 mod diario;
 mod globais;
@@ -538,6 +539,15 @@ fn salvar_config(e: Estado) {
 
 #[component]
 fn Configuracoes(e: Estado) -> impl IntoView {
+    if dados::no_app() {
+        view! { <ConfiguracoesDesktop e=e /> }.into_any()
+    } else {
+        view! { <config_web::ConfiguracoesWeb e=e /> }.into_any()
+    }
+}
+
+#[component]
+fn ConfiguracoesDesktop(e: Estado) -> impl IntoView {
     view! {
         <h2>"Configurações"</h2>
         <div class="limite">

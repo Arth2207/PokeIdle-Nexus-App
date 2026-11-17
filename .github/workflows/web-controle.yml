@@ -1,0 +1,75 @@
+name: Instalador com controle pelo site
+on:
+  push:
+    branches: [fix/web-controle]
+permissions:
+  contents: read
+jobs:
+  desktop:
+    name: app desktop (instalador Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Alvo WebAssembly (UI Leptos)
+        run: rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            apps/desktop
+            apps/desktop/ui
+      # trunk: binário pronto, versão e SHA-256 fixos (o trunk baixa o wasm-bindgen-cli da versão do Cargo.lock).
+      - name: trunk 0.22.1
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/trunk-rs/trunk/releases/download/v0.22.1/trunk-x86_64-pc-windows-msvc.zip -OutFile trunk.zip
+          if ((Get-FileHash trunk.zip -Algorithm SHA256).Hash.ToLower() -ne "1cc65012a9df60b02db948f5a3f0601e594ce952efb1cfd23147c9021c9f7d75") { throw "SHA-256 do trunk não confere" }
+          Expand-Archive trunk.zip -DestinationPath "$env:RUNNER_TEMP\trunk"
+          "$env:RUNNER_TEMP\trunk" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+      # app-icon.png é a fonte; os tamanhos e o .ico saem daqui (icons/ não é versionado).
+      - name: Ícones
+        working-directory: apps/desktop
+        run: cargo tauri icon app-icon.png
+      # Só NSIS: o MSI (WiX) baixava e empacotava de novo a cada push sem uso.
+      - name: Instalador NSIS
+        working-directory: apps/desktop
+        run: cargo tauri build --bundles nsis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-desktop-windows
+          path: |
+            apps/desktop/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+      - name: Pacote do painel web
+        shell: pwsh
+        run: Compress-Archive -Path apps/desktop/ui/dist/* -DestinationPath nexus-painel.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-painel-web
+          path: nexus-painel.zip
+          if-no-files-found: error
+
+
+  publicar-previa:
+    name: Disponibilizar atualização do cliente
+    needs: desktop
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: nexus-desktop-windows
+          path: release
+      - name: Publicar instalador de prévia
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="nexus-web-controle-${GITHUB_SHA:0:7}"
+          (cd release && sha256sum *.exe > SHA256SUMS)
+          gh release create "$tag" release/*.exe release/SHA256SUMS --target "$GITHUB_SHA" --prerelease --title "Nexus 0.1.3 — controle pelo site" --notes "Prévia com ativação por conta pelo painel web. Atualização única do cliente necessária; mantém a coleta e as contas existentes."

@@ -37,6 +37,7 @@ const MEMORIA: usize = 512;
 #[derive(Default)]
 struct Estado {
     em_curso: HashSet<i64>,
+    modos: HashMap<String, Modo>,
     cancelados: HashSet<i64>,
     concluidos: VecDeque<(i64, String)>,
 }
@@ -116,7 +117,29 @@ impl<E: Executor> Despachante<E> {
             return None;
         } else if cmd.expira_em.is_some_and(|t| t <= agora_ms) {
             RESULTADO_EXPIRADO.to_string()
-        } else if i.modo == Modo::Sombra {
+        } else if cmd.tipo == "relay.modo" {
+            match cmd.params.get("modo").and_then(serde_json::Value::as_str) {
+                Some("ativo") => {
+                    travar(&i.estado)
+                        .modos
+                        .insert(norm(&cmd.conta), Modo::Ativo);
+                    "ok:modo=ativo".to_owned()
+                }
+                Some("sombra") => {
+                    travar(&i.estado)
+                        .modos
+                        .insert(norm(&cmd.conta), Modo::Sombra);
+                    "ok:modo=sombra".to_owned()
+                }
+                _ => "erro: modo inválido".to_owned(),
+            }
+        } else if travar(&i.estado)
+            .modos
+            .get(&norm(&cmd.conta))
+            .copied()
+            .unwrap_or(i.modo)
+            == Modo::Sombra
+        {
             RESULTADO_SOMBRA.to_string()
         } else {
             executou = true;
@@ -193,6 +216,58 @@ mod testes {
         let r2 = d.tratar(&cmd(1, "a", "x", None), 0).await;
         assert_eq!(r1, r2);
         assert_eq!(r1.map(|r| r.resultado), Some("ok".into()));
+        assert_eq!(n.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn controle_remoto_muda_so_a_conta_autorizada() {
+        let (d, n) = desp(Modo::Sombra, &["a", "b"]);
+        let mut controle = cmd(10, "a", "relay.modo", None);
+        controle.params = serde_json::json!({"modo":"ativo"});
+        assert_eq!(
+            d.tratar(&controle, 0).await.map(|r| r.resultado),
+            Some("ok:modo=ativo".into())
+        );
+        d.tratar(&cmd(11, "a", "x", None), 0).await;
+        assert_eq!(
+            d.tratar(&cmd(12, "b", "x", None), 0)
+                .await
+                .map(|r| r.resultado),
+            Some("sombra".into())
+        );
+        controle.id = 13;
+        controle.params = serde_json::json!({"modo":"sombra"});
+        d.tratar(&controle, 0).await;
+        assert_eq!(
+            d.tratar(&cmd(14, "a", "x", None), 0)
+                .await
+                .map(|r| r.resultado),
+            Some("sombra".into())
+        );
+        controle.id = 15;
+        controle.conta = "fora".into();
+        controle.params = serde_json::json!({"modo":"ativo"});
+        assert!(d.tratar(&controle, 0).await.is_none());
+        controle.id = 16;
+        controle.conta = "a".into();
+        controle.expira_em = Some(10);
+        assert_eq!(
+            d.tratar(&controle, 11).await.map(|r| r.resultado),
+            Some("expirado".into())
+        );
+        controle.id = 17;
+        controle.expira_em = None;
+        controle.params = serde_json::json!({"modo":"invalido"});
+        assert_eq!(
+            d.tratar(&controle, 0).await.map(|r| r.resultado),
+            Some("erro: modo inválido".into())
+        );
+        assert_eq!(
+            d.tratar(&cmd(18, "a", "x", None), 0)
+                .await
+                .map(|r| r.resultado),
+            Some("sombra".into())
+        );
         assert_eq!(n.load(Ordering::SeqCst), 1);
     }
 
