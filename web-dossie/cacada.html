@@ -130,11 +130,11 @@ details.colar summary:hover{color:var(--ink)}
 .fx .faixa{font:600 12.5px var(--f-mark);color:var(--ink-2);margin-bottom:7px}
 .fx.atual .faixa{color:var(--t1)}
 .fx .faixa .agora{font:700 9px var(--f-text);letter-spacing:.1em;color:#fff;background:linear-gradient(120deg,var(--t1),var(--t2));border-radius:999px;padding:2px 7px;margin-left:8px;vertical-align:middle}
-.mini{display:flex;align-items:center;gap:9px;border:1px solid var(--hair);border-radius:10px;padding:6px 10px;margin-bottom:6px;background:color-mix(in srgb,var(--panel) 40%,transparent);font-size:12.5px}
-.mini.melhor{border-color:color-mix(in srgb,var(--t1) 45%,transparent)}
-.mini .mn{font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.mini .mx{color:var(--ink-3);font-size:11.5px;white-space:nowrap}
-.mini .mx b{color:var(--t1);font-weight:700}
+.hunt-mini{display:flex;align-items:center;gap:9px;border:1px solid var(--hair);border-radius:10px;padding:6px 10px;margin-bottom:6px;background:color-mix(in srgb,var(--panel) 40%,transparent);font-size:12.5px}
+.hunt-mini.melhor{border-color:color-mix(in srgb,var(--t1) 45%,transparent)}
+.hunt-mini .mn{font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hunt-mini .mx{color:var(--ink-3);font-size:11.5px;white-space:nowrap}
+.hunt-mini .mx b{color:var(--t1);font-weight:700}
 footer{margin-top:40px;color:var(--ink-3);font-size:12.5px;max-width:80ch;line-height:1.6}
 #toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);background:var(--panel-hi);border:1px solid var(--hair-2);
   border-radius:999px;padding:11px 20px;font:700 13.5px var(--f-text);color:var(--ink);opacity:0;transition:.3s;z-index:80;backdrop-filter:blur(10px)}
@@ -576,12 +576,12 @@ function renderTimeline(faixas){
     const top=f.hunts.slice(0,3);
     return `<div class="fx ${f.atual?'atual':''}" id="fx-${f.chave}">
       <div class="faixa">${f.rotulo}${f.atual?'<span class="agora">VOCÊ ESTÁ AQUI</span>':''}</div>
-      ${top.map((it,i)=>`<div class="mini ${i===0?'melhor':''}" data-slug="${esc(it.slug)}" role="button" tabindex="0" title="Abrir a wiki dessa hunt" style="cursor:pointer">
+      ${top.map((it,i)=>`<div class="hunt-mini ${i===0?'melhor':''}" data-slug="${esc(it.slug)}" role="button" tabindex="0" title="Abrir a wiki dessa hunt" style="cursor:pointer">
         <span class="mn">${i===0?'★ ':''}${esc(it.nome)}</span>
         <span class="badge ${BADGE[it.veredito]}">${it.veredito.slice(0,1)}</span>
         <span class="mx"><b>${nfK(it.xpH)}</b> xp/h</span>
       </div>`).join('')}
-      ${f.hunts.length>3?`<div class="mini" style="justify-content:center;color:var(--ink-3)">+ ${f.hunts.length-3} outras</div>`:''}
+      ${f.hunts.length>3?`<div class="hunt-mini" style="justify-content:center;color:var(--ink-3)">+ ${f.hunts.length-3} outras</div>`:''}
     </div>`}).join('');
   const at=document.querySelector('.fx.atual');
   if(at)at.scrollIntoView({block:'center'});
