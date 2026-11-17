@@ -23,7 +23,10 @@ use crate::motor::config;
 use crate::motor::jogo::{hunt_atual, janela, num, slug_de, Janela};
 use crate::motor::Relogio;
 
+mod selecao;
+
 const TESTE_MIN: f64 = 5.0;
+#[cfg(test)]
 const CALIB_PADRAO: f64 = 0.75;
 /// `OBJETIVOS`: chave, nome, unidade.
 const OBJETIVOS: [(&str, &str, &str); 5] = [
@@ -32,14 +35,6 @@ const OBJETIVOS: [(&str, &str, &str); 5] = [
     ("equilibrio", "XP sem prejuízo", "XP/h"),
     ("gemas", "gemas", "gemas/h"),
     ("shiny", "chance de shiny", "shiny/dia"),
-];
-const CURVA_OURO: [(f64, f64); 6] = [
-    (1.0, 41.0),
-    (100.0, 658.0),
-    (1000.0, 2624.0),
-    (5000.0, 6900.0),
-    (25000.0, 18142.0),
-    (160300.0, 31681.0),
 ];
 const HORA: f64 = 3.6e6;
 
@@ -156,23 +151,6 @@ fn fmt_br(v: f64) -> String {
 /// `Math.round(v || 0).toLocaleString('pt-BR')`.
 fn fmt0(v: f64) -> String {
     fmt_br(if verd(v) { v } else { 0.0 })
-}
-
-/// `Array.prototype.sort` do V8 (inserção binária, estável) com comparador numérico.
-fn ordenar_como_js<T>(v: &mut Vec<T>, cmp: impl Fn(&T, &T) -> f64) {
-    for i in 1..v.len() {
-        let (mut esq, mut dir) = (0, i);
-        while esq < dir {
-            let meio = esq + ((dir - esq) >> 1);
-            if cmp(&v[i], &v[meio]) < 0.0 {
-                dir = meio;
-            } else {
-                esq = meio + 1;
-            }
-        }
-        let x = v.remove(i);
-        v.insert(esq, x);
-    }
 }
 
 // ---------------------------------------------------------------- simulador (fight)
@@ -306,17 +284,56 @@ pub fn luta(me: &Combatente, foe: &Combatente, secs: f64, k: &Constantes) -> Lut
 /// `setServerConstants(conta.pub)`: as constantes da wiki trocadas pelas do servidor.
 pub fn constantes_da_conta(conta: &ContaViva) -> Constantes {
     let mut k = Constantes::wiki();
-    let p = &conta.publico;
-    if p.is_null() {
-        return k;
+    let p = if conta.publico.is_object() {
+        &conta.publico
+    } else {
+        &conta.welcome
+    };
+    if let Some(mut servidor) = Constantes::com_tabela_do_servidor(&conta.welcome["tabelaTipos"]) {
+        if let Some(tab) = servidor.tabela.as_mut() {
+            for tipo in crate::combate::tipos::Tipo::TODOS {
+                if conta.welcome["tabelaTipos"][tipo.nome()]
+                    .get(tipo.nome())
+                    .is_none()
+                {
+                    tab[tipo.indice()][tipo.indice()] =
+                        crate::combate::tipos::efetividade(tipo, tipo);
+                }
+            }
+        }
+        k.tabela = servidor.tabela;
     }
-    let hp = js::mais(p.get("multHpSelvagem"));
+    let hp = js::mais(
+        p.get("multHpSelvagem")
+            .or_else(|| conta.welcome.get("multHpSelvagem")),
+    );
     if hp > 0.0 {
         k.hp_selvagem = hp;
     }
     let dn = js::mais(p.get("multDanoSelvagem"));
     if dn > 0.0 {
         k.dano_selvagem = dn;
+    }
+    if let Some(amp) = p
+        .get("ampliacaoHunt")
+        .and_then(Value::as_f64)
+        .filter(|a| *a > 0.0)
+    {
+        k.ampliacao_hunt = [0.0, 0.0625, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0]
+            .into_iter()
+            .map(|v| {
+                (
+                    v,
+                    if v == 0.0 || v == 1.0 {
+                        v
+                    } else if v > 1.0 {
+                        1.0 + (v - 1.0) * amp
+                    } else {
+                        v / amp
+                    },
+                )
+            })
+            .collect();
     }
     if let Some(Value::Object(a)) = p.get("ampliacaoHunt") {
         for (chave, v) in a {
@@ -333,143 +350,12 @@ pub fn constantes_da_conta(conta: &ContaViva) -> Constantes {
     k
 }
 
-// ---------------------------------------------------------------- previsões
-
-/// `goldCurve(L)`: ouro por abate pela curva da wiki (log-log).
-fn curva_ouro(l: f64) -> f64 {
-    let l = max_js(1.0, l);
-    let c = &CURVA_OURO;
-    if l >= c[c.len() - 1].0 {
-        return c[c.len() - 1].1;
-    }
-    for i in 1..c.len() {
-        if l <= c[i].0 {
-            let ((x0, y0), (x1, y1)) = (c[i - 1], c[i]);
-            let k = js::ln(y1 / y0) / js::ln(x1 / x0);
-            return y0 * js::pow(l / x0, k);
-        }
-    }
-    c[0].1
-}
-
-/// Retorno do `xpModel`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct ModeloXp {
-    k: f64,
-    a: f64,
-    min_h: f64,
-    max_h: f64,
-}
-
-impl ModeloXp {
-    fn xp(&self, h: f64) -> f64 {
-        let base = self.a * js::pow(h, self.k);
-        if h >= self.min_h * 0.8 && h <= self.max_h * 1.3 {
-            return base;
-        }
-        let r = if h < self.min_h {
-            h / (self.min_h * 0.8)
-        } else {
-            (self.max_h * 1.3) / h
-        };
-        base * max_js(0.4, js::pow(r, 1.5))
-    }
-}
-
-/// `xpModel(obs)` com `obs = [(h, xp)]`.
-fn modelo_xp(obs: &[(f64, f64)]) -> Option<ModeloXp> {
-    let o: Vec<(f64, f64)> = obs
-        .iter()
-        .copied()
-        .filter(|(h, xp)| *h > 0.0 && *xp > 0.0)
-        .collect();
-    if o.is_empty() {
-        return None;
-    }
-    let n = o.len() as f64;
-    let mut k = 1.0;
-    if o.len() >= 2 {
-        let xs: Vec<f64> = o.iter().map(|x| js::ln(x.0)).collect();
-        let ys: Vec<f64> = o.iter().map(|x| js::ln(x.1)).collect();
-        let mx = xs.iter().fold(0.0, |a, b| a + b) / n;
-        let my = ys.iter().fold(0.0, |a, b| a + b) / n;
-        let (mut num_, mut den) = (0.0, 0.0);
-        for i in 0..o.len() {
-            num_ += (xs[i] - mx) * (ys[i] - my);
-            den += js::pow(xs[i] - mx, 2.0);
-        }
-        if den > 0.0 {
-            k = min_js(3.0, max_js(0.3, num_ / den));
-        }
-    }
-    let soma = o.iter().fold(0.0, |s, x| s + js::ln(x.1) - k * js::ln(x.0));
-    let a = js::exp(soma / n);
-    let min_h = o.iter().fold(f64::INFINITY, |m, x| min_js(m, x.0));
-    let max_h = o.iter().fold(f64::NEG_INFINITY, |m, x| max_js(m, x.0));
-    Some(ModeloXp { k, a, min_h, max_h })
-}
-
-/// `real` do `forecastHunt`.
-struct Real {
-    kph: Option<f64>,
-    xp_kill: Option<f64>,
-    gold_kill: Option<f64>,
-    pot_por_kill: Option<f64>,
-    bolas_por_kill: Option<f64>,
-    hunt_lvl: f64,
-}
-
 #[derive(Debug, Clone, Copy)]
 struct Previsao {
     kph: f64,
     xp_h: Option<f64>,
     lucro_h: f64,
     pot_h: f64,
-}
-
-/// `S_.forecastHunt`.
-fn previsao(
-    cur: &Luta,
-    alt: &Luta,
-    alt_lvl: f64,
-    real: &Real,
-    pr: &Precos,
-    f: f64,
-    modelo: Option<&ModeloXp>,
-) -> Previsao {
-    let esticado = alt.kph * f;
-    let kph = match real.kph {
-        Some(r) if r > 0.0 => min_js(esticado, r * 1.3),
-        _ => esticado,
-    };
-    let gold_ratio = match real.gold_kill {
-        Some(g) if verd(g) && verd(real.hunt_lvl) => g / curva_ouro(real.hunt_lvl),
-        _ => 1.0,
-    };
-    let gold_kill = curva_ouro(alt_lvl) * gold_ratio;
-    let xp_kill = match modelo {
-        Some(m) => Some(m.xp(alt_lvl)),
-        None => match real.xp_kill {
-            Some(x) if verd(x) && verd(real.hunt_lvl) => Some(x * alt_lvl / real.hunt_lvl),
-            _ => None,
-        },
-    };
-    let dmg_cur = cur.tkill.filter(|t| verd(*t)).map(|t| cur.dps_in * t);
-    let dmg_alt = alt.tkill.filter(|t| verd(*t)).map(|t| alt.dps_in * t);
-    let pot_kill = match (real.pot_por_kill, dmg_cur, dmg_alt) {
-        (Some(p), Some(c), Some(a)) if verd(c) && verd(a) => p * a / c,
-        (p, _, _) => ou(p, 0.0),
-    };
-    let pot_h = pot_kill * kph;
-    let bola_h = ou(real.bolas_por_kill, 0.0) * kph;
-    let gastos = pot_h * ou(Some(pr.pot), 0.0) + bola_h * ou(Some(pr.ball), 0.0);
-    let gold_h = gold_kill * kph;
-    Previsao {
-        kph,
-        xp_h: xp_kill.map(|x| x * kph),
-        lucro_h: gold_h - gastos,
-        pot_h,
-    }
 }
 
 // ---------------------------------------------------------------- valores por objetivo
@@ -496,6 +382,7 @@ impl Gemas {
 /// Espécie para o `valorGemasH` (`{...sp, trLv}`; `{}` quando não há espécie).
 struct EspValor {
     d: Option<i64>,
+    capturas_por_kill: Option<f64>,
 }
 
 fn eh_outland(d: Option<i64>) -> bool {
@@ -519,8 +406,10 @@ fn valor_gemas_h(kph: Option<f64>, sp: &EspValor, g: &Gemas) -> f64 {
         let soma = token * g.g("bronzeToken");
         return kph * soma * mult;
     }
-    let p_cap = min_js(1.0, 0.05 * 1.5);
-    kph * (1.0 / 24000.0) * p_cap * g.g("shiny")
+    let Some(p_cap) = sp.capturas_por_kill else {
+        return f64::NAN;
+    };
+    kph * g.ch_shiny * p_cap * g.g("shiny")
 }
 
 /// `lucroJanela(w, pr)`.
@@ -537,7 +426,8 @@ fn lucro_janela(w: &Janela, pr: &Precos) -> Option<f64> {
 fn valor_janela(w: &Janela, obj: &str, pr: &Precos, ch: Option<f64>) -> Option<f64> {
     match obj {
         "lucro" => lucro_janela(w, pr),
-        "shiny" => Some(ou(w.kph, 0.0) * ou(ch, 1.0 / 24000.0) * 24.0),
+        "shiny" => (w.span >= 60_000.0)
+            .then(|| w.capturas as f64 * 3_600_000.0 / w.span * ou(ch, 1.0 / 24000.0) * 24.0),
         _ => w.xp_h,
     }
 }
@@ -549,20 +439,20 @@ fn valor_hunt(obj: &str, p: &Previsao, sp: &EspValor, g: &Gemas) -> Option<f64> 
         "shiny" => Some(if eh_outland(sp.d) {
             0.0
         } else {
-            ou(Some(p.kph), 0.0) * ou(Some(g.ch_shiny), 1.0 / 24000.0) * 24.0
+            ou(Some(p.kph), 0.0)
+                * ou(Some(g.ch_shiny), 1.0 / 24000.0)
+                * sp.capturas_por_kill.unwrap_or(f64::NAN)
+                * 24.0
         }),
         "lucro" => Some(p.lucro_h),
         _ => p.xp_h,
     }
 }
 
-fn encolher(v: Option<f64>, e: f64) -> Option<f64> {
-    v.map(|x| if x > 0.0 { x * e } else { x })
-}
-
 // ---------------------------------------------------------------- calibração (D.calib2)
 
 /// `calibDoLutador`: as razões `r` do mesmo lutador (espécie e nível ±15%).
+#[cfg(test)]
 fn calib_do_lutador(d: &Value, nick: &str, sp: &str, lvl: f64) -> Vec<f64> {
     let Some(Value::Array(a)) = d.get("calib2").and_then(|c| c.get(nick)) else {
         return Vec::new();
@@ -579,6 +469,7 @@ fn calib_do_lutador(d: &Value, nick: &str, sp: &str, lvl: f64) -> Vec<f64> {
 }
 
 /// `fatorCalibracao`: mediana das últimas 5 razões, entre 0,2 e 1,2 (padrão 0,75).
+#[cfg(test)]
 fn fator_calibracao(d: &Value, nick: &str, sp: &str, lvl: f64) -> f64 {
     let todas = calib_do_lutador(d, nick, sp, lvl);
     let ultimas = &todas[todas.len().saturating_sub(5)..];
@@ -624,6 +515,7 @@ struct Ativo<'a> {
     q: f64,
     pot: f64,
     iv: [f64; 6],
+    shiny: bool,
 }
 
 /// `ativoDe(conta)`.
@@ -687,11 +579,18 @@ fn ativo_de<'a>(conta: &ContaViva, dex: &'a Pokedex) -> Option<Ativo<'a>> {
         q: ou(num(at.get("q")), 1.1),
         pot: ou(num(at.get("pot")), 1.0),
         iv,
+        shiny: conta
+            .ultimo
+            .pointer("/io/active/shiny")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     })
 }
 
 struct Alt<'a> {
     sp: &'a EspecieCombate,
+    nome: String,
+    slug: String,
     h: f64,
     r: Luta,
 }
@@ -706,7 +605,7 @@ struct Base<'a> {
 
 /// `melhoresHunts(conta)` (sem o cache, que só evita refazer a simulação).
 fn melhores_hunts<'a>(
-    d: &Value,
+    _d: &Value,
     conta: &ContaViva,
     ctx: &ContextoHunt<'a>,
     hc: &Value,
@@ -728,86 +627,87 @@ fn melhores_hunts<'a>(
     } else {
         0
     };
-    let me = Combatente::novo(
-        at.sp,
-        at.lvl,
-        &Opcoes {
-            qualidade: at.q,
-            ivs: at.iv,
-            potencia: pot,
-            ..Opcoes::default()
-        },
-        ctx.k,
-    );
+    let mut me =
+        crate::combate::combatente::de_ficha(ctx.dex, &conta.ultimo["io"]["active"], ctx.k)
+            .map(|(mon, _)| mon)
+            .unwrap_or_else(|| {
+                Combatente::novo(
+                    at.sp,
+                    at.lvl,
+                    &Opcoes {
+                        qualidade: at.q,
+                        ivs: at.iv,
+                        potencia: pot,
+                        shiny: at.shiny,
+                        ..Opcoes::default()
+                    },
+                    ctx.k,
+                )
+            });
+    crate::combate::combatente::aplicar_z_move(&mut me, &conta.ultimo["io"]["active"], 2800.0);
+    let dia = conta.ultimo["dia"]
+        .as_str()
+        .and_then(|t| t.parse::<crate::combate::tipos::Tipo>().ok());
     let selvagem = Opcoes {
         qualidade: 1.1,
         selvagem: true,
         ..Opcoes::default()
     };
     let f = |sp: &EspecieCombate, lvl: f64, secs: f64| {
-        luta(
-            &me,
-            &Combatente::novo(sp, lvl, &selvagem, ctx.k),
-            secs,
-            ctx.k,
-        )
+        let mut meu = me.clone();
+        let mut foe = Combatente::novo(sp, lvl, &selvagem, ctx.k);
+        // O bônus sazonal vale nas hunts do Mapa, não nas Outlands.
+        if !eh_outland(Some(sp.id)) {
+            if let Some(tipo) = dia {
+                if meu.tipos.contains(&tipo) {
+                    crate::combate::combatente::multiplicar_atributos(&mut meu, 2.0);
+                }
+                if foe.tipos.contains(&tipo) {
+                    crate::combate::combatente::multiplicar_atributos(&mut foe, 2.0);
+                }
+            }
+        }
+        luta(&meu, &foe, secs, ctx.k)
     };
     let cur = ctx.dex.por_nome(&h_nome).map(|w| f(w, h_lvl, 180.0));
-    let medidas = d
-        .get("medidas")
-        .and_then(|m| m.get(&conta.nick))
-        .and_then(Value::as_object);
-    let nvs_med: Vec<f64> = medidas
-        .map(|m| {
-            m.values()
-                .map(|x| nm(x, "h"))
-                .filter(|x| *x > 0.0)
-                .collect()
-        })
-        .unwrap_or_default();
-    let min_h = nvs_med.iter().fold(h_lvl, |a, b| min_js(a, *b));
-    let exp_lo = if nvs_med.len() >= 2 { 0.7 } else { 0.8 };
-    let lo = max_js(
-        1.0,
-        min_js(js::round(min_h * exp_lo), js::round(h_lvl * 0.3)),
-    );
-    let hi = min_js(
-        tr,
-        max_js(max_js(at.lvl + 15.0, js::round(at.lvl * 1.3)), h_lvl),
-    );
-    let quer = |s: &EspecieCombate| {
-        let out = eh_outland(Some(s.id));
-        let pokebola = s.categoria.as_deref() == Some("pokebola");
-        s.nivel_captura.is_some_and(|h| h >= lo && h <= hi)
-            && match modo {
-                "out" => out,
-                "shiny" => pokebola && !out,
-                _ => pokebola || out,
-            }
-    };
-    let mut lista: Vec<&EspecieCombate> = ctx.dex.especies().iter().filter(|s| quer(s)).collect();
-    lista.sort_by(|a, b| {
-        let (ha, hb) = (
-            a.nivel_captura.unwrap_or(0.0),
-            b.nivel_captura.unwrap_or(0.0),
-        );
-        hb.total_cmp(&ha)
-    });
-    if lista.len() > 220 {
-        let passo = lista.len() as f64 / 220.0;
-        lista = (0..220)
-            .filter_map(|i| lista.get((i as f64 * passo).floor() as usize).copied())
-            .collect();
-    }
+    // O catálogo vivo é a autoridade: a mesma espécie pode existir em regiões/níveis diferentes.
+    let lista = conta.welcome.get("hunts").and_then(Value::as_array);
     let alts = lista
         .into_iter()
-        .map(|s| {
-            let h = s.nivel_captura.unwrap_or(0.0);
-            Alt {
-                sp: s,
-                h,
-                r: f(s, h, 150.0),
+        .flatten()
+        .filter_map(|h| {
+            let nivel = h.get("nivel")?.as_f64()?;
+            let nome = h.get("nome")?.as_str()?;
+            let slug = h.get("slug")?.as_str()?;
+            if nivel <= 0.0
+                || nivel > tr
+                || h.get("bloqueada").and_then(Value::as_bool) == Some(true)
+            {
+                return None;
             }
+            let especies = h.get("especies").and_then(Value::as_array);
+            if especies.is_some_and(|es| es.len() != 1) {
+                return None;
+            }
+            let id = especies
+                .and_then(|es| es.first())
+                .and_then(|e| e.get("pokeId"))
+                .and_then(Value::as_i64);
+            let sp = id
+                .and_then(|id| ctx.dex.especies().iter().find(|s| s.id == id))
+                .or_else(|| ctx.dex.por_nome(nome))?;
+            let out =
+                h.get("area").and_then(Value::as_str) == Some("outland") || eh_outland(Some(sp.id));
+            if (modo == "out" && !out) || (modo == "shiny" && out) {
+                return None;
+            }
+            Some(Alt {
+                sp,
+                nome: nome.to_owned(),
+                slug: slug.to_owned(),
+                h: nivel,
+                r: f(sp, nivel, 90.0),
+            })
         })
         .collect();
     Some(Base {
@@ -825,17 +725,10 @@ fn melhores_hunts<'a>(
 #[derive(Clone)]
 struct Cand {
     nome: String,
+    slug: String,
     nivel: f64,
-    pior: f64,
     p: Previsao,
     val: Option<f64>,
-}
-
-impl Cand {
-    /// `b.val - a.val` do comparador (nulo vira 0).
-    fn dif(a: &Cand, b: &Cand) -> f64 {
-        b.val.unwrap_or(0.0) - a.val.unwrap_or(0.0)
-    }
 }
 
 struct TesteInfo {
@@ -871,7 +764,6 @@ struct PlanoBase {
     h_lvl: f64,
     at_lvl: f64,
     at_sp: String,
-    tr_lv: f64,
 }
 
 fn mapa_obj(pares: Vec<(&str, Value)>) -> Value {
@@ -887,6 +779,10 @@ pub fn plano_hunt(d: &Value, r: &Relogio, conta: &ContaViva, ctx: &ContextoHunt)
     Value::Object(plano_completo(d, r, conta, ctx).o)
 }
 
+fn contexto_medida(conta: &ContaViva) -> Value {
+    selecao::contexto(conta)
+}
+
 fn acao_hunt<'a>(d: &'a Value, nick: &str) -> Option<&'a Value> {
     d.get("acoes")?.as_array()?.iter().find(|a| {
         a.get("nick").and_then(Value::as_str) == Some(nick)
@@ -896,561 +792,7 @@ fn acao_hunt<'a>(d: &'a Value, nick: &str) -> Option<&'a Value> {
 }
 
 fn plano_completo(d: &Value, r: &Relogio, conta: &ContaViva, ctx: &ContextoHunt) -> Plano {
-    let ag = r.agora_ms as f64;
-    let nick = conta.nick.as_str();
-    let cfg = config::efetiva(d, nick);
-    let null = Value::Null;
-    let c = cfg.get("hunt").unwrap_or(&null);
-    let h = hunt_atual(conta);
-    let obj_chave = c
-        .get("objetivo")
-        .and_then(Value::as_str)
-        .and_then(objetivo)
-        .map_or("xp", |o| o.0);
-    let (_, obj_nome, obj_un) = objetivo(obj_chave).unwrap_or(("xp", "XP", "XP/h"));
-    let pr = ctx.precos;
-    let ch_shiny = {
-        let v = js::mais(conta.welcome.get("chanceShiny"));
-        if verd(v) {
-            v
-        } else {
-            1.0 / 24000.0
-        }
-    };
-    let mut precos_gemas = cfg.get("gemaPrecos").cloned().unwrap_or(Value::Null);
-    if let Some(p) = conta.welcome.get("nexusTokenPreco").and_then(Value::as_f64) {
-        precos_gemas["bronzeToken"] = json!(p);
-    }
-    let gemas = Gemas {
-        precos: precos_gemas,
-        ch_shiny,
-        out_mult: crate::outlands::atual(&conta.welcome, &conta.ultimo).map(|t| t.mult),
-        token_chance: crate::outlands::chance_token(&conta.welcome),
-    };
-    let ult = acao_hunt(d, nick);
-    let huntdesde = ctx.hunt_desde;
-    let ult_t = ult.map(|u| nm(u, "t"));
-    let inicio_hunt = max_js(huntdesde, ult_t.map_or(0.0, |t| t + 30e3))
-        + if verd(huntdesde) { 15e3 } else { 0.0 };
-    let desde_troca = max_js(0.0, ag - inicio_hunt);
-    let mut w_ms = min_js(20.0 * 60e3, desde_troca);
-    let mut w = janela(conta, w_ms, ag, ag);
-    if w.kills < 20 {
-        let ms = min_js(60.0 * 60e3, desde_troca);
-        if ms > 20.0 * 60e3 {
-            let w2 = janela(conta, ms, ag, ag);
-            if w2.kills > w.kills {
-                w = w2;
-                w_ms = ms;
-            }
-        }
-    }
-    let primeira = conta.linhas.first().map_or(ag, |l| l.1 as f64);
-    let dados_min = min_js(min_js(w_ms, desde_troca), ag - primeira) / 60e3;
-    let medida_ok = w.kills >= 20 || (w.kills >= 5 && dados_min >= 15.0);
-    let lucro_atual = lucro_janela(&w, &pr);
-    let sp_atual = h.as_ref().and_then(|(n, _)| ctx.dex.por_nome(n));
-    let atual = if obj_chave == "gemas" {
-        let sp = match sp_atual {
-            Some(s) => EspValor { d: Some(s.id) },
-            None => EspValor { d: None },
-        };
-        Some(valor_gemas_h(w.kph, &sp, &gemas))
-    } else {
-        valor_janela(&w, obj_chave, &pr, Some(ch_shiny))
-    };
-    let intervalo = js::mais(c.get("intervaloMin"));
-    let espera0 = ult_t.map_or(0.0, |t| max_js(0.0, intervalo * 60e3 - (ag - t)));
-    let mut o = Map::new();
-    o.insert("gemasParcial".into(), json!(true));
-    o.insert("ativo".into(), json!(ver(c, "ativo")));
-    o.insert("objetivo".into(), json!(obj_chave));
-    o.insert("objNome".into(), json!(obj_nome));
-    o.insert("un".into(), json!(obj_un));
-    for k in ["margem", "intervaloMin", "maxPiorPct"] {
-        if let Some(v) = c.get(k) {
-            o.insert(k.into(), v.clone());
-        }
-    }
-    o.insert(
-        "hunt".into(),
-        h.as_ref().map_or(Value::Null, |(n, l)| {
-            mapa_obj(vec![("nome", json!(n)), ("lvl", jo(*l))])
-        }),
-    );
-    o.insert("kills".into(), json!(w.kills));
-    o.insert("killsMin".into(), json!(20));
-    o.insert("janelaMin".into(), jn(js::round(w_ms / 60e3)));
-    o.insert("medidaOk".into(), json!(medida_ok));
-    o.insert("xpH".into(), jo(w.xp_h));
-    o.insert("lucroH".into(), jo(lucro_atual));
-    o.insert("atual".into(), jo(atual));
-    o.insert("kph".into(), jo(w.kph));
-    o.insert(
-        "ultimaTroca".into(),
-        match ult {
-            Some(u) => {
-                let mut m = Map::new();
-                for k in ["t", "de", "para"] {
-                    if let Some(v) = u.get(k) {
-                        m.insert(k.into(), v.clone());
-                    }
-                }
-                m.insert("auto".into(), json!(ver(u, "auto")));
-                Value::Object(m)
-            }
-            None => Value::Null,
-        },
-    );
-    o.insert("espera".into(), jn(espera0));
-    let prefixo = format!("{nick}|");
-    let bloqueadas: Vec<Value> = d
-        .get("bloqueio")
-        .and_then(Value::as_object)
-        .map(|b| {
-            b.iter()
-                .filter(|(k, v)| k.starts_with(&prefixo) && js::mais(Some(v)) > ag)
-                .map(|(k, v)| {
-                    mapa_obj(vec![
-                        ("nome", json!(k.get(nick.len() + 1..).unwrap_or(""))),
-                        ("ate", (*v).clone()),
-                    ])
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    o.insert("bloqueadas".into(), Value::Array(bloqueadas));
-    let mut teste: Option<TesteInfo> = None;
-    if let Some(u) = ult.filter(|u| ver(u, "teste")) {
-        let t = nm(u, "t");
-        let fim = t + TESTE_MIN * 60e3 + 30e3;
-        let ate = min_js(ag, fim);
-        let tobj_txt = match u.get("obj") {
-            Some(v) if js::verdadeiro(Some(v)) => js::texto(Some(v)),
-            _ => "xp".into(),
-        };
-        // `OBJETIVOS[tobj].un` quebra no legado com objetivo desconhecido; aqui cai em XP/h.
-        let tun = objetivo(&tobj_txt).map_or("XP/h", |x| x.2);
-        let depois = janela(conta, max_js(0.0, ate - (t + 30e3)), ate, ag);
-        let antes = js::nulo_ou(u.get("antesVal"), u.get("antesXpH")).cloned();
-        let info = TesteInfo {
-            passou: ag - t,
-            dur: TESTE_MIN * 60e3 + 30e3,
-            antes,
-            depois: valor_janela(&depois, &tobj_txt, &pr, Some(ch_shiny)),
-            lucro_depois: lucro_janela(&depois, &pr),
-            obj: tobj_txt.clone(),
-            un: tun.to_owned(),
-        };
-        let mut m = Map::new();
-        m.insert("t".into(), u.get("t").cloned().unwrap_or(Value::Null));
-        for k in ["de", "para"] {
-            if let Some(v) = u.get(k) {
-                m.insert(k.into(), v.clone());
-            }
-        }
-        m.insert("passou".into(), jn(info.passou));
-        m.insert("dur".into(), jn(info.dur));
-        m.insert("un".into(), json!(info.un));
-        if let Some(a) = &info.antes {
-            m.insert("antes".into(), a.clone());
-        }
-        m.insert("depois".into(), jo(info.depois));
-        m.insert("killsDepois".into(), json!(depois.kills));
-        m.insert("lucroDepois".into(), jo(info.lucro_depois));
-        m.insert("obj".into(), json!(tobj_txt));
-        o.insert("teste".into(), Value::Object(m));
-        teste = Some(info);
-    }
-    let vazio = |o: Map<String, Value>, motivo: &str, base: Option<PlanoBase>| {
-        let mut o = o;
-        o.insert("motivo".into(), json!(motivo));
-        Plano {
-            o,
-            obj: obj_chave_estatica(obj_chave),
-            base,
-            best: None,
-            w: w.clone(),
-            medida_ok,
-            atual,
-            enc: CALIB_PADRAO,
-            explorar: None,
-            lucro_h: lucro_atual,
-            espera: espera0,
-            alvo: None,
-            teste: None,
-        }
-    };
-    if obj_chave == "gemas"
-        && h.as_ref()
-            .and_then(|(n, _)| ctx.dex.por_nome(n))
-            .is_some_and(|sp| eh_outland(Some(sp.id)))
-        && (gemas.out_mult.is_none()
-            || gemas.token_chance.is_none()
-            || conta
-                .welcome
-                .get("nexusTokenPreco")
-                .is_some_and(Value::is_null))
-    {
-        return vazio(
-            o,
-            "Aguardando catálogo e tier efetivo das Outlands recebidos do jogo.",
-            None,
-        );
-    }
-    let base = melhores_hunts(d, conta, ctx, c);
-    let Some(base) = base.filter(|b| b.cur.is_some()) else {
-        let motivo = if h.is_none() {
-            "Fora de hunt."
-        } else {
-            "Ainda não reconheci o pokemon ativo ou a hunt."
-        };
-        return vazio(o, motivo, None);
-    };
-    let Some(cur) = base.cur else {
-        return vazio(o, "", None);
-    };
-    o.insert("piorAtual".into(), jn(cur.pior));
-    // fatorReal(conta, cur) || 1
-    let w20 = janela(conta, 20.0 * 60e3, ag, ag);
-    let f = ou(
-        w20.kph
-            .filter(|k| verd(*k) && w20.kills >= 15)
-            .map(|k| k / cur.kph),
-        1.0,
-    );
-    let obs: Vec<(f64, f64)> = d
-        .get("medidas")
-        .and_then(|m| m.get(nick))
-        .and_then(Value::as_object)
-        .map(|m| m.values().map(|x| (nm(x, "h"), nm(x, "xpKill"))).collect())
-        .unwrap_or_default();
-    let modelo = modelo_xp(&obs);
-    let enc = fator_calibracao(d, nick, &base.at.sp.nome, base.at.lvl);
-    let real = Real {
-        kph: w.kph,
-        xp_kill: w.xp_kill,
-        gold_kill: w.gold_kill,
-        pot_por_kill: w.pot_kill,
-        bolas_por_kill: w.bolas_kill,
-        hunt_lvl: base.h_lvl,
-    };
-    let limite = ctx.limite_rodizio;
-    let luta_lv = limite.unwrap_or(base.at.lvl);
-    let tr_lv_h = ou(num(conta.ultimo.get("trLv")), luta_lv);
-    let piso_lv = (min_js(luta_lv, tr_lv_h) * 0.5).floor();
-    let segura_para =
-        |h: f64, out: bool| (out || h >= piso_lv) && limite.is_none_or(|l| h <= l + 15.0);
-    let max_pior = js::mais(c.get("maxPiorPct"));
-    let bloqueada = |nome: &str| {
-        d.get("bloqueio")
-            .and_then(|b| b.get(format!("{nick}|{nome}")))
-            .is_some_and(|v| js::mais(Some(v)) > ag)
-    };
-    let medidas = d.get("medidas").and_then(|m| m.get(nick));
-    let mesmo_lutador = |m: &Value| {
-        let lvl = nm(m, "lvl");
-        m.get("sp").and_then(Value::as_str) == Some(base.at.sp.nome.as_str())
-            && verd(lvl)
-            && (lvl - base.at.lvl).abs() <= base.at.lvl * 0.1
-    };
-    let med_recente = |nome: &str, lvl: f64| -> Option<f64> {
-        let m = medidas?.get(format!("{nome}|{}", nv(lvl)))?;
-        let xp_h = nm(m, "xpH");
-        (xp_h > 0.0 && ag - nm(m, "t") < 12.0 * HORA && mesmo_lutador(m)).then_some(xp_h)
-    };
-    let usa_med = obj_chave == "xp" || obj_chave == "equilibrio";
-    let preve = |x: &Alt| {
-        let p = previsao(&cur, &x.r, x.h, &real, &pr, f, modelo.as_ref());
-        let med = if usa_med {
-            med_recente(&x.sp.nome, x.h)
-        } else {
-            None
-        };
-        let sp = EspValor { d: Some(x.sp.id) };
-        let val = match med {
-            Some(m) => Some(m),
-            None => encolher(valor_hunt(obj_chave, &p, &sp, &gemas), enc),
-        };
-        Cand {
-            nome: x.sp.nome.clone(),
-            nivel: x.h,
-            pior: x.r.pior,
-            p,
-            val,
-        }
-    };
-    let seguras: Vec<&Alt> = base
-        .alts
-        .iter()
-        .filter(|x| {
-            x.r.pior < max_pior
-                && x.r.bate >= 2.5
-                && x.sp.nome != base.h_nome
-                && !bloqueada(&x.sp.nome)
-                && segura_para(x.h, eh_outland(Some(x.sp.id)))
-        })
-        .collect();
-    let kph_w = w.kph.filter(|k| verd(*k));
-    let mut cands: Vec<Cand> = if kph_w.is_some() {
-        seguras
-            .iter()
-            .map(|x| preve(x))
-            .filter(|c| {
-                c.val.is_some_and(f64::is_finite)
-                    && (obj_chave != "equilibrio" || c.p.lucro_h >= 0.0)
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-    ordenar_como_js(&mut cands, Cand::dif);
-    let best = cands.first().cloned();
-    let ref_lv = min_js(luta_lv, tr_lv_h);
-    let abaixo = base.h_lvl < ref_lv * 0.75;
-    let l0 = if abaixo { ref_lv } else { base.h_lvl };
-    let bandas: &[(f64, f64)] = if abaixo {
-        &[
-            (1.0001, 1.3),
-            (0.9, 1.0001),
-            (0.75, 0.9),
-            (0.6, 0.75),
-            (0.5, 0.6),
-        ]
-    } else {
-        &[
-            (1.0001, 1.3),
-            (0.9, 1.0001),
-            (0.75, 0.9),
-            (0.6, 0.75),
-            (0.45, 0.6),
-            (0.3, 0.45),
-        ]
-    };
-    o.insert(
-        "huntAbaixo".into(),
-        if abaixo {
-            mapa_obj(vec![
-                ("hunt", jn(base.h_lvl)),
-                ("ref", jn(ref_lv)),
-                ("piso", jn(piso_lv)),
-            ])
-        } else {
-            Value::Null
-        },
-    );
-    let seguras_exp: Vec<&Alt> = base
-        .alts
-        .iter()
-        .filter(|x| {
-            x.r.pior < max_pior
-                && x.sp.nome != base.h_nome
-                && !bloqueada(&x.sp.nome)
-                && segura_para(x.h, eh_outland(Some(x.sp.id)))
-        })
-        .collect();
-    let chave_atual = format!("{}|{}", base.h_nome, nv(base.h_lvl));
-    let medidas_outras: Vec<f64> = medidas
-        .and_then(Value::as_object)
-        .map(|m| {
-            m.iter()
-                .filter(|(k, v)| {
-                    **k != chave_atual
-                        && nm(v, "xpH") > 0.0
-                        && ag - nm(v, "t") < 12.0 * HORA
-                        && mesmo_lutador(v)
-                })
-                .map(|(_, v)| nm(v, "h"))
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut explorar: Option<Cand> = None;
-    let mut degraus = Vec::new();
-    for &(a, b) in bandas {
-        let acima = a > 1.0;
-        let lo = if acima { l0 + 1.0 } else { js::round(l0 * a) };
-        let hi = if acima {
-            min_js(
-                tr_lv_h,
-                max_js(js::round(l0 * b), js::round(ref_lv * 1.3) + 1.0),
-            )
-        } else {
-            js::round(l0 * b)
-        };
-        let medido = medidas_outras.iter().any(|h| *h >= lo && *h < hi);
-        let mut do_degrau: Vec<Cand> = if kph_w.is_some() {
-            seguras_exp
-                .iter()
-                .filter(|x| x.h >= lo && x.h < hi)
-                .map(|x| preve(x))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        ordenar_como_js(&mut do_degrau, Cand::dif);
-        if !medido && !do_degrau.is_empty() && explorar.is_none() {
-            explorar = do_degrau.first().cloned();
-        }
-        degraus.push(mapa_obj(vec![
-            ("de", jn(lo)),
-            ("ate", jn(if acima { hi } else { min_js(hi, l0) })),
-            ("acima", json!(acima)),
-            ("medido", json!(medido)),
-            ("candidatos", json!(do_degrau.len())),
-        ]));
-    }
-    o.insert("degraus".into(), Value::Array(degraus));
-    o.insert(
-        "explorar".into(),
-        explorar.as_ref().map_or(Value::Null, |e| {
-            mapa_obj(vec![("nome", json!(e.nome)), ("nivel", jn(e.nivel))])
-        }),
-    );
-    o.insert("seguras".into(), json!(seguras.len()));
-    o.insert("analisadas".into(), json!(base.alts.len()));
-    let resumo = |c: &Cand| {
-        mapa_obj(vec![
-            ("nome", json!(c.nome)),
-            ("nivel", jn(c.nivel)),
-            ("val", jo(c.val)),
-            ("xpH", jo(encolher(c.p.xp_h, enc))),
-            ("lucroH", jo(encolher(Some(c.p.lucro_h), enc))),
-            ("pior", jn(c.pior)),
-        ])
-    };
-    o.insert(
-        "calibracao".into(),
-        mapa_obj(vec![
-            ("fator", jn(js::round(enc * 100.0) / 100.0)),
-            (
-                "trocas",
-                json!(calib_do_lutador(d, nick, &base.at.sp.nome, base.at.lvl).len()),
-            ),
-            ("lutador", json!(base.at.sp.nome)),
-        ]),
-    );
-    o.insert(
-        "candidatos".into(),
-        Value::Array(cands.iter().take(3).map(resumo).collect()),
-    );
-    o.insert("melhor".into(), best.as_ref().map_or(Value::Null, resumo));
-    let margem = js::mais(c.get("margem"));
-    let alvo = atual.map(|a| a + a.abs() * margem);
-    o.insert("alvo".into(), jo(alvo));
-    let progresso = match (&best, alvo) {
-        (Some(b), Some(al)) => {
-            let v = b.val.unwrap_or(0.0);
-            Some(if al > 0.0 {
-                v / al
-            } else if v >= al {
-                1.0
-            } else {
-                0.0
-            })
-        }
-        _ => None,
-    };
-    o.insert("progresso".into(), jo(progresso));
-    let salto = best
-        .as_ref()
-        .is_some_and(|b| atual.is_some_and(|a| a > 0.0 && b.val.unwrap_or(0.0) >= a * 3.0));
-    o.insert("saltoGrande".into(), json!(salto));
-    let mut espera = espera0;
-    let mut espera_pulada: Option<f64> = None;
-    if salto && espera > 0.0 {
-        espera_pulada = Some(espera);
-        espera = 0.0;
-        o.insert("esperaPulada".into(), jn(espera_pulada.unwrap_or(0.0)));
-        o.insert("espera".into(), jn(0.0));
-    }
-    let explorar_ligado = c.get("explorar") != Some(&Value::Bool(false));
-    let prox_degrau = |e: &Cand| format!("{} Nv {}", e.nome, nv(e.nivel));
-    let ativo = ver(c, "ativo");
-    let motivo = if !ativo {
-        "Desligada: só mostra a análise.".to_owned()
-    } else if let Some(t) = o.get("teste").and_then(|t| t.get("para")) {
-        format!(
-            "Testando {}: compara os primeiros {} min com os {} min de antes.",
-            js::texto(Some(t)),
-            nv(TESTE_MIN),
-            nv(TESTE_MIN)
-        )
-    } else if !medida_ok {
-        format!(
-            "Medindo a hunt atual: {} de 20 abates (ou 5 abates em 15 min, se a hunt for lenta).",
-            w.kills
-        )
-    } else if atual.is_none() {
-        "Sem medida da hunt atual ainda.".to_owned()
-    } else if obj_chave == "equilibrio" && lucro_atual.is_some_and(|l| l < 0.0) && best.is_none() {
-        "A hunt atual dá prejuízo e nenhuma segura prevê lucro.".to_owned()
-    } else if espera > 0.0 {
-        format!(
-            "Espera {} min desde a última troca.",
-            nv((espera / 60e3).ceil())
-        )
-    } else if let (Some(p), Some(b)) = (espera_pulada, best.as_ref()) {
-        format!(
-            "{} Nv {} prevê {} {obj_un} contra {} de agora: salto grande demais para esperar os {} min restantes. Vai trocar.",
-            b.nome,
-            nv(b.nivel),
-            fmt_br(b.val.unwrap_or(0.0)),
-            fmt_br(atual.unwrap_or(0.0)),
-            nv((p / 60e3).ceil())
-        )
-    } else if let Some(b) = best.as_ref() {
-        let al = alvo.unwrap_or(f64::NAN);
-        if b.val.unwrap_or(0.0) < al {
-            let extra = match (&explorar, explorar_ligado) {
-                (Some(e), true) => format!(" Próximo degrau a medir: {}.", prox_degrau(e)),
-                _ => String::new(),
-            };
-            format!(
-                "{} Nv {} prevê {} {obj_un}; falta chegar em {}.{extra}",
-                b.nome,
-                nv(b.nivel),
-                fmt_br(b.val.unwrap_or(0.0)),
-                fmt_br(al)
-            )
-        } else {
-            format!("Vai trocar para {} Nv {}.", b.nome, nv(b.nivel))
-        }
-    } else {
-        match (&explorar, explorar_ligado) {
-            (Some(e), true) => format!(
-                "Nenhuma previsão passa o alvo; próximo degrau a medir: {}.",
-                prox_degrau(e)
-            ),
-            _ => format!("Nenhuma hunt segura rende mais {obj_nome} pela previsão."),
-        }
-    };
-    o.insert("motivo".into(), json!(motivo));
-    let pb = PlanoBase {
-        h_nome: base.h_nome.clone(),
-        h_lvl: base.h_lvl,
-        at_lvl: base.at.lvl,
-        at_sp: base.at.sp.nome.clone(),
-        tr_lv: ou(num(conta.ultimo.get("trLv")), base.at.lvl),
-    };
-    Plano {
-        o,
-        obj: obj_chave_estatica(obj_chave),
-        base: Some(pb),
-        best,
-        w,
-        medida_ok,
-        atual,
-        enc,
-        explorar,
-        lucro_h: lucro_atual,
-        espera,
-        alvo,
-        teste,
-    }
-}
-
-fn obj_chave_estatica(k: &str) -> &'static str {
-    objetivo(k).map_or("xp", |o| o.0)
+    selecao::plano(d, r, conta, ctx)
 }
 
 // ---------------------------------------------------------------- motorHunt
@@ -1557,6 +899,12 @@ pub fn motor_hunt_completo(
     conta: &ContaViva,
     ctx: &ContextoHunt,
 ) -> SaidaHunt {
+    if super::safari_pago(conta)
+        || conta.ultimo["sessaoTomada"] == true
+        || conta.ultimo.pointer("/hdx/ws") == Some(&Value::Bool(false))
+    {
+        return SaidaHunt::default();
+    }
     if config::efetiva(d, &conta.nick).pointer("/safari/ativo") == Some(&Value::Bool(true)) {
         return SaidaHunt {
             decisoes: super::safari::motor(d, laco, r, conta, ctx.dex),
@@ -1577,6 +925,24 @@ pub fn motor_hunt_completo(
     let cfg = config::efetiva(d, nick);
     let null = Value::Null;
     let c = cfg.get("hunt").unwrap_or(&null);
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    contexto_medida(conta).to_string().hash(&mut hash);
+    let assinatura = (hash.finish() & ((1_u64 << 52) - 1)) as f64;
+    if laco.marca(nick, "huntContextoV2") != assinatura {
+        laco.marcar(nick, "huntContextoV2", assinatura);
+        laco.marcar(nick, "huntContextoDesde", ag);
+    }
+    let ctx_local = ContextoHunt {
+        dex: ctx.dex,
+        k: ctx.k,
+        precos: ctx.precos,
+        limite_rodizio: ctx.limite_rodizio,
+        equipe_no_comando: ctx.equipe_no_comando,
+        rodizio_volta: ctx.rodizio_volta,
+        hunt_desde: ctx.hunt_desde.max(laco.marca(nick, "huntContextoDesde")),
+    };
+    let ctx = &ctx_local;
     let p = plano_completo(d, r, conta, ctx);
     let Some(pb) = p.base.as_ref() else {
         return ac.saida;
@@ -1602,7 +968,8 @@ pub fn motor_hunt_completo(
             ac.gravar(
                 "medida",
                 json!({ "chave": chave, "medida": {
-                    "h": jn(pb.h_lvl), "xpKill": jo(wm.xp_kill), "kph": jo(wm.kph), "xpH": jo(wm.xp_h),
+                    "h": jn(pb.h_lvl), "contexto": contexto_medida(conta), "kills": wm.kills, "span": wm.span,
+                    "capturasPorKill": wm.capturas as f64 / wm.kills as f64, "xpKill": jo(wm.xp_kill), "kph": jo(wm.kph), "xpH": jo(wm.xp_h),
                     "t": jn(ag), "sp": quem_sp, "lvl": jn(pb.at_lvl) } }),
             );
             ac.gravar(
@@ -1611,47 +978,19 @@ pub fn motor_hunt_completo(
             );
         }
     }
-    let piso_v = (min_js(pb.at_lvl, pb.tr_lv) * 0.5).floor();
+    if !ver(c, "ativo") {
+        return ac.saida;
+    }
     // `voltar`: assume resposta "ok" do jogo.
     let voltar = |ac: &mut Acumulo,
                   motivo: String,
                   horas: f64,
                   resultado: Option<Value>,
-                  seguranca: bool| {
+                  _seguranca: bool| {
         let Some(u) = ac.ult.clone() else {
             return;
         };
         let de = txt(&u, "de");
-        if !seguranca
-            && u.get("nivelDe").is_some_and(|v| !v.is_null())
-            && js::mais(u.get("nivelDe")) < piso_v
-        {
-            let res = mesclar(
-                resultado.as_ref(),
-                vec![
-                    ("ficou", json!(true)),
-                    ("motivo", json!("a anterior está abaixo do piso de nível")),
-                    ("t", jn(ag)),
-                ],
-            );
-            ac.mexer_acao(vec![
-                ("vigiar", json!(false)),
-                ("teste", json!(false)),
-                ("resultado", res),
-            ]);
-            ac.registrar(
-                format!(
-                    "{} {motivo}, mas não volto para {de} Nv {}: fica abaixo da metade do nível do {} (Nv {}). Fico em {}.",
-                    pb.h_nome,
-                    txt(&u, "nivelDe"),
-                    pb.at_sp,
-                    nv(pb.at_lvl),
-                    pb.h_nome
-                ),
-                true,
-            );
-            return;
-        }
         ac.bloquear(&pb.h_nome, horas);
         ac.mexer_acao(vec![("vigiar", json!(false)), ("teste", json!(false))]);
         let tem_slug = ver(&u, "slugDe");
@@ -1694,9 +1033,28 @@ pub fn motor_hunt_completo(
             ac.registrar(format!("{base_txt} — falhou: sem-slug {fim}"), false);
         }
     };
+    if let Some(u) = ac
+        .ult
+        .clone()
+        .filter(|u| ver(u, "teste") || ver(u, "vigiar") || !u["acomp"].is_null())
+    {
+        if u["versao"] != 2 || u["contexto"] != contexto_medida(conta) {
+            ac.mexer_acao(vec![
+                ("teste", json!(false)),
+                ("vigiar", json!(false)),
+                ("acomp", Value::Null),
+            ]);
+            ac.registrar(
+                "Reiniciei a medição: mudou o lutador, os bônus ou o contexto da hunt.".into(),
+                true,
+            );
+            return ac.saida;
+        }
+    }
     // vigia a última troca: desmaiou ou gastou o dobro de poção do previsto
     if let Some(u) = ac.ult.clone() {
         if ver(&u, "vigiar")
+            && ag - nm(&u, "t") <= 30.5 * 60e3
             && ag - nm(&u, "t") < 15.0 * 60e3
             && u.get("para").and_then(Value::as_str) == Some(pb.h_nome.as_str())
         {
@@ -1735,6 +1093,17 @@ pub fn motor_hunt_completo(
             return ac.saida;
         }
         if t.passou >= t.dur {
+            let kills =
+                p.o.get("killsDepois")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
+            if kills < 20.0 || t.depois.is_none_or(|v| !v.is_finite()) {
+                if t.passou >= 15.0 * 60e3 {
+                    ac.mexer_acao(vec![("teste", json!(false)), ("vigiar", json!(false))]);
+                    ac.registrar("Teste encerrado sem comparação: amostra insuficiente em 15 minutos; vou medir novamente antes de trocar.".into(), false);
+                }
+                return ac.saida;
+            }
             let res = resultado_de(t.antes.as_ref(), t.depois, &t.un, None);
             let para = txt(&u, "para");
             let de = txt(&u, "de");
@@ -1877,7 +1246,23 @@ pub fn motor_hunt_completo(
                         Some(v) if js::verdadeiro(Some(v)) => js::texto(Some(v)),
                         _ => "xp".into(),
                     };
-                    let val = valor_janela(&wa, &a_obj, &p_precos(ctx), Some(ch_shiny));
+                    let cfg = config::efetiva(d, nick);
+                    let mut precos = cfg["gemaPrecos"].clone();
+                    if let Some(v) = conta.welcome.get("nexusTokenPreco") {
+                        precos["bronzeToken"] = v.clone();
+                    }
+                    let g = Gemas {
+                        precos,
+                        ch_shiny,
+                        out_mult: crate::outlands::atual(&conta.welcome, &conta.ultimo)
+                            .map(|t| t.mult),
+                        token_chance: crate::outlands::chance_token(&conta.welcome),
+                    };
+                    let out = ctx
+                        .dex
+                        .por_nome(&pb.h_nome)
+                        .is_some_and(|s| eh_outland(Some(s.id)));
+                    let val = selecao::valor_atual(&wa, &a_obj, &p_precos(ctx), &g, out);
                     let luc = lucro_janela(&wa, &p_precos(ctx));
                     let mut novos = feitos.clone();
                     novos.push(prox);
@@ -1966,6 +1351,7 @@ pub fn motor_hunt_completo(
                         m.insert("conferido".into(), json!(true));
                         m.insert("t".into(), jn(ag));
                         ac.mexer_acao(vec![
+                            ("vigiar", json!(false)),
                             ("acomp", Value::Null),
                             ("resultado", Value::Object(m)),
                         ]);
@@ -2032,7 +1418,7 @@ pub fn motor_hunt_completo(
         ac.bloquear(&pb.h_nome, 3.0);
     }
     // trocarPara(alvo, explorando)
-    let slug = slug_de(conta, &alvo.nome, Some(alvo.nivel));
+    let slug = Some(alvo.slug.clone());
     let slug_atual = slug_de(conta, &pb.h_nome, Some(pb.h_lvl));
     let Some(slug) = slug else {
         ac.saida.decisoes.push(Decisao::Registro {
@@ -2047,8 +1433,7 @@ pub fn motor_hunt_completo(
         });
         return ac.saida;
     };
-    let w_t = janela(conta, TESTE_MIN * 60e3, ag, ag);
-    let antes = valor_janela(&w_t, p.obj, &p_precos(ctx), None).or(p.atual);
+    let antes = p.atual;
     let un = objetivo(p.obj).map_or("XP/h", |o| o.2);
     let (hn, hl) = (&pb.h_nome, nv(pb.h_lvl));
     let (bn, bl) = (&alvo.nome, nv(alvo.nivel));
@@ -2097,6 +1482,8 @@ pub fn motor_hunt_completo(
         "acaoNova",
         mapa_obj(vec![
             ("t", jn(ag)),
+            ("versao", json!(2)),
+            ("contexto", contexto_medida(conta)),
             ("auto", json!(true)),
             ("de", json!(pb.h_nome)),
             ("nivelDe", jn(pb.h_lvl)),
@@ -2129,6 +1516,25 @@ mod testes {
     use super::*;
 
     #[test]
+    fn shiny_usa_capturas_e_nao_abates() {
+        let c = ContaViva {
+            linhas: vec![
+                (
+                    1,
+                    0,
+                    "Abra derrotado! +1 xp treinador, +1 xp pokemon, +1 ouro".into(),
+                ),
+                (2, 60_000, "Capturado: Abra".into()),
+            ],
+            ..Default::default()
+        };
+        let w = janela(&c, 60_000.0, 60_000.0, 60_000.0);
+        assert_eq!(w.capturas, 1);
+        let v = valor_janela(&w, "shiny", &Precos::default(), Some(1.0 / 24000.0));
+        assert!((v.unwrap_or(0.0) - 0.06).abs() < 1e-9);
+    }
+
+    #[test]
     fn outland_usa_chance_e_tier_reais_sem_receita_inventada_de_fragmentos() {
         let g = Gemas {
             precos: json!({"bronzeToken":100,"fragChave":100000,"outlandBonus":1}),
@@ -2137,14 +1543,29 @@ mod testes {
             token_chance: Some(0.0001),
         };
         assert_eq!(
-            valor_gemas_h(Some(1000.0), &EspValor { d: Some(2001) }, &g),
+            valor_gemas_h(
+                Some(1000.0),
+                &EspValor {
+                    d: Some(2001),
+                    capturas_por_kill: None
+                },
+                &g
+            ),
             12.5
         );
         let sem_tier = Gemas {
             out_mult: None,
             ..g
         };
-        assert!(valor_gemas_h(Some(1000.0), &EspValor { d: Some(2001) }, &sem_tier).is_nan());
+        assert!(valor_gemas_h(
+            Some(1000.0),
+            &EspValor {
+                d: Some(2001),
+                capturas_por_kill: None
+            },
+            &sem_tier
+        )
+        .is_nan());
     }
 
     #[test]
@@ -2164,7 +1585,7 @@ mod testes {
             hunt_desde: r.agora_ms - 1_200_000,
             ultimo: json!({"hunt":"Furious Scizor · Outland 104 · nível 150","trLv":"1000","outlandTier":104,
                 "ativo":{"nome":"Charizard","lv":"Nv 1000","q":"1,5","pot":"P1"}}),
-            welcome: json!({"outlandTiers":[{"tier":104,"numero":4,"nivel":1000,"mult":1.25,"rotulo":"Outland 4"}],"chanceBossToken":0.0001,"nexusTokenPreco":100}),
+            welcome: json!({"hunts":[{"nome":"Furious Scizor","slug":"furious","nivel":150,"area":"outland"},{"nome":"Tribal Scizor","slug":"tribal","nivel":150,"area":"outland"}],"outlandTiers":[{"tier":104,"numero":4,"nivel":1000,"mult":1.25,"rotulo":"Outland 4"}],"chanceBossToken":0.0001,"nexusTokenPreco":100}),
             linhas: (0..25)
                 .map(|i| {
                     (
@@ -2211,29 +1632,6 @@ mod testes {
     }
 
     #[test]
-    fn curva_de_ouro_confere_com_o_jogo() {
-        assert_eq!(curva_ouro(1.0), 41.0);
-        assert!((curva_ouro(100.0) - 658.0).abs() < 1e-9);
-        assert!((curva_ouro(150.0) - 840.0).abs() < 5.0);
-        assert_eq!(curva_ouro(1e9), 31681.0);
-    }
-
-    #[test]
-    fn modelo_de_xp() {
-        assert!(modelo_xp(&[]).is_none());
-        let m = modelo_xp(&[(100.0, 1000.0)]).unwrap_or(ModeloXp {
-            k: 0.0,
-            a: 0.0,
-            min_h: 0.0,
-            max_h: 0.0,
-        });
-        assert_eq!(m.k, 1.0);
-        // dentro do envelope: a×h^k; fora, desconto crescente com piso 0,4.
-        assert!((m.xp(100.0) - 1000.0).abs() < 1e-6);
-        assert!(m.xp(1000.0) < 0.4 * 10000.0 + 1e-6);
-    }
-
-    #[test]
     fn calibracao_mediana_e_padrao() {
         let d = json!({"calib2": {"A": [
             {"r": 0.5, "sp": "X", "lvl": 100}, {"r": 0.9, "sp": "X", "lvl": 105},
@@ -2251,49 +1649,6 @@ mod testes {
         assert_eq!(g.map(|g| g.dados["r"].clone()), Some(json!(0.333)));
     }
 
-    #[test]
-    fn previsao_limita_kph_a_130_por_cento_do_real() {
-        let l = Luta {
-            kph: 1000.0,
-            tkill: Some(3.0),
-            dps_in: 1.0,
-            burst: 1.0,
-            hp: 10.0,
-            bate: 2.0,
-            pior: 0.1,
-        };
-        let real = Real {
-            kph: Some(100.0),
-            xp_kill: Some(50.0),
-            gold_kill: None,
-            pot_por_kill: Some(0.1),
-            bolas_por_kill: None,
-            hunt_lvl: 100.0,
-        };
-        let p = previsao(
-            &l,
-            &l,
-            100.0,
-            &real,
-            &Precos {
-                pot: 10.0,
-                ball: 1.0,
-            },
-            1.0,
-            None,
-        );
-        assert_eq!(p.kph, 130.0);
-        assert_eq!(p.xp_h, Some(50.0 * 130.0));
-    }
-
-    #[test]
-    fn objetivo_desconhecido_vira_xp() {
-        assert!(objetivo("xp").is_some());
-        assert!(objetivo("nada").is_none());
-    }
-
-    /// Valores do `S_.fight` / `xpModel` / `goldCurve` do legado (node, `web/sim.js`), com a
-    /// pokédex em `NEXUS_POKEDEX` (padrão: a do legado).
     #[test]
     #[ignore = "precisa da pokedex.json do legado"]
     fn simulador_contra_o_legado() {
@@ -2368,128 +1723,53 @@ mod testes {
                 "{n}"
             );
         }
-        let m = modelo_xp(&[(100.0, 900.0), (250.0, 4000.0)]).unwrap_or(ModeloXp {
-            k: 0.0,
-            a: 0.0,
-            min_h: 0.0,
-            max_h: 0.0,
-        });
-        assert_eq!((m.k, m.a), (1.6279274960325414, 0.4993298366231409));
-        assert_eq!(m.xp(120.0), 1210.9991464821185);
-        assert_eq!(m.xp(600.0), 6653.900730411548);
-        assert_eq!(m.xp(30.0), 50.71002378328106);
-        assert_eq!(curva_ouro(437.5), 1596.9294479476323);
     }
 
-    fn comparar(a: &Value, b: &Value, caminho: &str) -> Option<String> {
-        match (a, b) {
-            (Value::Number(x), Value::Number(y)) => {
-                let (x, y) = (
-                    x.as_f64().unwrap_or(f64::NAN),
-                    y.as_f64().unwrap_or(f64::NAN),
-                );
-                let tol = 1e-3 * x.abs().max(y.abs()).max(1.0);
-                ((x - y).abs() > tol).then(|| format!("{caminho}: {x} != {y}"))
-            }
-            (Value::Object(x), Value::Object(y)) => {
-                for (k, v) in x {
-                    match y.get(k) {
-                        None => return Some(format!("{caminho}.{k}: falta no legado")),
-                        Some(w) => {
-                            if let Some(e) = comparar(v, w, &format!("{caminho}.{k}")) {
-                                return Some(e);
-                            }
-                        }
-                    }
-                }
-                y.keys()
-                    .find(|k| !x.contains_key(*k))
-                    .map(|k| format!("{caminho}.{k}: falta no Nexus"))
-            }
-            (Value::Array(x), Value::Array(y)) => {
-                if x.len() != y.len() {
-                    return Some(format!("{caminho}: tamanho {} != {}", x.len(), y.len()));
-                }
-                x.iter()
-                    .zip(y)
-                    .enumerate()
-                    .find_map(|(i, (a, b))| comparar(a, b, &format!("{caminho}[{i}]")))
-            }
-            _ => (a != b).then(|| format!("{caminho}: {a} != {b}")),
-        }
-    }
-
-    /// Compara `plano_hunt` com o `planoHunt` do legado (`estado.json`) por conta.
-    /// `NEXUS_FIXTURES_MOTOR=/root/fixtures-motor-pc/<data>` e, opcional, `NEXUS_POKEDEX`.
+    /// Replay opcional: o novo seletor não deve mais reproduzir as heurísticas do legado.
     #[test]
     #[ignore = "precisa das fixtures reais em NEXUS_FIXTURES_MOTOR"]
-    fn plano_hunt_contra_o_legado() {
-        let Ok(pasta) = std::env::var("NEXUS_FIXTURES_MOTOR") else {
-            return;
-        };
-        let ler = |n: &str| -> Value {
-            let t = std::fs::read_to_string(format!("{pasta}/{n}")).unwrap_or_default();
-            serde_json::from_str(&t).unwrap_or(Value::Null)
+    fn plano_hunt_replay_com_catalogo_do_jogo() -> Result<(), Box<dyn std::error::Error>> {
+        let pasta = std::env::var("NEXUS_FIXTURES_MOTOR")?;
+        let ler = |n: &str| -> Result<Value, Box<dyn std::error::Error>> {
+            Ok(serde_json::from_slice(&std::fs::read(format!(
+                "{pasta}/{n}"
+            ))?)?)
         };
         let pokedex = std::env::var("NEXUS_POKEDEX")
             .unwrap_or_else(|_| "/opt/holodex-nexus/web/pokedex.json".into());
-        let dex = Pokedex::de_json(&std::fs::read_to_string(pokedex).unwrap_or_default());
-        let Ok(dex) = dex else {
-            panic!("pokédex ilegível")
-        };
-        let janela_json = ler("nexus-janela.json");
-        let d = config::carregar(&ler("nexus-dados.json"));
-        let estado = ler("estado.json");
-        let agora = janela_json["agora"].as_i64().unwrap_or(0);
+        let dex = Pokedex::de_json(&std::fs::read_to_string(pokedex)?)?;
+        let j = ler("nexus-janela.json")?;
+        let d = config::carregar(&ler("nexus-dados.json")?);
         let r = Relogio {
-            agora_ms: agora,
+            agora_ms: j["agora"].as_i64().unwrap_or(0),
             fuso_ms: -3 * 3_600_000,
         };
-        let mut falhas = Vec::new();
-        for cj in janela_json["contas"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-        {
-            let Some(conta) = ContaViva::de_json(&cj) else {
-                continue;
-            };
-            let nick = conta.nick.clone();
-            let legado = estado["contas"]
-                .as_array()
-                .and_then(|a| a.iter().find(|c| c["nick"] == nick.as_str()))
-                .map(|c| c["plano"]["hunt"].clone());
-            let Some(legado) = legado else { continue };
-            let k = constantes_da_conta(&conta);
-            let compra = estado["contas"]
-                .as_array()
-                .and_then(|a| a.iter().find(|c| c["nick"] == nick.as_str()))
-                .map(|c| c["plano"]["compra"].clone())
-                .unwrap_or(Value::Null);
+        let contas = j["contas"].as_array().ok_or("faltam contas")?;
+        assert!(!contas.is_empty());
+        for v in contas {
+            let c = ContaViva::de_json(v).ok_or("conta inválida")?;
+            let k = constantes_da_conta(&c);
             let ctx = ContextoHunt {
                 dex: &dex,
                 k: &k,
-                precos: Precos {
-                    pot: js::mais(compra.get("pocaoPreco")),
-                    ball: js::mais(compra.get("bolaPreco")),
-                },
+                precos: Precos::default(),
                 limite_rodizio: None,
                 equipe_no_comando: false,
                 rodizio_volta: false,
-                hunt_desde: js::mais(d.pointer(&format!("/linhasCache/{nick}/huntDesde"))).max(0.0),
+                hunt_desde: c.hunt_desde as f64,
             };
-            let nexus = plano_hunt(&d, &r, &conta, &ctx);
-            match comparar(&nexus, &legado, "") {
-                None => eprintln!(
-                    "{nick}: IGUAL ({} chaves)",
-                    nexus.as_object().map_or(0, Map::len)
-                ),
-                Some(e) => {
-                    eprintln!("{nick}: DIFERE {e}");
-                    falhas.push(format!("{nick}: {e}"));
-                }
+            let p = plano_hunt(&d, &r, &c, &ctx);
+            assert_eq!(p["versao"], 2);
+            let tr = num(c.ultimo.get("trLv")).unwrap_or(0.0);
+            for cand in p["candidatos"].as_array().ok_or("falta ranking")? {
+                assert!(cand["nivel"].as_f64().is_some_and(|n| n <= tr));
+                assert!(c.welcome["hunts"]
+                    .as_array()
+                    .is_some_and(|hs| hs.iter().any(|h| h["slug"] == cand["slug"]
+                        && h["nivel"].as_f64() == cand["nivel"].as_f64())));
+                assert!(cand["val"].as_f64().is_some_and(f64::is_finite));
             }
         }
-        assert!(falhas.is_empty(), "{falhas:?}");
+        Ok(())
     }
 }

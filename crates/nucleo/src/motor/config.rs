@@ -96,6 +96,9 @@ pub fn efetiva(d: &Value, nick: &str) -> Value {
                 e.shift_remove("objetivo");
                 e.shift_remove("soOutland");
             }
+            if k == "hunt" && o.pointer("/hunt/ativoManual") == Some(&Value::Bool(true)) {
+                e.shift_remove("ativo");
+            }
             let novo = espalhar(o.get(&k), Some(&Value::Object(e)));
             if let Value::Object(m) = &mut o {
                 m.insert(k, novo);
@@ -111,6 +114,13 @@ pub fn efetiva(d: &Value, nick: &str) -> Value {
             m.insert("rodizio".into(), novo);
         }
     }
+    // Valores antigos como 4 (400% do HP) não são um limite de risco válido.
+    let risco = o
+        .pointer("/hunt/maxPiorPct")
+        .and_then(Value::as_f64)
+        .filter(|n| (0.01..=0.95).contains(n))
+        .unwrap_or(0.4);
+    o["hunt"]["maxPiorPct"] = json!(risco);
     o
 }
 
@@ -210,5 +220,15 @@ mod testes {
             .map(|m| m.keys().collect())
             .unwrap_or_default();
         assert_eq!(chaves.last().map(|s| s.as_str()), Some("pausa"));
+    }
+
+    #[test]
+    fn desligar_hunt_manualmente_tem_prioridade_sobre_papel_farm() {
+        let d = json!({"config":{"Ana":{"papel":{"tipo":"farm"},"hunt":{"ativo":false,"ativoManual":true,"objetivo":"xp","objetivoManual":true}}}});
+        let c = efetiva(&d, "Ana");
+        assert_eq!(c["hunt"]["ativo"], false);
+        assert_eq!(c["hunt"]["objetivo"], "xp");
+        let invalido = json!({"config":{"Ana":{"hunt":{"maxPiorPct":4}}}});
+        assert_eq!(efetiva(&invalido, "Ana")["hunt"]["maxPiorPct"], 0.4);
     }
 }

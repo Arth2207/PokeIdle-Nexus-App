@@ -284,6 +284,25 @@ pub fn de_ficha<'a>(
         ..Opcoes::default()
     };
     let mut mon = Combatente::novo(sp, nivel, &op, k);
+    aplicar_stats_recebidos(&mut mon, f);
+    Some((mon, sp))
+}
+
+/// `x || padrao` para números: 0 e `NaN` caem no padrão.
+fn ou(x: f64, padrao: f64) -> f64 {
+    if x == 0.0 || x.is_nan() {
+        padrao
+    } else {
+        x
+    }
+}
+
+fn ou_zero(x: f64) -> f64 {
+    ou(x, 0.0)
+}
+
+/// Usa atributos já calculados pelo jogo (incluindo equipamentos/refinamentos).
+pub fn aplicar_stats_recebidos(mon: &mut Combatente, f: &Value) {
     if let Some(s) = f.get("stats").filter(|s| js::verdadeiro(Some(s))) {
         let v = ["hp", "atk", "def", "spAtk", "spDef", "speed"].map(|c| js::mais(s.get(c)));
         if v.iter().all(|&x| x > 0.0) {
@@ -300,18 +319,72 @@ pub fn de_ficha<'a>(
             mon.hp = if max_hp > 0.0 { max_hp } else { hp * 12.0 };
         }
     }
-    Some((mon, sp))
 }
 
-/// `x || padrao` para números: 0 e `NaN` caem no padrão.
-fn ou(x: f64, padrao: f64) -> f64 {
-    if x == 0.0 || x.is_nan() {
-        padrao
-    } else {
-        x
+/// Z-Move da ficha; poder depende da modalidade (hunt/boss 2800, PvP 1800).
+/// A área do golpe não é convertida em multiplicador fictício de dano.
+pub fn aplicar_z_move(mon: &mut Combatente, f: &Value, poder: f64) {
+    let tm = &f["tmElemental"];
+    let tipo = tm
+        .as_str()
+        .or_else(|| tm.get("tipo").and_then(Value::as_str))
+        .and_then(|t| t.to_uppercase().parse::<Tipo>().ok());
+    if let Some(tipo) = tipo {
+        mon.golpes.retain(|g| g.nome != "Z-Move");
+        mon.golpes.push(Golpe {
+            nome: "Z-Move".into(),
+            poder,
+            recarga: 60.0,
+            categoria: if f["tmFisico"] == true || tm["categoria"] == "F" {
+                Categoria::Fisico
+            } else {
+                Categoria::Especial
+            },
+            tipo,
+        });
     }
 }
 
-fn ou_zero(x: f64) -> f64 {
-    ou(x, 0.0)
+/// Multiplicador explícito de atributos na hunt; aplicado a ambos os lados no tipo do dia.
+pub fn multiplicar_atributos(mon: &mut Combatente, mult: f64) {
+    mon.st.hp *= mult;
+    mon.st.atk *= mult;
+    mon.st.def *= mult;
+    mon.st.spa *= mult;
+    mon.st.spd *= mult;
+    mon.st.spe *= mult;
+    mon.hp *= mult;
+}
+
+#[cfg(test)]
+mod testes_ficha_atual {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn atributos_reais_e_z_move_respeitam_ficha_sem_inventar_area(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let dex = Pokedex::de_valor(
+            json!([{"d":6,"n":"Charizard","t":["FIRE","FLYING"],"s":[78,84,78,109,85,100],"m":[]}]),
+        )?;
+        let f = json!({"speciesId":6,"level":100,"shiny":true,"stats":{"hp":100,"atk":200,"def":300,"spAtk":400,"spDef":500,"speed":600},"maxHp":1200,"tmElemental":"GHOST","tmFisico":true});
+        let (mut mon, _) = de_ficha(&dex, &f, &Constantes::wiki()).ok_or("ficha")?;
+        assert_eq!(
+            mon.st.atk, 200.0,
+            "stats recebidos não são multiplicados outra vez por shiny"
+        );
+        aplicar_z_move(&mut mon, &f, 2800.0);
+        assert_eq!(mon.golpes[0].categoria, Categoria::Fisico);
+        assert_eq!(
+            mon.golpes[0].tipo,
+            Tipo::Ghost,
+            "tipo permanente pode diferir da espécie atual"
+        );
+        assert_eq!(mon.golpes[0].recarga, 60.0);
+        aplicar_z_move(&mut mon, &f, 2800.0);
+        assert_eq!(mon.golpes.len(), 1);
+        multiplicar_atributos(&mut mon, 2.0);
+        assert_eq!(mon.hp, 2400.0);
+        assert_eq!(mon.st.atk, 400.0);
+        Ok(())
+    }
 }

@@ -9,7 +9,14 @@ use crate::comp::{carregado, Abas, Barras, Calor, Kpi, Linha, Tabela, Veredito};
 use crate::dados::{curto, inteiro, lista, num, recurso, txt};
 use crate::Estado;
 
-const ABAS: &[&str] = &["Sessão ao vivo", "Mapa de hunts", "Outlands", "Safari", "Shiny"];
+const ABAS: &[&str] = &[
+    "Meta 3000",
+    "Sessão ao vivo",
+    "Mapa de hunts",
+    "Outlands",
+    "Safari",
+    "Shiny",
+];
 const METRICAS: &[&str] = &["Receita/h", "Ouro/h", "XP/h", "Abates/h"];
 
 /// "furious_scizor" → "Furious Scizor".
@@ -46,6 +53,47 @@ fn vs(v: f64, m: Option<f64>) -> (String, Option<bool>) {
         ),
         None => ("sem média ainda".to_owned(), None),
     }
+}
+
+fn meta_3000(p: &Value) -> AnyView {
+    let horas = num(p, "horas");
+    let duracao = horas.map_or("Aguardando amostra".into(), |h| {
+        if h == 0.0 {
+            "Meta atingida".into()
+        } else {
+            format!(
+                "{} dias e {} h",
+                (h / 24.0).floor() as u64,
+                (h % 24.0).ceil() as u64
+            )
+        }
+    });
+    let chegada = num(p, "chegadaEm")
+        .filter(|t| t.is_finite() && *t <= 8.64e15)
+        .map_or("Aguardando amostra".into(), |t| {
+            let data = String::from(
+                js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(t - 3.0 * 3.6e6))
+                    .to_iso_string(),
+            );
+            let dia: String = data.chars().take(10).collect();
+            format!("{dia} às {} (Brasília)", hora_min(t))
+        });
+    let progresso = num(p, "progressoPct").unwrap_or(0.0);
+    view! {
+        <div class="caixa">
+            <div class="caixa-t">"Treinador · rumo ao nível 3000"</div>
+            <div class="kpis">
+                <Kpi titulo="Nível atual" valor=num(p,"nivel").map_or("—".into(),inteiro) unidade="/ 3000" />
+                <Kpi titulo="XP restante" valor=num(p,"xpFalta").map_or("—".into(),curto) />
+                <Kpi titulo="Ritmo observado" valor=num(p,"xpH").map_or("—".into(),curto) unidade="XP de treinador/h" />
+                <Kpi titulo="Tempo até a meta" valor=duracao ajuda="Horas de caçada contínua no ritmo atual." />
+            </div>
+            <div class="secao">{format!("Chegada prevista: {chegada}")}</div>
+            <progress max="100" value=progresso style="width:100%;height:18px" aria-label="Progresso de XP até treinador 3000"></progress>
+            <div class="dica">{format!("{progresso:.2}% do XP necessário · {} abates · {:.1} min de amostra", inteiro(num(p,"abates").unwrap_or(0.0)),num(p,"amostraMin").unwrap_or(0.0))}</div>
+            <div class="dica">{txt(p,"motivo")}</div>
+        </div>
+    }.into_any()
 }
 
 fn sessao(c: &Value, hist: Option<Value>, nick: &str) -> AnyView {
@@ -301,7 +349,13 @@ fn mapa(c: &Value, metrica: &'static str, tickers: &[Value]) -> AnyView {
 #[component]
 pub fn Cacada(e: Estado) -> impl IntoView {
     let versao = RwSignal::new(0u32);
-    let aba = RwSignal::new("Sessão ao vivo");
+    let aba = RwSignal::new("Meta 3000");
+    let progressao = recurso(e, versao, move || {
+        Some(format!(
+            "/api/progressao?conta={}",
+            rotulo_ativo(e).unwrap_or_default()
+        ))
+    });
     let metrica = RwSignal::new("Receita/h");
     let cacada = recurso(e, versao, move || {
         Some(format!(
@@ -316,6 +370,7 @@ pub fn Cacada(e: Estado) -> impl IntoView {
         {cabecalho("Caçada", "Onde caçar, e a caçada atual está rendendo o esperado?", versao)}
         <Abas opcoes=ABAS ativa=aba />
         {move || match aba.get() {
+            "Meta 3000" => carregado(progressao.get(), move |p| meta_3000(&p)),
             "Sessão ao vivo" => carregado(cacada.get(), move |c| {
                 let h = hist.get().and_then(|h| h.and_then(Result::ok));
                 sessao(&c, h, &nick_ativo(e).unwrap_or_default())

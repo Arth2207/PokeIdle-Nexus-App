@@ -154,9 +154,11 @@ pub async fn alterar_config(
     let r = sqlx::query(
         "UPDATE nexus.motor_config
             SET dados = jsonb_set(dados, ARRAY[$3], $4::jsonb) ||
-                  CASE WHEN $2='hunt' AND $3='objetivo' THEN '{\"objetivoManual\":true}'::jsonb ELSE '{}'::jsonb END,
+                  CASE WHEN $2='hunt' AND $3='objetivo' THEN '{\"objetivoManual\":true}'::jsonb
+                       WHEN $2='hunt' AND $3='ativo' THEN '{\"ativoManual\":true}'::jsonb ELSE '{}'::jsonb END,
                 texto = (jsonb_set(dados, ARRAY[$3], $4::jsonb) ||
-                  CASE WHEN $2='hunt' AND $3='objetivo' THEN '{\"objetivoManual\":true}'::jsonb ELSE '{}'::jsonb END)::json
+                  CASE WHEN $2='hunt' AND $3='objetivo' THEN '{\"objetivoManual\":true}'::jsonb
+                       WHEN $2='hunt' AND $3='ativo' THEN '{\"ativoManual\":true}'::jsonb ELSE '{}'::jsonb END)::json
           WHERE nick = $1 AND secao = $2 AND dados ? $3
             AND jsonb_typeof(dados->$3) = jsonb_typeof($4::jsonb)",
     )
@@ -548,6 +550,18 @@ pub async fn gravar_janela(db: &PgPool, conta: &str, janela: &Value) -> Result<(
     .execute(db)
     .await?;
     Ok(())
+}
+
+/// Leitura recente de uma conta para a previsão de XP do treinador.
+pub async fn janela_progressao(db: &PgPool, conta: &str) -> Result<Option<Value>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT janela FROM nexus.motor_janela
+        WHERE em > now() - interval '2 minutes'
+          AND (lower(conta)=lower($1) OR lower(janela->>'nick')=lower($1)) LIMIT 1",
+    )
+    .bind(conta)
+    .fetch_optional(db)
+    .await
 }
 
 /// Janelas recebidas nos últimos `max_s` segundos, com o login de volta em `welcome`.

@@ -332,6 +332,15 @@ pub fn shiny_bolas(
     alerta(d, laco, r, pedido).into_iter().collect()
 }
 
+/// Preserva uma sessão paga em vez de trocar sua área automaticamente.
+pub fn safari_pago(conta: &ContaViva) -> bool {
+    conta.ultimo.get("safari").is_some_and(|v| match v {
+        Value::Null | Value::Bool(false) => false,
+        Value::Number(n) => n.as_f64().is_some_and(|n| n > 0.0),
+        _ => true,
+    })
+}
+
 #[cfg(test)]
 mod testes {
     use super::*;

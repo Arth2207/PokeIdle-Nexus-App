@@ -12,6 +12,7 @@ pub mod config;
 pub mod jogo;
 pub mod laco;
 pub mod leitura;
+pub mod progressao;
 pub mod regras;
 pub mod veredito;
 

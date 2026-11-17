@@ -128,7 +128,22 @@ pub async fn ouro_cacada(
 /// `GET /api/motor/regras`: as regras do motor de cada conta (para ligar/desligar na tela).
 pub async fn regras(State(estado): State<Estado>) -> Response {
     match persistencia::motor::config_contas(&estado.db).await {
-        Ok(l) => Json(json!({ "regras": l })).into_response(),
+        Ok(mut l) => {
+            let mut config = serde_json::Map::new();
+            for r in &l {
+                let nick = r["nick"].as_str().unwrap_or_default();
+                let secao = r["secao"].as_str().unwrap_or_default();
+                config.entry(nick.to_owned()).or_insert_with(|| json!({}))[secao] =
+                    r["dados"].clone();
+            }
+            let d = json!({"config":config});
+            for r in &mut l {
+                let efetiva =
+                    nucleo::motor::config::efetiva(&d, r["nick"].as_str().unwrap_or_default());
+                r["efetiva"] = efetiva[r["secao"].as_str().unwrap_or_default()].clone();
+            }
+            Json(json!({"regras":l})).into_response()
+        }
         Err(e) => {
             tracing::warn!(erro = %e, "regras do motor");
             erro(StatusCode::SERVICE_UNAVAILABLE, "banco indisponível")
@@ -138,9 +153,22 @@ pub async fn regras(State(estado): State<Estado>) -> Response {
 
 /// `POST /api/motor/config` `{nick, secao, campo, valor}`: liga/desliga ou ajusta uma regra
 /// do motor de uma conta. Só troca campo que já existe, por valor do mesmo tipo.
-pub async fn alterar_config(State(estado): State<Estado>, Json(c): Json<Value>) -> Response {
+pub async fn alterar_config(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Json(c): Json<Value>,
+) -> Response {
     let t = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or_default();
     let (nick, secao, campo) = (t("nick"), t("secao"), t("campo"));
+    if cliente
+        .as_ref()
+        .is_some_and(|Extension(c)| c.nick_permitido(Some(nick)).is_err())
+    {
+        return erro(
+            StatusCode::FORBIDDEN,
+            "este token só altera a própria conta",
+        );
+    }
     let Some(valor) = c
         .get("valor")
         .filter(|v| v.is_boolean() || v.is_number() || v.is_string())
@@ -164,6 +192,41 @@ pub async fn alterar_config(State(estado): State<Estado>, Json(c): Json<Value>) 
         ),
         Err(e) => {
             tracing::warn!(erro = %e, "alterar regra do motor");
+            erro(StatusCode::SERVICE_UNAVAILABLE, "banco indisponível")
+        }
+    }
+}
+
+pub async fn progressao(
+    State(estado): State<Estado>,
+    cliente: Option<Extension<Cliente>>,
+    Query(p): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if cliente
+        .as_ref()
+        .is_some_and(|Extension(c)| c.conta.is_some())
+    {
+        return erro(
+            StatusCode::FORBIDDEN,
+            "relatório exige token sem restrição de conta",
+        );
+    }
+    let conta = p.get("conta").map(String::as_str).unwrap_or_default();
+    match persistencia::motor::janela_progressao(&estado.db, conta).await {
+        Ok(Some(j)) => match nucleo::motor::regras::ContaViva::de_json(&j) {
+            Some(c) => Json(nucleo::motor::progressao::prever(
+                &c,
+                crate::bolsa::agora_ms(),
+            ))
+            .into_response(),
+            None => erro(StatusCode::SERVICE_UNAVAILABLE, "leitura da conta inválida"),
+        },
+        Ok(None) => Json(
+            json!({"meta":3000,"motivo":"Abra a conta no app para receber nível e XP recentes."}),
+        )
+        .into_response(),
+        Err(e) => {
+            tracing::warn!(erro=%e,"progressão do treinador");
             erro(StatusCode::SERVICE_UNAVAILABLE, "banco indisponível")
         }
     }

@@ -49,6 +49,7 @@ pub fn num_texto(s: &str) -> Option<f64> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Janela {
     pub kills: usize,
+    pub capturas: usize,
     /// Abates por hora (`null` com menos de 3 abates ou menos de 1 min coberto).
     pub kph: Option<f64>,
     pub span: f64,
@@ -62,6 +63,7 @@ pub struct Janela {
 
 pub fn janela(conta: &ContaViva, ms: f64, ate: f64, agora: f64) -> Janela {
     let desde = ate - ms;
+    let mut capturas = 0;
     let (mut kills, mut xp, mut gold, mut pot, mut bolas, mut desm) =
         (0usize, 0.0, 0.0, 0u64, 0u64, 0u64);
     for (_, _, x) in conta
@@ -78,6 +80,9 @@ pub fn janela(conta: &ContaViva, ms: f64, ate: f64, agora: f64) -> Janela {
         }
         if casa(&CAPTURA_OU_FUGA, x) {
             bolas += 1;
+            if !x.to_lowercase().contains("escapou e sumiu") {
+                capturas += 1;
+            }
         } else if casa(&POCAO, x) {
             pot += 1;
         } else if casa(&DESMAIO, x) {
@@ -91,6 +96,7 @@ pub fn janela(conta: &ContaViva, ms: f64, ate: f64, agora: f64) -> Janela {
     let por = |v: f64| (kills > 0).then(|| v / kills as f64);
     Janela {
         kills,
+        capturas,
         kph,
         span,
         xp_kill: por(xp),

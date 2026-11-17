@@ -45,7 +45,7 @@ fn regra_pt(secao: &str) -> (&'static str, &'static str) {
         ),
         "hunt" => (
             "Troca de hunt",
-            "Muda para a hunt que rende mais no objetivo escolhido.",
+            "Compara as hunts liberadas e só testa uma troca quando prevê melhora no objetivo escolhido.",
         ),
         "safari" => (
             "Safari · trocar após 1 captura",
@@ -144,23 +144,33 @@ fn cartao_regra(
     let secao = txt(&r, "secao");
     let (nome, expl) = regra_pt(&secao);
     let d = r
-        .get("dados")
+        .get("efetiva")
+        .or_else(|| r.get("dados"))
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let ativo = d.get("ativo").and_then(Value::as_bool);
+    let ativo = r
+        .pointer("/efetiva/ativo")
+        .or_else(|| d.get("ativo"))
+        .and_then(Value::as_bool);
     let (n2, s2) = (nick.clone(), secao.clone());
     let opcoes: Vec<(String, Value)> = d
         .iter()
         .filter(|(k, v)| {
             k.as_str() != "ativo"
                 && k.as_str() != "objetivoManual"
+                && k.as_str() != "ativoManual"
+                && !(secao == "hunt" && k.as_str() == "explorar")
                 && (v.is_boolean() || v.is_number())
         })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let (ng, sg) = (nick.clone(), secao.clone());
-    let objetivo = txt(&r["dados"], "objetivo");
+    let objetivo = r
+        .pointer("/efetiva/objetivo")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| r["dados"]["objetivo"].as_str().unwrap_or("xp"))
+        .to_owned();
     view! {
         <div class="regra" class:desligada=ativo == Some(false)>
             <div class="regra-topo">
@@ -168,32 +178,48 @@ fn cartao_regra(
                 {ativo.map(|a| chave(a, move || alterar(e, versao, msg, n2.clone(), s2.clone(), "ativo".into(), Value::Bool(!a))))}
             </div>
             {(secao == "hunt").then(|| view! {
-                <label class="op"><span>"Objetivo da conta"</span>
-                    <select prop:value=objetivo on:change=move |ev| alterar(e,versao,msg,ng.clone(),sg.clone(),"objetivo".into(),Value::String(event_target_value(&ev)))>
+                <label class="op" style="display:block;margin-top:12px"><span>"Objetivo da troca"</span>
+                    <select class="caixa" style="margin-top:6px" aria-label="Objetivo da troca de hunt" prop:value=objetivo on:change=move |ev| alterar(e,versao,msg,ng.clone(),sg.clone(),"objetivo".into(),Value::String(event_target_value(&ev)))>
                         <option value="xp">"XP"</option><option value="equilibrio">"XP sem prejuízo"</option>
                         <option value="lucro">"Lucro em Coins"</option><option value="gemas">"Gemas (estimativa parcial de tokens nas Outlands)"</option><option value="shiny">"Shiny"</option>
                     </select>
                 </label>
                 <div class="dica">"Sua escolha de objetivo tem prioridade sobre o papel da conta; não liga vendas ao NPC."</div>
+                <div class="dica">"Mede pelo menos 2 minutos e 20 abates antes de comparar. Após trocar, confirma o rendimento por pelo menos 5 minutos. Se piorar, retorna à hunt anterior."</div>
             })}
             <div class="regra-op">
                 {opcoes.into_iter().map(|(k, v)| {
                     let (n3, s3, k3) = (nick.clone(), secao.clone(), k.clone());
-                    let rotulo = campo_pt(&k);
+                    let rotulo = if secao == "hunt" {
+                        match k.as_str() {
+                            "margem" => "Melhora mínima (%)".into(),
+                            "intervaloMin" => "Intervalo entre trocas (min)".into(),
+                            "maxPiorPct" => "Risco em 5 s (% do HP)".into(),
+                            "soOutland" => "Somente Outlands".into(),
+                            _ => campo_pt(&k),
+                        }
+                    } else { campo_pt(&k) };
                     match v {
                         Value::Bool(b) => view! {
                             <label class="op">{chave(b, move || alterar(e, versao, msg, n3.clone(), s3.clone(), k3.clone(), Value::Bool(!b)))}<span>{rotulo}</span></label>
                         }.into_any(),
-                        n => view! {
+                        n => {
+                            let percentual=secao=="hunt" && (k=="margem" || k=="maxPiorPct");
+                            let valor=if percentual {format!("{}",n.as_f64().unwrap_or(0.0)*100.0)} else {n.to_string()};
+                            view! {
                             <label class="op"><span>{rotulo}</span>
-                                <input class="num" type="number" step="any" value=n.to_string()
+                                <input class="num" type="number" step="any" value=valor
                                     on:change=move |ev| {
                                         if let Ok(x) = event_target_value(&ev).parse::<f64>() {
+                                            let x=if percentual {
+                                                if k3=="maxPiorPct" { x.clamp(1.0,95.0)/100.0 } else { x.clamp(5.0,100.0)/100.0 }
+                                            } else { x };
                                             alterar(e, versao, msg, n3.clone(), s3.clone(), k3.clone(), serde_json::json!(x));
                                         }
                                     } />
                             </label>
-                        }.into_any(),
+                        }.into_any()
+                        },
                     }
                 }).collect_view()}
             </div>
@@ -224,7 +250,7 @@ fn controles(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
                         <thead><tr><th>"Regra"</th>{contas.iter().map(|c| view! { <th>{c.clone()}</th> }).collect_view()}</tr></thead>
                         <tbody>{secoes.into_iter().map(|s| {
                             let linha: Vec<_> = contas.iter().map(|c| {
-                                let a = todas_r.iter().find(|r| txt(r, "nick") == *c && txt(r, "secao") == s).and_then(|r| r.pointer("/dados/ativo")).and_then(Value::as_bool);
+                                let a = todas_r.iter().find(|r| txt(r, "nick") == *c && txt(r, "secao") == s).and_then(|r| r.pointer("/efetiva/ativo").or_else(||r.pointer("/dados/ativo"))).and_then(Value::as_bool);
                                 let (c2, s2) = (c.clone(), s.clone());
                                 view! { <td>{a.map(|a| chave(a, move || alterar(e, versao, msg, c2.clone(), s2.clone(), "ativo".into(), Value::Bool(!a))))}</td> }
                             }).collect();

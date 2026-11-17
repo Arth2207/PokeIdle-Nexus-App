@@ -12,8 +12,8 @@ pub mod mercado;
 pub mod outlands;
 pub mod pregao;
 pub mod pvp;
-pub mod saude;
 pub mod safari;
+pub mod saude;
 pub mod visao;
 
 use leptos::prelude::*;
