@@ -286,28 +286,7 @@ function renderizar() {
     }
   }
   ctx.setLineDash([]);
-  const destacados = [];
-  let miniaturas = 0;
-  for (const setor of setores) {
-    for (const [indice,p] of setor.pontos.entries()) {
-      const ativa = selecao?.sp === p.sp || selecao?.grupo?.ids.has(p.sp.d);
-      if (ativa) destacados.push(p);
-      const raio = ativa ? 10 : p.sp.uso ? 3 + Math.min(5, Math.log2(p.sp.uso + 1) / 2) : 1.7;
-      circulo(p.x,p.y,raio,ativa ? '#ffe19a' : tipos[p.sp.tipo][1] + (selecao || !p.sp.uso ? '66' : 'ed'));
-      const emTela = x + p.x * escala > -12 && x + p.x * escala < largura + 12
-        && y + p.y * escala > -12 && y + p.y * escala < altura + 12;
-      if (!ativa && emTela && miniaturas < 150 && (indice < 5 || consulta || escala > 1.5)) {
-        miniaturas++;
-        const img = imagem(p.sp.d);
-        const lado = p.sp.uso ? 25 : 19;
-        if (img.complete && img.naturalWidth) {
-          ctx.globalAlpha = selecao ? .38 : p.sp.uso || consulta ? .95 : .72;
-          ctx.drawImage(img,p.x-lado/2,p.y-lado/2,lado,lado);
-          ctx.globalAlpha = 1;
-        }
-      }
-    }
-  }
+  desenharEspecies(escala,x,y);
   const resumo = setores.reduce((total, s) => total + s.pontos.length, 0);
   rotulo('POKÉDEX',0,-2,'#edf4ff',14);
   rotulo(numero.format(resumo) + ' espécies',0,16,'#a7b7ce',11);
@@ -320,21 +299,78 @@ function renderizar() {
         ativo ? '#ffd2ed' : '#badbdc',11, Math.abs(ext.x) < 35 ? 'center' : ext.x > 0 ? 'left' : 'right');
     }
   }
-  const rotulos = [];
-  for (const p of destacados.sort((a,b) => a.y - b.y)) {
-    const img = imagem(p.sp.d);
-    if (img.complete && img.naturalWidth) ctx.drawImage(img,p.x-9,p.y-9,18,18);
-    const x = p.x + (p.x < 0 ? -14 : 14);
-    let y = p.y + 4;
-    const lado = p.x < 0 ? 'right' : 'left';
-    for (const anterior of rotulos) {
-      if (anterior.lado === lado && Math.abs(x - anterior.x) < 120 && Math.abs(y - anterior.y) < 16) {
-        y = anterior.y + 16;
-      }
+}
+
+function desenharEspecies(escala, centroX, centroY) {
+  const pontos = [];
+  for (const setor of setores) {
+    for (const [indice,p] of setor.pontos.entries()) {
+      const x = centroX + p.x * escala;
+      const y = centroY + p.y * escala;
+      if (x < 0 || x > largura || y < 0 || y > altura) continue;
+      const ativo = selecao?.sp === p.sp || selecao?.grupo?.ids.has(p.sp.d);
+      pontos.push({p, x, y, ativo: Boolean(ativo), miniatura: indice < 3 || consulta || zoom >= 1.5});
     }
-    rotulos.push({x,y,lado});
-    rotulo(p.sp.n,x,y,'#ffe19a',13,lado);
   }
+  pontos.sort((a,b) => Number(b.ativo) - Number(a.ativo) || b.p.sp.uso - a.p.sp.uso);
+  const ocupados = [];
+  const spritesVisiveis = [];
+  const pontosSimples = [];
+  const cabe = (x,y,w,h) => x >= 0 && y >= 0 && x+w <= largura && y+h <= altura
+    && !ocupados.some(r => x < r.x+r.w && x+w > r.x && y < r.y+r.h && y+h > r.y);
+
+  for (const marca of pontos) {
+    const {p,x,y,ativo,miniatura} = marca;
+    const lado = ativo ? 26 : p.sp.uso ? 21 : 17;
+    const espaco = lado + (ativo ? 8 : 10);
+    if ((!ativo && (!miniatura || spritesVisiveis.length >= 90))
+        || !cabe(x-espaco/2,y-espaco/2,espaco,espaco)) {
+      pontosSimples.push(marca);
+      continue;
+    }
+    ocupados.push({x:x-espaco/2,y:y-espaco/2,w:espaco,h:espaco});
+    spritesVisiveis.push({...marca,lado});
+  }
+
+  for (const {p,x,y,ativo} of pontosSimples) {
+    const raio = ativo ? 3.5 : p.sp.uso ? 2.5 : 1.35;
+    if (!cabe(x-raio,y-raio,raio*2,raio*2)) continue;
+    const cor = ativo ? '#ffe19a' : tipos[p.sp.tipo][1] + (selecao ? '38' : p.sp.uso ? 'a0' : '68');
+    circulo(p.x,p.y,raio/escala,cor);
+  }
+  for (const {p,lado,ativo} of spritesVisiveis) {
+    const img = imagem(p.sp.d);
+    if (img.complete && img.naturalWidth) {
+      const medida = lado / escala;
+      ctx.globalAlpha = selecao && !ativo ? .38 : .95;
+      ctx.drawImage(img,p.x-medida/2,p.y-medida/2,medida,medida);
+      ctx.globalAlpha = 1;
+    } else {
+      circulo(p.x,p.y,(ativo ? 4 : 2.5)/escala,ativo ? '#ffe19a' : tipos[p.sp.tipo][1]+'a0');
+    }
+  }
+
+  // Rótulos também disputam espaço em pixels para continuarem legíveis ao ampliar.
+  ctx.save();
+  ctx.setTransform(mapa.width/largura,0,0,mapa.height/altura,0,0);
+  ctx.font = '600 12px system-ui';
+  for (const {p,x,y,ativo,lado} of spritesVisiveis) {
+    if (!ativo) continue;
+    const nome = p.sp.n;
+    const w = ctx.measureText(nome).width + 8;
+    const h = 18;
+    const margem = lado/2 + 5;
+    const tentativas = [
+      [x+margem,y-h/2], [x-margem-w,y-h/2],
+      [x-w/2,y+margem], [x-w/2,y-margem-h],
+    ];
+    const local = tentativas.find(([lx,ly]) => cabe(lx,ly,w,h));
+    if (!local) continue;
+    const [lx,ly] = local;
+    ocupados.push({x:lx,y:ly,w,h});
+    rotulo(nome,lx+4,ly+13,'#ffe19a',12,'left');
+  }
+  ctx.restore();
 }
 
 function medir() {
