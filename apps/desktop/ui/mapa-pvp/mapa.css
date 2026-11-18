@@ -42,11 +42,26 @@ html {background:var(--room-lo)}
 body {
   margin:0;
   min-height:100vh;
+  isolation:isolate;
   color:var(--ink);
   font:14px/1.5 var(--f-text);
   font-variant-numeric:tabular-nums;
   background:radial-gradient(ellipse at 20% 15%,color-mix(in srgb,var(--t1) 17%,transparent),transparent 55%),
     radial-gradient(ellipse at 90% 22%,color-mix(in srgb,var(--t2) 18%,transparent),transparent 55%),var(--room);
+}
+.wallpaper {
+  position:fixed;
+  inset:0;
+  z-index:-3;
+  pointer-events:none;
+  background:
+    linear-gradient(180deg,color-mix(in srgb,var(--room) 35%,transparent),color-mix(in srgb,var(--room) 78%,transparent)),
+    url("fundo-todos.webp") center 35% / cover no-repeat;
+}
+:root[data-theme="dark"] .wallpaper {
+  background-image:
+    linear-gradient(180deg,color-mix(in srgb,var(--room) 44%,transparent),color-mix(in srgb,var(--room) 82%,transparent)),
+    url("fundo-todos.webp");
 }
 .pagina {width:min(1440px,100%);margin:auto;padding:14px clamp(12px,3vw,40px) 28px}
 .vidro {
