@@ -8,7 +8,33 @@ use crate::comp::{carregado, Abas, Kpi, Tabela, Veredito};
 use crate::dados::{curto, inteiro, lista, num, pct, recurso, txt};
 use crate::Estado;
 
-const ABAS: &[&str] = &["Pregão", "Oportunidades", "Para o PvP", "Inventário"];
+const ABAS: &[&str] = &[
+    "Pregão",
+    "Oportunidades",
+    "Radar de evolução",
+    "Para o PvP",
+    "Inventário",
+];
+
+fn aba_radar_evolucao() -> impl IntoView {
+    let url = if crate::dados::no_app() {
+        "/painel/radar-evolucao/"
+    } else {
+        "http://100.115.131.15:8902/"
+    };
+    view! {
+        <div style="display:grid;gap:12px">
+            <a class="pill" href=url target="_blank" rel="noopener noreferrer">
+                "Abrir radar em outra janela"
+            </a>
+            <iframe
+                src=url
+                title="Radar de evolução do Mercado da Comunidade"
+                style="width:100%;height:75vh;min-height:440px;border:0;border-radius:12px"
+            ></iframe>
+        </div>
+    }
+}
 
 fn acao_pt(a: &str) -> String {
     match a {
@@ -269,6 +295,7 @@ pub fn Mercado(e: Estado, moeda: RwSignal<String>) -> impl IntoView {
         {move || match aba.get() {
             "Pregão" => super::pregao::aba(e, versao, moeda).into_any(),
             "Oportunidades" => aba_oportunidades(e, versao).into_any(),
+            "Radar de evolução" => aba_radar_evolucao().into_any(),
             "Para o PvP" => aba_pvp(e, versao).into_any(),
             _ => aba_inventario(e, versao).into_any(),
         }}
