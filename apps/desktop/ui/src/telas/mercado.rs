@@ -65,6 +65,10 @@ struct RotaRadar {
     sprite: Option<(u32, u32)>,
     sprite_destino: Option<(u32, u32)>,
     rota: String,
+    preco_justo: String,
+    faixa_justa: String,
+    base_preco: String,
+    preco_limitado: bool,
     valores: [String; 8],
 }
 
@@ -100,6 +104,13 @@ impl RotaRadar {
             sprite: slot("sprite"),
             sprite_destino: slot("spriteDestino"),
             rota: txt(v, "rota"),
+            preco_justo: txt(v, "precoJusto"),
+            faixa_justa: txt(v, "faixaJusta"),
+            base_preco: txt(v, "basePreco"),
+            preco_limitado: v
+                .get("precoLimitado")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             valores,
         })
     }
@@ -145,6 +156,7 @@ fn aba_radar_evolucao(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
     let prontas = RwSignal::new(false);
     let detalhe = RwSignal::new(None::<DetalheRadar>);
     let selecionada = RwSignal::new(0usize);
+    let fixada = RwSignal::new(None::<usize>);
     let dialogo = NodeRef::<leptos::html::Dialog>::new();
 
     view! {
@@ -233,6 +245,7 @@ fn aba_radar_evolucao(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
                                             <button class="evo-radar-card" type="button" aria-label=acao
                                                 on:click=move |_| {
                                                     selecionada.set(0);
+                                                    fixada.set(None);
                                                     detalhe.set(Some((grupo.clone(),atlas.clone())));
                                                     if let Some(el) = dialogo.get_untracked() {
                                                         let _ = el.show_modal();
@@ -284,20 +297,7 @@ fn aba_radar_evolucao(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
                             </div>
                             <form method="dialog"><button class="btn" type="submit" autofocus>"Fechar"</button></form>
                         </div>
-                        <label class="evo-radar-busca">
-                            <span>"Evolução e moeda de revenda"</span>
-                            <select prop:value=move || selecionada.get().to_string()
-                                on:change=move |ev| {
-                                    if let Ok(i) = event_target_value(&ev).parse::<usize>() {
-                                        selecionada.set(i);
-                                    }
-                                }>
-                                {grupo.iter().enumerate().map(|(i,r)| {
-                                    view! { <option value=i.to_string()>{format!("{} · {}",r.destino,nome_rota(&r.rota))}</option> }
-                                }).collect_view()}
-                            </select>
-                        </label>
-                        {move || grupo.get(selecionada.get()).map(|r| radar_detalhes(r,atlas.as_ref()))}
+                        {radar_rotas(grupo, atlas, selecionada, fixada)}
                     })
                 })}
             </dialog>
@@ -315,25 +315,131 @@ fn radar_par(r: &RotaRadar, atlas: Option<&AtlasRadar>, px: u32) -> impl IntoVie
     }
 }
 
-fn radar_detalhes(r: &RotaRadar, atlas: Option<&AtlasRadar>) -> impl IntoView {
+fn radar_rotas(
+    grupo: Vec<RotaRadar>,
+    atlas: Option<AtlasRadar>,
+    selecionada: RwSignal<usize>,
+    fixada: RwSignal<Option<usize>>,
+) -> impl IntoView {
+    let total = grupo.len();
+    let primeira_rota = grupo.first().map(|r| r.rota.as_str());
+    let moedas_diferentes = grupo.iter().any(|r| Some(r.rota.as_str()) != primeira_rota);
+    view! {
+        <div class="evo-seletor-cab">
+            <strong id="evo-escolher">"Evoluções disponíveis"</strong>
+            {if total > 1 {
+                view! {
+                    <div class="evo-radar-botoes" role="group" aria-label="Navegar pelas evoluções">
+                        <button type="button" aria-label="Evolução anterior"
+                            on:click=move |_| selecionada.update(|i| *i = (*i + total - 1) % total)>"←"</button>
+                        <button type="button" aria-label="Próxima evolução"
+                            on:click=move |_| selecionada.update(|i| *i = (*i + 1) % total)>"→"</button>
+                    </div>
+                }.into_any()
+            } else { ().into_any() }}
+        </div>
+        <div class="evo-opcoes" role="group" aria-labelledby="evo-escolher">
+            {grupo.iter().enumerate().map(|(i,r)| {
+                let sprite = radar_sprite(atlas.as_ref(),r.sprite_destino,r.especie_destino,42);
+                let destino = r.destino.clone();
+                let nota = r.valores[1].clone();
+                let nome = format!("{} · {}", destino,nome_rota(&r.rota));
+                let moeda = moedas_diferentes.then(|| nome_rota(&r.rota));
+                view! {
+                    <button type="button" class="evo-opcao" aria-label=nome
+                        class:selecionada=move || selecionada.get()==i
+                        class:fixada=move || fixada.get()==Some(i)
+                        aria-pressed=move || if selecionada.get()==i {"true"} else {"false"}
+                        on:click=move |_| selecionada.set(i)>
+                        {sprite}
+                        <strong>{destino}</strong>
+                        <small>{nota}</small>
+                        {moeda.map(|m| view! { <small>{m}</small> })}
+                    </button>
+                }
+            }).collect_view()}
+        </div>
+        <div class="evo-comparar">
+            {move || match fixada.get() {
+                Some(i) => {
+                    let atual = selecionada.get();
+                    let mesmo = i == atual;
+                    view! {
+                        <span>{if mesmo {"Escolha outra evolução para comparar."} else {"Comparação lado a lado"}}</span>
+                        <button class="btn" type="button" on:click=move |_| fixada.set(None)>"Limpar comparação"</button>
+                    }.into_any()
+                }
+                None if total>1 => view! {
+                    <button class="btn" type="button" on:click=move |_| fixada.set(Some(selecionada.get()))>
+                        "Fixar evolução para comparar"
+                    </button>
+                }.into_any(),
+                None => ().into_any(),
+            }}
+        </div>
+        {move || {
+            let i=selecionada.get();
+            let atual=grupo.get(i)?;
+            let anterior=fixada.get().filter(|f| *f!=i).and_then(|f| grupo.get(f));
+            let comparando=anterior.is_some();
+            Some(view! {
+                <div class="evo-comparacao-grid" class:comparando=comparando aria-live="polite">
+                    {anterior.map(|r| radar_detalhes(r,atlas.as_ref(),Some("Fixada")))}
+                    {radar_detalhes(atual,atlas.as_ref(),comparando.then_some("Selecionada"))}
+                </div>
+            })
+        }}
+    }
+}
+
+fn radar_detalhes(
+    r: &RotaRadar,
+    atlas: Option<&AtlasRadar>,
+    rotulo: Option<&'static str>,
+) -> impl IntoView {
     let opcoes = [
         ("Preço de compra", r.valores[2].clone()),
         ("Pedras e nível exigido", r.valores[3].clone()),
-        ("Revenda estimada", r.valores[4].clone()),
+        (
+            "Preço justo · Dossiê",
+            if r.preco_justo.is_empty() {
+                if r.rota.ends_with("-gold") {
+                    "Disponível em Gemas".to_owned()
+                } else {
+                    "Indisponível".to_owned()
+                }
+            } else {
+                r.preco_justo.clone()
+            },
+        ),
+        ("Revenda usada no cálculo", r.valores[4].clone()),
         ("Resultado após taxas", r.valores[5].clone()),
     ];
+    let fonte = if r.preco_limitado {
+        format!("{} · ajustado à menor oferta comparável", r.base_preco)
+    } else {
+        r.base_preco.clone()
+    };
+    let faixa = (!r.faixa_justa.is_empty()).then(|| format!("Faixa justa: {}", r.faixa_justa));
     view! {
-        <div class="evo-dialogo-destino">
-            {radar_par(r,atlas,64)}
-            <div>
-                <strong>{r.destino.clone()}</strong>
-                <small>{format!("Nota final {}",r.valores[1])}</small>
+        <section class="evo-comparacao-card">
+            {rotulo.map(|nome| view! { <small class="evo-comparacao-rotulo">{nome}</small> })}
+            <div class="evo-dialogo-destino">
+                {radar_sprite(atlas,r.sprite_destino,r.especie_destino,58)}
+                <div>
+                    <strong>{r.destino.clone()}</strong>
+                    <small>{format!("Nota final {} · {}",r.valores[1],nome_rota(&r.rota))}</small>
+                </div>
+                <span class="evo-badge" class:positivo=r.pronta()>{r.valores[6].clone()}</span>
             </div>
-            <span class="evo-badge" class:positivo=r.pronta()>{r.valores[6].clone()}</span>
-        </div>
-        <dl class="evo-dialogo-dados">
-            {opcoes.into_iter().map(|(nome,valor)| view! { <div><dt>{nome}</dt><dd>{valor}</dd></div> }).collect_view()}
-        </dl>
+            <dl class="evo-dialogo-dados">
+                {opcoes.into_iter().map(|(nome,valor)| view! { <div><dt>{nome}</dt><dd>{valor}</dd></div> }).collect_view()}
+            </dl>
+            <div class="evo-preco-fonte">
+                {(!fonte.is_empty()).then(|| view! { <small>{fonte}</small> })}
+                {faixa.map(|texto| view! { <small>{texto}</small> })}
+            </div>
+        </section>
     }
 }
 
@@ -377,13 +483,27 @@ body.noite .evo-radar { --evo-accent:#8bd4b1 }
 .evo-radar-estado { padding:20px; }
 .evo-radar-estado small,.evo-radar-estado button { display:block; margin-top:10px; }
 .evo-radar-rodape { font-size:12px; }
-.evo-radar-dialogo { width:min(560px,calc(100vw - 24px)); max-height:calc(100dvh - 24px); overflow:auto;
+.evo-radar-dialogo { width:min(760px,calc(100vw - 24px)); max-height:calc(100dvh - 24px); overflow:auto;
   border:1px solid var(--vidro-borda); border-radius:20px; padding:20px; color:var(--texto); background:#edf5ef; box-shadow:0 24px 65px #09140d66; }
 body.noite .evo-radar-dialogo { background:#162720; }
 .evo-radar-dialogo::backdrop { background:#07130dc2; backdrop-filter:blur(5px); }
 .evo-dialogo-cab,.evo-dialogo-destino { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .evo-dialogo-cab { margin-bottom:18px; }
-.evo-dialogo-destino { justify-content:start; flex-wrap:wrap; margin-top:16px; }
+.evo-seletor-cab { display:flex; justify-content:space-between; align-items:center; margin:0 0 8px; }
+.evo-opcoes { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,112px),1fr)); gap:6px; }
+.evo-opcao { display:grid; justify-items:center; gap:2px; min-width:0; text-align:center; cursor:pointer; padding:7px 3px;
+  font:inherit; color:var(--texto); background:var(--vidro); border:1px solid var(--vidro-borda); border-radius:10px; }
+.evo-opcao strong { font-size:12px; line-height:1.3; overflow-wrap:anywhere; }
+.evo-opcao.selecionada,.evo-opcao:hover { border-color:var(--evo-accent); background:color-mix(in srgb,var(--evo-accent) 12%,transparent); }
+.evo-opcao.fixada:not(.selecionada) { border-color:var(--evo-accent); border-style:dashed; }
+.evo-comparar { min-height:37px; margin:9px 0; display:flex; align-items:center; gap:8px; color:var(--texto-2); }
+.evo-comparar button { font-size:12px; }
+.evo-comparacao-grid { display:grid; gap:8px; }
+.evo-comparacao-grid.comparando { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.evo-comparacao-card { border:1px solid var(--vidro-borda); border-radius:14px; background:var(--vidro); padding:12px; }
+.evo-comparacao-rotulo { display:block; font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
+.evo-preco-fonte { display:flex; flex-wrap:wrap; gap:5px 12px; margin-top:6px; }
+.evo-dialogo-destino { justify-content:start; flex-wrap:wrap; }
 .evo-dialogo-destino strong,.evo-dialogo-destino small { display:block; }
 .evo-dialogo-destino strong { font-size:19px; }
 .evo-dialogo-dados { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-bottom:0; }
@@ -391,6 +511,8 @@ body.noite .evo-radar-dialogo { background:#162720; }
 .evo-dialogo-dados dt { font-size:12px; color:var(--texto-2); }
 .evo-dialogo-dados dd { margin:4px 0 0; font-weight:700; overflow-wrap:anywhere; }
 @media (max-width:700px) {
+  .evo-opcoes { grid-template-columns:repeat(auto-fit,minmax(min(100%,87px),1fr)); }
+  .evo-comparacao-grid.comparando { grid-template-columns:minmax(0,1fr); }
   .casca:has(.evo-radar) { flex-direction:column; gap:8px; padding:8px; }
   .casca:has(.evo-radar) .barra { width:100%; flex-direction:row; align-items:center; gap:4px; padding:7px; }
   .casca:has(.evo-radar) .barra .grupo,.casca:has(.evo-radar) .barra .rodape-conta { display:none; }

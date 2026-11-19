@@ -74,4 +74,4 @@ jobs:
         run: |
           tag="nexus-radar-evolucao-${GITHUB_SHA:0:7}"
           (cd release && sha256sum *.exe > SHA256SUMS)
-          gh release create "$tag" release/*.exe release/SHA256SUMS --target "$GITHUB_SHA" --prerelease --title "Nexus 0.1.6 — Radar de evolução em cards" --notes "Radar integrado à aba Mercado, com cards de vidro, sprites do jogo e pop-up para comparar evoluções e moedas."
+          gh release create "$tag" release/*.exe release/SHA256SUMS --target "$GITHUB_SHA" --prerelease --title "Nexus 0.1.7 — Comparador de evoluções" --notes "Radar nativo com cards, sprites do jogo, comparação lado a lado e preço justo do Dossiê para revenda em Gemas."
