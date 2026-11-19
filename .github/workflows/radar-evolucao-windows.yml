@@ -55,3 +55,23 @@ jobs:
           name: nexus-painel-web
           path: nexus-painel.zip
           if-no-files-found: error
+
+  publicar-previa:
+    name: Publicar instalador do Radar
+    needs: desktop
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nexus-desktop-windows
+          path: release
+      - name: Publicar prévia com checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="nexus-radar-evolucao-${GITHUB_SHA:0:7}"
+          (cd release && sha256sum *.exe > SHA256SUMS)
+          gh release create "$tag" release/*.exe release/SHA256SUMS --target "$GITHUB_SHA" --prerelease --title "Nexus 0.1.4 — Radar de evolução" --notes "Inclui a aba Mercado → Radar de evolução no Windows. O radar usa a vitrine do Mercado da Comunidade e requer conexão com a rede Nexus."
