@@ -16,25 +16,227 @@ const ABAS: &[&str] = &[
     "Inventário",
 ];
 
-fn aba_radar_evolucao() -> impl IntoView {
-    let url = if crate::dados::no_app() {
-        "/painel/radar-evolucao/"
-    } else {
-        "http://100.115.131.15:8902/"
-    };
+const RADAR_ROTAS: &[(&str, &str)] = &[
+    ("", "Todas"),
+    ("gold-orb", "Coins → Gemas"),
+    ("gold-gold", "Coins → Coins"),
+    ("orb-orb", "Gemas → Gemas"),
+];
+
+const RADAR_COLUNAS: &[&str] = &[
+    "Anúncio e evolução",
+    "Nota final",
+    "Compra",
+    "Pedras e nível",
+    "Revenda estimada",
+    "Resultado líquido",
+    "Sinal",
+    "Visto às",
+];
+
+fn aba_radar_evolucao(e: Estado, versao: RwSignal<u32>) -> impl IntoView {
+    let dados = recurso(e, versao, || Some("/api/bolsa/radar-evolucao".into()));
+    let busca = RwSignal::new(String::new());
+    let rota = RwSignal::new("");
+    let prontas = RwSignal::new(false);
+
     view! {
-        <div style="display:grid;gap:12px">
-            <a class="pill" href=url target="_blank" rel="noopener noreferrer">
-                "Abrir radar em outra janela"
-            </a>
-            <iframe
-                src=url
-                title="Radar de evolução do Mercado da Comunidade"
-                style="width:100%;height:75vh;min-height:440px;border:0;border-radius:12px"
-            ></iframe>
+        <section class="evo-radar" aria-label="Radar de evolução">
+            <style>{RADAR_CSS}</style>
+            <header class="evo-radar-intro">
+                <div>
+                    <h3>"Radar de evolução"</h3>
+                    <p>"Encontre Pokémon comuns com potencial 4+ na evolução final e compare o custo com vendas recentes."</p>
+                </div>
+                <button class="btn" type="button" on:click=move |_| versao.update(|v| *v += 1)>
+                    "Atualizar radar"
+                </button>
+            </header>
+            <div class="evo-radar-filtros">
+                <label class="evo-radar-busca">
+                    <span>"Pokémon ou ID do anúncio"</span>
+                    <input type="search" placeholder="Eevee ou 1478666" prop:value=move || busca.get()
+                        on:input=move |ev| busca.set(event_target_value(&ev)) />
+                </label>
+                <div class="evo-radar-rotas">
+                    <span id="evo-rotas-label">"Moedas da operação"</span>
+                    <div class="evo-radar-botoes" role="group" aria-labelledby="evo-rotas-label">
+                        {RADAR_ROTAS.iter().map(|&(chave, nome)| view! {
+                            <button type="button" class:selecionada=move || rota.get() == chave
+                                aria-pressed=move || if rota.get() == chave { "true" } else { "false" }
+                                on:click=move |_| rota.set(chave)>{nome}</button>
+                        }).collect_view()}
+                    </div>
+                </div>
+                <label class="evo-radar-prontas">
+                    <input type="checkbox" prop:checked=move || prontas.get()
+                        on:change=move |ev| prontas.set(event_target_checked(&ev)) />
+                    "Somente rotas prontas e com comparáveis"
+                </label>
+            </div>
+            {move || match dados.get() {
+                Some(Some(Ok(payload))) if payload.get("linhas").is_some_and(Value::is_array) => {
+                    let filtro = busca.get().trim().to_lowercase();
+                    let moeda = rota.get();
+                    let so_prontas = prontas.get();
+                    let todas = lista(&payload, "linhas");
+                    let linhas = todas.iter()
+                        .filter(|linha| moeda.is_empty() || txt(linha, "rota") == moeda)
+                        .filter(|linha| {
+                            !so_prontas
+                                || matches!(txt(linha, "status").as_str(), "Margem positiva" | "Comparar custo por Gema")
+                        })
+                        .map(|linha| {
+                            lista(linha, "celulas").iter()
+                                .filter_map(Value::as_str).map(str::to_owned)
+                                .collect::<Vec<_>>()
+                        })
+                        .filter(|linha| linha.len() == RADAR_COLUNAS.len())
+                        .filter(|linha| {
+                            filtro.is_empty() || linha.iter().any(|celula| celula.to_lowercase().contains(&filtro))
+                        })
+                        .collect::<Vec<_>>();
+                    let qtd = linhas.len();
+                    let total = todas.len();
+                    let positivo = todas.iter().filter(|linha| txt(linha, "status") == "Margem positiva").count();
+                    let atualizado = txt(&payload, "atualizado");
+                    let anuncios = txt(&payload, "anuncios");
+                    view! {
+                        <div class="evo-radar-resumo" aria-live="polite">
+                            <span><strong>{anuncios}</strong>" anúncios consultados"</span>
+                            <span><strong>{format!("{qtd} de {total}")}</strong>" rotas exibidas"</span>
+                            <span><strong>{positivo}</strong>" com margem positiva"</span>
+                            <small>{format!("Coleta {atualizado} · horário de Brasília")}</small>
+                        </div>
+                        {if linhas.is_empty() {
+                            let mensagem = if total == 0 {
+                                "A coleta atual não encontrou pré-evoluções com potencial 4+."
+                            } else {
+                                "Nenhum anúncio atende aos filtros atuais."
+                            };
+                            view! { <div class="evo-radar-estado" role="status">{mensagem}</div> }.into_any()
+                        } else {
+                            view! { <TabelaRadar linhas=linhas /> }.into_any()
+                        }}
+                        <p class="evo-radar-rodape">"Os valores de revenda são estimativas. Confira o anúncio pelo ID no Mercado da Comunidade."</p>
+                    }.into_any()
+                }
+                Some(Some(Err(erro))) => view! {
+                    <div class="evo-radar-estado" role="alert">
+                        <strong>"O radar não conseguiu carregar."</strong>
+                        <p>"Confira a conexão do Nexus e tente novamente."</p>
+                        <small>{erro}</small>
+                        <button class="btn" type="button" on:click=move |_| versao.update(|v| *v += 1)>"Tentar novamente"</button>
+                    </div>
+                }.into_any(),
+                Some(_) => view! {
+                    <div class="evo-radar-estado" role="alert">
+                        "O Nexus retornou dados incompletos. Use Atualizar radar para tentar novamente."
+                    </div>
+                }.into_any(),
+                None => view! {
+                    <div class="evo-radar-estado" role="status">"Carregando anúncios do Mercado da Comunidade…"</div>
+                }.into_any(),
+            }}
+        </section>
+    }
+}
+
+#[component]
+fn TabelaRadar(linhas: Vec<Vec<String>>) -> impl IntoView {
+    view! {
+        <div class="evo-radar-tabela" tabindex="0" aria-label="Resultados do radar">
+            <table>
+                <thead><tr>{RADAR_COLUNAS.iter().map(|&nome| view! { <th scope="col">{nome}</th> }).collect_view()}</tr></thead>
+                <tbody>
+                    {linhas.into_iter().map(|linha| view! {
+                        <tr>{linha.into_iter().zip(RADAR_COLUNAS.iter()).enumerate().map(|(i, (texto, &nome))| {
+                            let conteudo = match i {
+                                0 => {
+                                    let (titulo, detalhes) = texto.split_once(" · ").unwrap_or((&texto, ""));
+                                    view! { <strong>{titulo.to_owned()}</strong><small>{detalhes.to_owned()}</small> }.into_any()
+                                }
+                                6 => {
+                                    let positivo = matches!(texto.as_str(), "Margem positiva" | "Comparar custo por Gema");
+                                    view! { <span class="evo-radar-sinal" class:positivo=positivo>{texto}</span> }.into_any()
+                                }
+                                _ => texto.into_any(),
+                            };
+                            view! { <td data-coluna=nome>{conteudo}</td> }
+                        }).collect_view()}</tr>
+                    }).collect_view()}
+                </tbody>
+            </table>
         </div>
     }
 }
+
+const RADAR_CSS: &str = r#"
+.evo-radar { --evo-accent:#286652; display:grid; gap:14px; min-width:0 }
+body.noite .evo-radar { --evo-accent:#8bd4b1 }
+.evo-radar-intro { display:flex; justify-content:space-between; gap:18px; align-items:start; padding:20px 22px;
+  border:1px solid var(--vidro-borda); border-radius:18px; background:var(--vidro); }
+.evo-radar-intro h3 { margin:0; font-size:clamp(20px,2.3vw,29px); letter-spacing:-.035em; }
+.evo-radar p { margin:6px 0 0; color:var(--texto-2); line-height:1.5; }
+.evo-radar-intro button { flex:none; }
+.evo-radar-filtros { display:flex; flex-wrap:wrap; gap:12px 18px; align-items:end; }
+.evo-radar-busca,.evo-radar-rotas { display:grid; gap:5px; font-size:12px; font-weight:700; color:var(--texto-2); }
+.evo-radar-busca { flex:1 1 210px; max-width:360px; }
+.evo-radar-busca input,.evo-radar-botoes button { min-height:36px; color:var(--texto); background:var(--vidro);
+  border:1px solid var(--vidro-borda); border-radius:8px; font:inherit; padding:7px 11px; }
+.evo-radar-busca input { width:100%; font-size:14px; font-weight:500; }
+.evo-radar-botoes { display:flex; gap:4px; flex-wrap:wrap; }
+.evo-radar-botoes button { cursor:pointer; white-space:nowrap; }
+.evo-radar-botoes button.selecionada { color:var(--evo-accent); border-color:var(--evo-accent);
+  background:color-mix(in srgb,var(--evo-accent) 12%,transparent); }
+.evo-radar :focus-visible { outline:2px solid var(--evo-accent); outline-offset:2px; }
+.conteudo:has(.evo-radar) > .resumo > .btn { display:none; }
+.evo-radar-prontas { display:flex; align-items:center; gap:6px; min-height:36px; font-size:12px; color:var(--texto-2); }
+.evo-radar-prontas input[type=checkbox] { width:auto; margin:0; padding:0; flex:none; accent-color:var(--evo-accent); }
+.evo-radar-resumo { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 18px; font-size:13px; }
+.evo-radar small { color:var(--texto-2); }
+.evo-radar-resumo small { margin-left:auto; }
+.evo-radar-tabela,.evo-radar-estado { border:1px solid var(--vidro-borda); border-radius:14px; background:var(--vidro); }
+.evo-radar-tabela { overflow:auto; max-height:58vh; }
+.evo-radar-tabela table { border-collapse:separate; border-spacing:0; width:100%; font-size:13px; text-align:left; }
+.evo-radar-tabela th,.evo-radar-tabela td { padding:11px 10px; vertical-align:top; border-bottom:1px solid var(--vidro-borda); }
+.evo-radar-tabela th { position:sticky; top:0; z-index:1; font-size:11px; background:#e8efea; color:#20362d; }
+body.noite .evo-radar-tabela th { background:#1e3029; color:#ebf4ef; }
+.evo-radar-tabela td:first-child { min-width:155px; }
+.evo-radar-tabela td:nth-child(2),.evo-radar-tabela td:last-child { white-space:nowrap; font-variant-numeric:tabular-nums; }
+.evo-radar-tabela td small { display:block; margin-top:3px; }
+.evo-radar-sinal { display:inline-block; border-radius:6px; padding:2px 6px; background:var(--trilho); color:var(--texto-2); }
+.evo-radar-sinal.positivo { color:var(--evo-accent); background:color-mix(in srgb,var(--evo-accent) 13%,transparent); }
+.evo-radar-estado { padding:20px; }
+.evo-radar-estado small,.evo-radar-estado button { display:block; margin-top:10px; }
+.evo-radar-rodape { font-size:12px; }
+@media (max-width:850px) {
+  .evo-radar-tabela table { min-width:880px; }
+}
+@media (max-width:700px) {
+  .casca:has(.evo-radar) { flex-direction:column; gap:8px; padding:8px; }
+  .casca:has(.evo-radar) .barra { width:100%; flex-direction:row; align-items:center; gap:4px; padding:7px; }
+  .casca:has(.evo-radar) .barra .grupo,.casca:has(.evo-radar) .barra .rodape-conta { display:none; }
+  .casca:has(.evo-radar) .barra .logo { padding:0 8px; font-size:17px; }
+  .casca:has(.evo-radar) .barra .item { width:auto; white-space:nowrap; padding:6px 8px; }
+  .casca:has(.evo-radar) .palco { gap:8px; min-height:0; }
+  .casca:has(.evo-radar) .topo,.conteudo:has(.evo-radar) .abas { max-width:100%; overflow-x:auto; }
+  .conteudo:has(.evo-radar) { padding:12px; }
+  .evo-radar-intro { flex-direction:column; padding:15px; }
+  .evo-radar-resumo small { margin-left:0; flex-basis:100%; }
+  .evo-radar-tabela { max-height:none; }
+  .evo-radar-tabela table,.evo-radar-tabela tbody { display:block; min-width:0; }
+  .evo-radar-tabela th { position:absolute; width:1px; height:1px; clip-path:inset(50%); padding:0; overflow:hidden; }
+  .evo-radar-tabela tr { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); padding:12px; gap:8px; }
+  .evo-radar-tabela tbody tr + tr { border-top:1px solid var(--trilho); }
+  .evo-radar-tabela td,.evo-radar-tabela td:nth-child(2),.evo-radar-tabela td:last-child {
+    padding:0; border:0; min-width:0; white-space:normal; }
+  .evo-radar-tabela td:first-child,.evo-radar-tabela td:nth-child(4) { grid-column:1/-1; }
+  .evo-radar-tabela td:not(:first-child)::before {
+    content:attr(data-coluna); display:block; font-size:11px; color:var(--texto-2);
+  }
+}
+"#;
 
 fn acao_pt(a: &str) -> String {
     match a {
@@ -295,7 +497,7 @@ pub fn Mercado(e: Estado, moeda: RwSignal<String>) -> impl IntoView {
         {move || match aba.get() {
             "Pregão" => super::pregao::aba(e, versao, moeda).into_any(),
             "Oportunidades" => aba_oportunidades(e, versao).into_any(),
-            "Radar de evolução" => aba_radar_evolucao().into_any(),
+            "Radar de evolução" => aba_radar_evolucao(e, versao).into_any(),
             "Para o PvP" => aba_pvp(e, versao).into_any(),
             _ => aba_inventario(e, versao).into_any(),
         }}
