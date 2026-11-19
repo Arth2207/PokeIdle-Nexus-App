@@ -74,4 +74,4 @@ jobs:
         run: |
           tag="nexus-radar-evolucao-${GITHUB_SHA:0:7}"
           (cd release && sha256sum *.exe > SHA256SUMS)
-          gh release create "$tag" release/*.exe release/SHA256SUMS --target "$GITHUB_SHA" --prerelease --title "Nexus 0.1.5 — Radar de evolução integrado" --notes "O Radar de evolução agora carrega dentro de Mercado, pela conexão do Nexus. Inclui busca por Pokémon ou anúncio e filtros de moedas."
+          gh release create "$tag" release/*.exe release/SHA256SUMS --target "$GITHUB_SHA" --prerelease --title "Nexus 0.1.6 — Radar de evolução em cards" --notes "Radar integrado à aba Mercado, com cards de vidro, sprites do jogo e pop-up para comparar evoluções e moedas."
